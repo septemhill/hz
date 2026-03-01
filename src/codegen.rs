@@ -32,6 +32,9 @@ pub struct CodeGenerator<'ctx> {
     // Variable scope (name -> LLVM value)
     variables: HashMap<String, PointerValue<'ctx>>,
 
+    // Const variable scope (name -> LLVM value) - for compile-time error checking
+    const_variables: HashMap<String, PointerValue<'ctx>>,
+
     // Return type of current function
     return_type: Option<Type>,
 }
@@ -54,6 +57,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             current_function: None,
             current_block: None,
             variables: HashMap::new(),
+            const_variables: HashMap::new(),
             return_type: None,
         })
     }
@@ -193,7 +197,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(())
             }
             Stmt::Let {
-                mutable: _,
+                mutability,
                 name,
                 ty,
                 value,
@@ -209,6 +213,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
 
                 self.variables.insert(name.clone(), alloca);
+
+                // Track const variables for compile-time error checking
+                if *mutability == Mutability::Const {
+                    self.const_variables.insert(name.clone(), alloca);
+                }
+
                 Ok(())
             }
             Stmt::Assign {
@@ -217,6 +227,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 value,
                 span: _,
             } => {
+                // Check if trying to reassign a const variable (compile-time error)
+                if self.const_variables.contains_key(target) {
+                    return Err(format!("Cannot reassign constant variable '{}'", target).into());
+                }
+
                 // Get the pointer first to avoid borrow issues
                 let target_ptr = self
                     .variables

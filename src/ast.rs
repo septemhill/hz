@@ -147,6 +147,13 @@ impl Visibility {
     }
 }
 
+/// Variable mutability (var or const)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mutability {
+    Var,   // mutable variable
+    Const, // immutable constant
+}
+
 /// Struct field definition
 #[derive(Debug, Clone)]
 pub struct StructField {
@@ -232,9 +239,9 @@ pub enum Expr {
 pub enum Stmt {
     /// Expression statement (with semicolon)
     Expr { expr: Expr, span: Span },
-    /// Variable declaration (let)
+    /// Variable declaration (var or const)
     Let {
-        mutable: bool,
+        mutability: Mutability,
         name: String,
         ty: Option<Type>,
         value: Option<Expr>,

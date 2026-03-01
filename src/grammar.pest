@@ -24,6 +24,8 @@ bool_literal = @{ "true" | "false" }
 // ============================================================
 
 _kw_fn = { "fn" }
+_kw_var = { "var" }
+_kw_const = { "const" }
 _kw_let = { "let" }
 _kw_mut = { "mut" }
 _kw_if = { "if" }
@@ -141,7 +143,8 @@ stmt = {
 semi_stmt = { 
     assign_stmt | 
     expr_stmt | 
-    let_stmt 
+    var_stmt |
+    const_stmt 
 }
 
 // Block statement
@@ -175,9 +178,13 @@ assign_stmt = {
     ident ~ (op_assign | op_add_assign | op_sub_assign | op_mul_assign | op_div_assign) ~ expr 
 }
 
-// Variable declaration (let statement)
-let_stmt = { 
-    "let" ~ "mut"? ~ ident ~ (":" ~ ty)? ~ ("=" ~ expr)? 
+// Variable declaration (var or const statement)
+var_stmt = { 
+    "var" ~ ident ~ (":" ~ ty)? ~ ("=" ~ expr)? 
+}
+
+const_stmt = { 
+    "const" ~ ident ~ (":" ~ ty)? ~ "=" ~ expr 
 }
 
 // ============================================================

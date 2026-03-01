@@ -1,0 +1,36 @@
+pub interface Template {
+    fn MethodOne();
+    fn MethodTwo();
+    fn MethodThree(i64, i64) i64;
+};
+
+pub struct Service {
+    name: String,
+    age: i32,
+
+    pub fn MethodOne() {
+        io.println("MethodOne");
+    }
+
+    pub fn MethodTwo() {
+        io.println("MethodTwo");
+    }
+
+    pub fn MethodThree(a: i32, b: i64) i64 {
+        return a + b;
+    }
+};
+
+pub fn validate(srv: Template) {
+    service.MethodOne();
+    service.MethodTwo();
+    const f = service.MethodThree(1, 2);
+    io.println(f);
+}
+
+fn main() {
+    const service: Service = Service {
+        name: "Service",
+        age: 10,
+    };
+}

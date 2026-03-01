@@ -1,4 +1,5 @@
 fn main() {
     io.println("Hi, Septem");
+
     return 42;
 }

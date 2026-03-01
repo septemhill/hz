@@ -1,0 +1,11 @@
+fn test_var_reassign() -> i64 {
+    var x = 10;
+    x = 20;
+    return x;
+}
+
+fn main() {
+    const x = test_var_reassign();
+
+    io.println(x);
+}

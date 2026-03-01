@@ -245,7 +245,126 @@ fn try_parse_stmt(chars: &[char], pos: &mut usize) -> Result<Stmt, ParseError> {
         });
     }
 
-    // Try to parse "let"
+    // Try to parse "var"
+    if try_consume_keyword(chars, pos, "var") {
+        // Check for "pub" keyword
+        let visibility = if try_consume_keyword(chars, pos, "pub") {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        skip_whitespace(chars, pos);
+        let name = parse_ident(chars, pos)?;
+
+        // Parse optional type annotation
+        let ty = if try_consume(chars, pos, ':') {
+            Some(parse_type(chars, pos)?)
+        } else {
+            None
+        };
+
+        // Parse optional initializer
+        let value = if try_consume(chars, pos, '=') {
+            Some(try_parse_expr(chars, pos)?)
+        } else {
+            None
+        };
+
+        try_consume(chars, pos, ';');
+
+        return Ok(Stmt::Let {
+            mutability: Mutability::Var,
+            name,
+            ty,
+            value,
+            visibility,
+            span: span(start, *pos),
+        });
+    }
+
+    // Try to parse "const"
+    if try_consume_keyword(chars, pos, "const") {
+        // Check for "pub" keyword
+        let visibility = if try_consume_keyword(chars, pos, "pub") {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        skip_whitespace(chars, pos);
+        let name = parse_ident(chars, pos)?;
+
+        // Parse optional type annotation
+        let ty = if try_consume(chars, pos, ':') {
+            Some(parse_type(chars, pos)?)
+        } else {
+            None
+        };
+
+        // Const requires initializer
+        try_consume(chars, pos, '=');
+        let value = try_parse_expr(chars, pos)?;
+
+        try_consume(chars, pos, ';');
+
+        return Ok(Stmt::Let {
+            mutability: Mutability::Const,
+            name,
+            ty,
+            value: Some(value),
+            visibility,
+            span: span(start, *pos),
+        });
+    }
+
+    // Try to parse assignment statement (identifier followed by assignment operator)
+    if chars[*pos].is_alphabetic() || chars[*pos] == '_' {
+        let old_pos = *pos;
+        let name = parse_ident(chars, pos)?;
+        skip_whitespace(chars, pos);
+
+        // Check for assignment operators
+        let assign_op = if *pos < chars.len() {
+            if try_consume(chars, pos, '=') {
+                // Check if it's = (simple assignment) and not == (comparison)
+                if *pos < chars.len() && chars[*pos] != '=' {
+                    Some(AssignOp::Assign)
+                } else {
+                    *pos = old_pos; // Reset position, it's a comparison
+                    None
+                }
+            } else if try_consume(chars, pos, '+') && try_consume(chars, pos, '=') {
+                Some(AssignOp::AddAssign)
+            } else if try_consume(chars, pos, '-') && try_consume(chars, pos, '=') {
+                Some(AssignOp::SubAssign)
+            } else if try_consume(chars, pos, '*') && try_consume(chars, pos, '=') {
+                Some(AssignOp::MulAssign)
+            } else if try_consume(chars, pos, '/') && try_consume(chars, pos, '=') {
+                Some(AssignOp::DivAssign)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(op) = assign_op {
+            let value = try_parse_expr(chars, pos)?;
+            try_consume(chars, pos, ';');
+            return Ok(Stmt::Assign {
+                target: name,
+                op,
+                value,
+                span: span(start, *pos),
+            });
+        }
+
+        // Not an assignment, reset position
+        *pos = old_pos;
+    }
+
+    // Try to parse "let" (deprecated, fall back to var)
     if try_consume_keyword(chars, pos, "let") {
         // Check for "pub" keyword
         let visibility = if try_consume_keyword(chars, pos, "pub") {
@@ -261,7 +380,7 @@ fn try_parse_stmt(chars: &[char], pos: &mut usize) -> Result<Stmt, ParseError> {
         try_consume(chars, pos, ';');
 
         return Ok(Stmt::Let {
-            mutable: false,
+            mutability: Mutability::Var,
             name,
             ty: None,
             value: None,
