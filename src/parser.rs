@@ -475,19 +475,25 @@ fn try_parse_stmt(chars: &[char], pos: &mut usize) -> Result<Stmt, ParseError> {
         skip_whitespace(chars, pos);
         let name = parse_ident(chars, pos)?;
 
-        // Parse optional type annotation
-        let ty = if try_consume(chars, pos, ':') {
-            Some(parse_type(chars, pos)?)
-        } else {
-            None
-        };
+        // Var requires type annotation
+        skip_whitespace(chars, pos);
+        if !try_consume(chars, pos, ':') {
+            return Err(ParseError {
+                message: "Variable declaration requires type annotation".to_string(),
+                location: Some(*pos),
+            });
+        }
+        let ty = Some(parse_type(chars, pos)?);
 
-        // Parse optional initializer
-        let value = if try_consume(chars, pos, '=') {
-            Some(try_parse_expr(chars, pos)?)
-        } else {
-            None
-        };
+        // Var requires initializer
+        skip_whitespace(chars, pos);
+        if !try_consume(chars, pos, '=') {
+            return Err(ParseError {
+                message: "Variable declaration requires initialization".to_string(),
+                location: Some(*pos),
+            });
+        }
+        let value = Some(try_parse_expr(chars, pos)?);
 
         try_consume(chars, pos, ';');
 
@@ -513,15 +519,24 @@ fn try_parse_stmt(chars: &[char], pos: &mut usize) -> Result<Stmt, ParseError> {
         skip_whitespace(chars, pos);
         let name = parse_ident(chars, pos)?;
 
-        // Parse optional type annotation
-        let ty = if try_consume(chars, pos, ':') {
-            Some(parse_type(chars, pos)?)
-        } else {
-            None
-        };
+        // Const requires type annotation
+        skip_whitespace(chars, pos);
+        if !try_consume(chars, pos, ':') {
+            return Err(ParseError {
+                message: "Constant declaration requires type annotation".to_string(),
+                location: Some(*pos),
+            });
+        }
+        let ty = Some(parse_type(chars, pos)?);
 
         // Const requires initializer
-        try_consume(chars, pos, '=');
+        skip_whitespace(chars, pos);
+        if !try_consume(chars, pos, '=') {
+            return Err(ParseError {
+                message: "Constant declaration requires initialization".to_string(),
+                location: Some(*pos),
+            });
+        }
         let value = try_parse_expr(chars, pos)?;
 
         try_consume(chars, pos, ';');

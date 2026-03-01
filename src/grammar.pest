@@ -180,11 +180,11 @@ assign_stmt = {
 
 // Variable declaration (var or const statement)
 var_stmt = { 
-    "var" ~ ident ~ (":" ~ ty)? ~ ("=" ~ expr)? 
+    "var" ~ ident ~ ":" ~ ty ~ "=" ~ expr 
 }
 
 const_stmt = { 
-    "const" ~ ident ~ (":" ~ ty)? ~ "=" ~ expr 
+    "const" ~ ident ~ ":" ~ ty ~ "=" ~ expr 
 }
 
 // ============================================================
