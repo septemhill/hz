@@ -1,0 +1,35 @@
+// Math library
+
+pub fn abs(n: i64) i64 {
+    if n < 0 {
+        return 0 - n;
+    }
+    return n;
+}
+
+pub fn max(a: i64, b: i64) i64 {
+    if a > b {
+        return a;
+    }
+    return b;
+}
+
+pub fn min(a: i64, b: i64) i64 {
+    if a < b {
+        return a;
+    }
+    return b;
+}
+
+pub fn pow(base: i64, exp: i64) i64 {
+    let result: i64 = 1;
+    let i: i64 = 0;
+    loop {
+        if i >= exp {
+            break;
+        }
+        result = result * base;
+        i = i + 1;
+    }
+    return result;
+}

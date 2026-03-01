@@ -1,0 +1,23 @@
+pub struct Simple {
+    name: String,
+    age: i32,
+
+    pub fn new() {
+        return;
+    }
+
+    pub fn get_age() -> i32 {
+        return 0;
+    }
+
+};
+
+pub enum Status {
+    Todo,
+    WIP,
+    Delay,
+
+    pub fn new() {
+        return;
+    }
+};

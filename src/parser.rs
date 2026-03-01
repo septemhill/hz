@@ -128,6 +128,55 @@ fn try_parse_fn(chars: &[char], pos: &mut usize) -> Result<FnDef, ParseError> {
         }
     }
 
+    // Parse optional return type (only basic types supported for now)
+    let mut return_ty = None;
+    skip_whitespace(chars, pos);
+    if *pos < chars.len() && chars[*pos] == '-' {
+        (*pos) += 1;
+        if *pos < chars.len() && chars[*pos] == '>' {
+            (*pos) += 1;
+            // Parse the return type
+            skip_whitespace(chars, pos);
+            let remaining: String = chars[*pos..].iter().take(10).collect();
+            if remaining.starts_with("i8") {
+                *pos += 2;
+                return_ty = Some(Type::I8);
+            } else if remaining.starts_with("i16") {
+                *pos += 3;
+                return_ty = Some(Type::I16);
+            } else if remaining.starts_with("i32") {
+                *pos += 3;
+                return_ty = Some(Type::I32);
+            } else if remaining.starts_with("i64") {
+                *pos += 3;
+                return_ty = Some(Type::I64);
+            } else if remaining.starts_with("u8") {
+                *pos += 2;
+                return_ty = Some(Type::U8);
+            } else if remaining.starts_with("u16") {
+                *pos += 3;
+                return_ty = Some(Type::U16);
+            } else if remaining.starts_with("u32") {
+                *pos += 3;
+                return_ty = Some(Type::U32);
+            } else if remaining.starts_with("u64") {
+                *pos += 3;
+                return_ty = Some(Type::U64);
+            } else if remaining.starts_with("bool") {
+                *pos += 4;
+                return_ty = Some(Type::Bool);
+            } else if remaining.starts_with("void") {
+                *pos += 4;
+                return_ty = Some(Type::Void);
+            } else {
+                // Not a basic type, rewind
+                *pos -= 2;
+            }
+        } else {
+            *pos -= 1;
+        }
+    }
+
     // Expect "{"
     skip_whitespace(chars, pos);
     if !try_consume(chars, pos, '{') {
@@ -165,7 +214,7 @@ fn try_parse_fn(chars: &[char], pos: &mut usize) -> Result<FnDef, ParseError> {
         name,
         visibility,
         params,
-        return_ty: None,
+        return_ty,
         body,
         span,
     })
@@ -594,8 +643,9 @@ fn try_parse_struct(chars: &[char], pos: &mut usize) -> Result<StructDef, ParseE
         });
     }
 
-    // Parse fields
+    // Parse fields and methods
     let mut fields = Vec::new();
+    let mut methods = Vec::new();
     loop {
         skip_whitespace(chars, pos);
         if *pos >= chars.len() {
@@ -605,7 +655,38 @@ fn try_parse_struct(chars: &[char], pos: &mut usize) -> Result<StructDef, ParseE
             break;
         }
 
-        // Check for pub field
+        // Check if it's a function definition (method) - look for "pub fn" or just "fn"
+        let method_start = *pos;
+        let is_fn = {
+            // Try to find "fn" keyword after optional "pub"
+            let mut test_pos = *pos;
+            skip_whitespace(chars, &mut test_pos);
+            if try_consume_keyword(chars, &mut test_pos, "pub") {
+                skip_whitespace(chars, &mut test_pos);
+                try_consume_keyword(chars, &mut test_pos, "fn")
+            } else {
+                try_consume_keyword(chars, &mut test_pos, "fn")
+            }
+        };
+
+        if is_fn {
+            // Parse as method
+            *pos = method_start;
+            match try_parse_fn(chars, pos) {
+                Ok(method) => {
+                    methods.push(method);
+                    skip_whitespace(chars, pos);
+                    try_consume(chars, pos, ',');
+                    continue;
+                }
+                Err(e) => {
+                    // Failed to parse as method, try as field
+                    // Reset position
+                }
+            }
+        }
+
+        // Parse as field
         let field_visibility = if try_consume_keyword(chars, pos, "pub") {
             Visibility::Public
         } else {
@@ -648,6 +729,7 @@ fn try_parse_struct(chars: &[char], pos: &mut usize) -> Result<StructDef, ParseE
     Ok(StructDef {
         name,
         fields,
+        methods,
         visibility,
         generic_params,
         span,
@@ -752,8 +834,9 @@ fn try_parse_enum(chars: &[char], pos: &mut usize) -> Result<EnumDef, ParseError
         });
     }
 
-    // Parse variants
+    // Parse variants and methods
     let mut variants = Vec::new();
+    let mut methods = Vec::new();
     loop {
         skip_whitespace(chars, pos);
         if *pos >= chars.len() {
@@ -761,6 +844,43 @@ fn try_parse_enum(chars: &[char], pos: &mut usize) -> Result<EnumDef, ParseError
         }
         if try_consume(chars, pos, '}') {
             break;
+        }
+
+        // Check if it's a function definition (method)
+        let method_start = *pos;
+        if try_consume_keyword(chars, pos, "pub") || try_consume_keyword(chars, pos, "fn") {
+            // It's a method, go back to method_start
+            *pos = method_start;
+            match try_parse_fn(chars, pos) {
+                Ok(method) => {
+                    methods.push(method);
+                    skip_whitespace(chars, pos);
+                    try_consume(chars, pos, ',');
+                    continue;
+                }
+                Err(_) => {
+                    // Not a valid method, try as variant
+                }
+            }
+        } else if *pos < chars.len() && (chars[*pos].is_alphabetic() || chars[*pos] == '_') {
+            // Check if it's "fn" keyword without pub
+            let fn_start = *pos;
+            let name = parse_ident(chars, pos)?;
+            if name == "fn" {
+                // It's a method, go back to fn_start
+                *pos = fn_start;
+                match try_parse_fn(chars, pos) {
+                    Ok(method) => {
+                        methods.push(method);
+                        skip_whitespace(chars, pos);
+                        try_consume(chars, pos, ',');
+                        continue;
+                    }
+                    Err(_) => {}
+                }
+            }
+            // It's a variant, go back to variant_start
+            *pos = fn_start;
         }
 
         // Check for pub variant
@@ -817,6 +937,7 @@ fn try_parse_enum(chars: &[char], pos: &mut usize) -> Result<EnumDef, ParseError
     Ok(EnumDef {
         name,
         variants,
+        methods,
         visibility,
         generic_params,
         span,

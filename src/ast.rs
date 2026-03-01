@@ -160,6 +160,7 @@ pub struct StructField {
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<StructField>,
+    pub methods: Vec<FnDef>,
     pub visibility: Visibility,
     /// Generic type parameters (e.g., T, U)
     pub generic_params: Vec<String>,
@@ -179,6 +180,7 @@ pub struct EnumVariant {
 pub struct EnumDef {
     pub name: String,
     pub variants: Vec<EnumVariant>,
+    pub methods: Vec<FnDef>,
     pub visibility: Visibility,
     /// Generic type parameters (e.g., T, U)
     pub generic_params: Vec<String>,
