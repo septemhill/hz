@@ -15,6 +15,7 @@ use inkwell::values::{
 };
 
 use crate::ast::*;
+use crate::stdlib::StdLib;
 
 /// Code generator context
 pub struct CodeGenerator<'ctx> {
@@ -37,6 +38,12 @@ pub struct CodeGenerator<'ctx> {
 
     // Return type of current function
     return_type: Option<Type>,
+
+    // Standard library
+    stdlib: StdLib,
+
+    // Track imported packages (for duplicate checking)
+    imported_packages: HashMap<String, String>, // alias -> package_name
 }
 
 /// Result of code generation
@@ -44,7 +51,7 @@ pub type CodegenResult<T> = Result<T, Box<dyn Error>>;
 
 impl<'ctx> CodeGenerator<'ctx> {
     /// Create a new code generator
-    pub fn new(context: &'ctx Context, module_name: &str) -> CodegenResult<Self> {
+    pub fn new(context: &'ctx Context, module_name: &str, stdlib: StdLib) -> CodegenResult<Self> {
         let module = context.create_module(module_name);
         let execution_engine =
             module.create_jit_execution_engine(inkwell::OptimizationLevel::None)?;
@@ -59,12 +66,48 @@ impl<'ctx> CodeGenerator<'ctx> {
             variables: HashMap::new(),
             const_variables: HashMap::new(),
             return_type: None,
+            stdlib,
+            imported_packages: HashMap::new(),
         })
     }
 
     /// Generate code for a program
     pub fn generate(&mut self, program: &Program) -> CodegenResult<()> {
-        // First, declare all structs
+        // First, process all import statements (for duplicate checking)
+        for (alias, package_name) in &program.imports {
+            let namespace = alias.as_deref().unwrap_or(package_name.as_str());
+
+            // Check for duplicate import
+            if self.imported_packages.contains_key(namespace) {
+                return Err(
+                    format!("Duplicate import: '{}' is already imported", namespace).into(),
+                );
+            }
+
+            // Also check if the same package is imported under a different name
+            for (existing_alias, existing_package) in &self.imported_packages {
+                if existing_package.as_str() == package_name.as_str()
+                    && Some(existing_alias.as_str()) != alias.as_deref()
+                {
+                    return Err(format!(
+                        "Package '{}' is already imported as '{}'",
+                        package_name, existing_alias
+                    )
+                    .into());
+                }
+            }
+
+            // Track this import
+            self.imported_packages
+                .insert(namespace.to_string(), package_name.clone());
+
+            // Try to load the package
+            if let Err(e) = self.stdlib.load_package(package_name) {
+                return Err(format!("Import error: {}", e).into());
+            }
+        }
+
+        // Then, declare all structs
         for struct_def in &program.structs {
             self.declare_struct(struct_def)?;
         }
@@ -194,6 +237,53 @@ impl<'ctx> CodeGenerator<'ctx> {
         match stmt {
             Stmt::Expr { expr, .. } => {
                 self.generate_expr(expr)?;
+                Ok(())
+            }
+            Stmt::Import { packages, span: _ } => {
+                // Import statements: handle duplicates and aliases
+                for (alias, package_name) in packages {
+                    let namespace = alias.as_deref().unwrap_or(package_name.as_str());
+
+                    eprintln!(
+                        "DEBUG: Processing import: namespace={}, package={}",
+                        namespace, package_name
+                    );
+                    eprintln!(
+                        "DEBUG: imported_packages before: {:?}",
+                        self.imported_packages.keys().collect::<Vec<_>>()
+                    );
+
+                    // Check for duplicate import
+                    if self.imported_packages.contains_key(namespace) {
+                        return Err(format!(
+                            "Duplicate import: '{}' is already imported",
+                            namespace
+                        )
+                        .into());
+                    }
+
+                    // Also check if the same package is imported under a different name
+                    for (existing_alias, existing_package) in &self.imported_packages {
+                        if existing_package.as_str() == package_name.as_str()
+                            && Some(existing_alias.as_str()) != alias.as_deref()
+                        {
+                            return Err(format!(
+                                "Package '{}' is already imported as '{}'",
+                                package_name, existing_alias
+                            )
+                            .into());
+                        }
+                    }
+
+                    // Track this import
+                    self.imported_packages
+                        .insert(namespace.to_string(), package_name.clone());
+
+                    // Try to load the package
+                    if let Err(e) = self.stdlib.load_package(package_name) {
+                        return Err(format!("Import error: {}", e).into());
+                    }
+                }
                 Ok(())
             }
             Stmt::Let {
@@ -537,8 +627,21 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
         // Handle std library function calls
         if let Some(ns) = namespace {
-            if ns == "io" && name == "println" {
+            // Resolve alias to actual package name
+            let actual_package = self
+                .imported_packages
+                .get(ns)
+                .map(|s| s.as_str())
+                .unwrap_or(ns);
+
+            if actual_package == "io" && name == "println" {
                 return self.generate_io_println(args);
+            }
+
+            // Try to find the function in stdlib
+            if let Some(fn_def) = self.stdlib.get_function(actual_package, name) {
+                // For now, just return a dummy value
+                return Ok(self.context.i64_type().const_int(0, false).into());
             }
         }
 

@@ -1,0 +1,7 @@
+import "io"
+import "io"
+
+fn main() -> i64 {
+    io.println("Multiple imports work!");
+    return 0;
+}

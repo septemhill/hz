@@ -12,11 +12,19 @@ pub fn parse(source: &str) -> Result<Program, ParseError> {
     let mut functions = Vec::new();
     let mut structs = Vec::new();
     let mut enums = Vec::new();
+    let mut imports = Vec::new();
 
     while pos < chars.len() {
         skip_whitespace(&chars, &mut pos);
         if pos >= chars.len() {
             break;
+        }
+
+        // Try to parse import statement at top level
+        if let Ok(import_items) = try_parse_import(&chars, &mut pos) {
+            imports.extend(import_items);
+            skip_whitespace(&chars, &mut pos);
+            continue;
         }
 
         // Try to parse struct definition
@@ -55,6 +63,7 @@ pub fn parse(source: &str) -> Result<Program, ParseError> {
         functions,
         structs,
         enums,
+        imports,
     })
 }
 
@@ -220,6 +229,123 @@ fn try_parse_fn(chars: &[char], pos: &mut usize) -> Result<FnDef, ParseError> {
     })
 }
 
+/// Try to parse an import statement at the top level
+/// Returns Vec<(Option<alias>, package_name)>
+fn try_parse_import(
+    chars: &[char],
+    pos: &mut usize,
+) -> Result<Vec<(Option<String>, String)>, ParseError> {
+    let start = *pos;
+    skip_whitespace(chars, pos);
+
+    // Try to parse "import"
+    if !try_consume_keyword(chars, pos, "import") {
+        return Err(ParseError {
+            message: "Expected 'import' keyword".to_string(),
+            location: Some(*pos),
+        });
+    }
+
+    skip_whitespace(chars, pos);
+
+    let mut packages = Vec::new();
+
+    // Check for grouped imports with parentheses
+    if try_consume(chars, pos, '(') {
+        skip_whitespace(chars, pos);
+
+        while !try_consume(chars, pos, ')') {
+            if *pos >= chars.len() {
+                return Err(ParseError {
+                    message: "Expected ')' in import statement".to_string(),
+                    location: Some(*pos),
+                });
+            }
+
+            // Parse string literal for package name, possibly with alias
+            // Syntax: "package" or alias "package"
+            if chars[*pos] == '"' {
+                (*pos) += 1; // consume opening quote
+                let mut package_name = String::new();
+                while *pos < chars.len() && chars[*pos] != '"' {
+                    package_name.push(chars[*pos]);
+                    (*pos) += 1;
+                }
+                if *pos < chars.len() && chars[*pos] == '"' {
+                    (*pos) += 1; // consume closing quote
+                }
+                packages.push((None, package_name)); // No alias in grouped imports for now
+            } else {
+                return Err(ParseError {
+                    message: "Expected package name in quotes".to_string(),
+                    location: Some(*pos),
+                });
+            }
+
+            skip_whitespace(chars, pos);
+            try_consume(chars, pos, ';'); // optional semicolon
+            skip_whitespace(chars, pos);
+        }
+
+        try_consume(chars, pos, ';'); // consume optional semicolon after closing paren
+    } else {
+        // Single import: "package" or alias "package"
+        skip_whitespace(chars, pos);
+
+        // Check if we have an alias (identifier followed by string)
+        let alias: Option<String> = if *pos < chars.len() {
+            let start = *pos;
+            let mut potential_alias = String::new();
+            while *pos < chars.len() {
+                let c = chars[*pos];
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    potential_alias.push(c);
+                    (*pos) += 1;
+                } else {
+                    break;
+                }
+            }
+
+            // Skip whitespace before checking for quote
+            skip_whitespace(chars, pos);
+
+            // Check if next char is '"' (indicating alias)
+            if !potential_alias.is_empty() && *pos < chars.len() && chars[*pos] == '"' {
+                // This is an alias
+                Some(potential_alias)
+            } else {
+                // Not an alias, reset position
+                *pos = start;
+                None
+            }
+        } else {
+            None
+        };
+
+        if chars[*pos] == '"' {
+            (*pos) += 1; // consume opening quote
+            let mut package_name = String::new();
+            while *pos < chars.len() && chars[*pos] != '"' {
+                package_name.push(chars[*pos]);
+                (*pos) += 1;
+            }
+            if *pos < chars.len() && chars[*pos] == '"' {
+                (*pos) += 1; // consume closing quote
+            }
+            packages.push((alias, package_name));
+        } else {
+            return Err(ParseError {
+                message: "Expected package name in quotes".to_string(),
+                location: Some(*pos),
+            });
+        }
+
+        try_consume(chars, pos, ';');
+    }
+
+    Ok(packages)
+}
+
 /// Try to parse a statement
 fn try_parse_stmt(chars: &[char], pos: &mut usize) -> Result<Stmt, ParseError> {
     let start = *pos;
@@ -241,6 +367,107 @@ fn try_parse_stmt(chars: &[char], pos: &mut usize) -> Result<Stmt, ParseError> {
         try_consume(chars, pos, ';');
         return Ok(Stmt::Return {
             value: Some(expr),
+            span: span(start, *pos),
+        });
+    }
+
+    // Try to parse "import"
+    if try_consume_keyword(chars, pos, "import") {
+        skip_whitespace(chars, pos);
+
+        let mut packages = Vec::new();
+
+        // Check for grouped imports with parentheses
+        if try_consume(chars, pos, '(') {
+            skip_whitespace(chars, pos);
+
+            while !try_consume(chars, pos, ')') {
+                if *pos >= chars.len() {
+                    return Err(ParseError {
+                        message: "Expected ')' in import statement".to_string(),
+                        location: Some(*pos),
+                    });
+                }
+
+                // Parse string literal for package name (no alias support in grouped imports)
+                if chars[*pos] == '"' {
+                    (*pos) += 1; // consume opening quote
+                    let mut package_name = String::new();
+                    while *pos < chars.len() && chars[*pos] != '"' {
+                        package_name.push(chars[*pos]);
+                        (*pos) += 1;
+                    }
+                    if *pos < chars.len() && chars[*pos] == '"' {
+                        (*pos) += 1; // consume closing quote
+                    }
+                    packages.push((None, package_name)); // No alias in grouped imports
+                } else {
+                    return Err(ParseError {
+                        message: "Expected package name in quotes".to_string(),
+                        location: Some(*pos),
+                    });
+                }
+
+                skip_whitespace(chars, pos);
+                try_consume(chars, pos, ';'); // optional semicolon
+                skip_whitespace(chars, pos);
+            }
+
+            try_consume(chars, pos, ';'); // consume optional semicolon after closing paren
+        } else {
+            // Single import: "package" or alias "package"
+            skip_whitespace(chars, pos);
+
+            // Check if we have an alias (identifier followed by string)
+            let alias: Option<String> = if *pos < chars.len() {
+                let start = *pos;
+                let mut potential_alias = String::new();
+                while *pos < chars.len() {
+                    let c = chars[*pos];
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        potential_alias.push(c);
+                        (*pos) += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                // Check if next char is '"' (indicating alias)
+                if !potential_alias.is_empty() && *pos < chars.len() && chars[*pos] == '"' {
+                    // This is an alias
+                    Some(potential_alias)
+                } else {
+                    // Not an alias, reset position
+                    *pos = start;
+                    None
+                }
+            } else {
+                None
+            };
+
+            if chars[*pos] == '"' {
+                (*pos) += 1; // consume opening quote
+                let mut package_name = String::new();
+                while *pos < chars.len() && chars[*pos] != '"' {
+                    package_name.push(chars[*pos]);
+                    (*pos) += 1;
+                }
+                if *pos < chars.len() && chars[*pos] == '"' {
+                    (*pos) += 1; // consume closing quote
+                }
+                packages.push((alias, package_name));
+            } else {
+                return Err(ParseError {
+                    message: "Expected package name in quotes".to_string(),
+                    location: Some(*pos),
+                });
+            }
+
+            try_consume(chars, pos, ';');
+        }
+
+        return Ok(Stmt::Import {
+            packages,
             span: span(start, *pos),
         });
     }

@@ -239,6 +239,12 @@ pub enum Expr {
 pub enum Stmt {
     /// Expression statement (with semicolon)
     Expr { expr: Expr, span: Span },
+    /// Import statement with optional alias
+    /// Syntax: import "package" or import alias "package"
+    Import {
+        packages: Vec<(Option<String>, String)>,
+        span: Span,
+    },
     /// Variable declaration (var or const)
     Let {
         mutability: Mutability,
@@ -300,6 +306,7 @@ pub struct Program {
     pub functions: Vec<FnDef>,
     pub structs: Vec<StructDef>,
     pub enums: Vec<EnumDef>,
+    pub imports: Vec<(Option<String>, String)>, // (alias, package_name)
 }
 
 /// Visitor trait for AST traversal

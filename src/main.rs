@@ -35,7 +35,7 @@ fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
     // Step 2: Generate LLVM IR
     println!("[2/4] Generating LLVM IR...");
     let context = inkwell::context::Context::create();
-    let mut codegen = codegen::CodeGenerator::new(&context, "lang")?;
+    let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;
     codegen.generate(&program)?;
     let ir = codegen.print_ir();
     println!("    Generated LLVM IR:");
@@ -99,7 +99,7 @@ fn run_jit(source: &str) -> Result<(), Box<dyn Error>> {
 
     // Generate LLVM IR
     let context = inkwell::context::Context::create();
-    let mut codegen = codegen::CodeGenerator::new(&context, "lang")?;
+    let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;
     codegen.generate(&program)?;
 
     // Print the generated IR
@@ -193,7 +193,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             let source = fs::read_to_string(source_path)?;
             let program = parser::parse(&source)?;
             let context = inkwell::context::Context::create();
-            let mut codegen = codegen::CodeGenerator::new(&context, "lang")?;
+            let mut stdlib = stdlib::StdLib::new();
+            stdlib.set_std_path("./std");
+            let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;
             codegen.generate(&program)?;
             println!("{}", codegen.print_ir());
         }
