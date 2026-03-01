@@ -10,6 +10,8 @@ pub fn parse(source: &str) -> Result<Program, ParseError> {
     let mut pos = 0;
 
     let mut functions = Vec::new();
+    let mut structs = Vec::new();
+    let mut enums = Vec::new();
 
     while pos < chars.len() {
         skip_whitespace(&chars, &mut pos);
@@ -17,6 +19,25 @@ pub fn parse(source: &str) -> Result<Program, ParseError> {
             break;
         }
 
+        // Try to parse struct definition
+        if try_parse_struct(&chars, &mut pos)
+            .map(|s| structs.push(s))
+            .is_ok()
+        {
+            skip_whitespace(&chars, &mut pos);
+            continue;
+        }
+
+        // Try to parse enum definition
+        if try_parse_enum(&chars, &mut pos)
+            .map(|e| enums.push(e))
+            .is_ok()
+        {
+            skip_whitespace(&chars, &mut pos);
+            continue;
+        }
+
+        // Try to parse function definition
         if try_parse_fn(&chars, &mut pos)
             .map(|f| functions.push(f))
             .is_err()
@@ -30,11 +51,22 @@ pub fn parse(source: &str) -> Result<Program, ParseError> {
         skip_whitespace(&chars, &mut pos);
     }
 
-    Ok(Program { functions })
+    Ok(Program {
+        functions,
+        structs,
+        enums,
+    })
 }
 
 /// Try to parse a function definition
 fn try_parse_fn(chars: &[char], pos: &mut usize) -> Result<FnDef, ParseError> {
+    // Check for "pub" keyword (visibility modifier)
+    let visibility = if try_consume_keyword(chars, pos, "pub") {
+        Visibility::Public
+    } else {
+        Visibility::Private
+    };
+
     // Expect "fn"
     if !try_consume_keyword(chars, pos, "fn") {
         return Err(ParseError {
@@ -57,9 +89,44 @@ fn try_parse_fn(chars: &[char], pos: &mut usize) -> Result<FnDef, ParseError> {
         });
     }
 
-    // Parse parameters (simplified - no parameters for now)
+    // Parse parameters
+    let mut params = Vec::new();
     skip_whitespace(chars, pos);
-    try_consume(chars, pos, ')');
+    while !try_consume(chars, pos, ')') {
+        if *pos >= chars.len() {
+            break;
+        }
+
+        // Parse parameter name
+        let param_name = parse_ident(chars, pos)?;
+
+        // Expect ':'
+        skip_whitespace(chars, pos);
+        if !try_consume(chars, pos, ':') {
+            return Err(ParseError {
+                message: "Expected ':' in parameter".to_string(),
+                location: Some(*pos),
+            });
+        }
+
+        // Parse parameter type
+        let param_ty = parse_type(chars, pos)?;
+
+        params.push(FnParam {
+            name: param_name,
+            ty: param_ty,
+        });
+
+        // Try to consume comma for next parameter
+        skip_whitespace(chars, pos);
+        if !try_consume(chars, pos, ',') {
+            // If no comma, try to find closing paren
+            skip_whitespace(chars, pos);
+            if try_consume(chars, pos, ')') {
+                break;
+            }
+        }
+    }
 
     // Expect "{"
     skip_whitespace(chars, pos);
@@ -96,7 +163,8 @@ fn try_parse_fn(chars: &[char], pos: &mut usize) -> Result<FnDef, ParseError> {
 
     Ok(FnDef {
         name,
-        params: Vec::new(),
+        visibility,
+        params,
         return_ty: None,
         body,
         span,
@@ -130,6 +198,13 @@ fn try_parse_stmt(chars: &[char], pos: &mut usize) -> Result<Stmt, ParseError> {
 
     // Try to parse "let"
     if try_consume_keyword(chars, pos, "let") {
+        // Check for "pub" keyword
+        let visibility = if try_consume_keyword(chars, pos, "pub") {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
         skip_whitespace(chars, pos);
         let name = parse_ident(chars, pos)?;
 
@@ -141,6 +216,7 @@ fn try_parse_stmt(chars: &[char], pos: &mut usize) -> Result<Stmt, ParseError> {
             name,
             ty: None,
             value: None,
+            visibility,
             span: span(start, *pos),
         });
     }
@@ -159,6 +235,20 @@ fn try_parse_stmt(chars: &[char], pos: &mut usize) -> Result<Stmt, ParseError> {
 fn try_parse_expr(chars: &[char], pos: &mut usize) -> Result<Expr, ParseError> {
     let start = *pos;
     skip_whitespace(chars, pos);
+
+    // Try to parse string literal
+    if *pos < chars.len() && chars[*pos] == '"' {
+        (*pos) += 1; // consume opening quote
+        let mut value = String::new();
+        while *pos < chars.len() && chars[*pos] != '"' {
+            value.push(chars[*pos]);
+            (*pos) += 1;
+        }
+        if *pos < chars.len() && chars[*pos] == '"' {
+            (*pos) += 1; // consume closing quote
+        }
+        return Ok(Expr::String(value, span(start, *pos)));
+    }
 
     // Try to parse integer literal
     if chars[*pos].is_ascii_digit() {
@@ -179,6 +269,16 @@ fn try_parse_expr(chars: &[char], pos: &mut usize) -> Result<Expr, ParseError> {
     // Try to parse identifier
     if chars[*pos].is_alphabetic() || chars[*pos] == '_' {
         let name = parse_ident(chars, pos)?;
+
+        // Check for namespaced call (e.g., io.println)
+        skip_whitespace(chars, pos);
+        let namespace = if *pos < chars.len() && chars[*pos] == '.' {
+            (*pos) += 1; // consume '.'
+            let ns = parse_ident(chars, pos)?;
+            Some(ns)
+        } else {
+            None
+        };
 
         // Check if it's a function call
         skip_whitespace(chars, pos);
@@ -202,10 +302,26 @@ fn try_parse_expr(chars: &[char], pos: &mut usize) -> Result<Expr, ParseError> {
                 }
             }
 
+            // Swap namespace and name for namespaced calls (io.println -> name=println, namespace=io)
+            let (final_name, final_namespace) = if let Some(ns) = namespace {
+                (ns, Some(name))
+            } else {
+                (name, None)
+            };
+
             return Ok(Expr::Call {
-                name,
+                name: final_name,
+                namespace: final_namespace,
                 args,
                 span: span(start, *pos),
+            });
+        }
+
+        // If not a function call but has namespace, it's an error (for now)
+        if namespace.is_some() {
+            return Err(ParseError {
+                message: "Unexpected namespace without function call".to_string(),
+                location: Some(*pos),
             });
         }
 
@@ -378,6 +494,407 @@ fn skip_whitespace(chars: &[char], pos: &mut usize) {
 /// Create span
 fn span(start: usize, end: usize) -> Span {
     Span { start, end }
+}
+
+/// Try to parse a struct definition
+/// Syntax: pub? struct<T>? Name { field: Type, ... }
+fn try_parse_struct(chars: &[char], pos: &mut usize) -> Result<StructDef, ParseError> {
+    let start = *pos;
+
+    // Check for "pub" keyword
+    let visibility = if try_consume_keyword(chars, pos, "pub") {
+        Visibility::Public
+    } else {
+        Visibility::Private
+    };
+
+    // Expect "struct"
+    if !try_consume_keyword(chars, pos, "struct") {
+        return Err(ParseError {
+            message: "Expected 'struct' keyword".to_string(),
+            location: Some(*pos),
+        });
+    }
+
+    skip_whitespace(chars, pos);
+
+    // Try to parse generic parameters BEFORE the name (e.g., struct<T>)
+    let mut generic_params = Vec::new();
+    if *pos < chars.len() && chars[*pos] == '<' {
+        (*pos) += 1; // consume '<'
+        loop {
+            skip_whitespace(chars, pos);
+            if *pos >= chars.len() {
+                break;
+            }
+            if chars[*pos] == '>' {
+                (*pos) += 1; // consume '>'
+                break;
+            }
+            if chars[*pos] == ',' {
+                (*pos) += 1; // consume ','
+                continue;
+            }
+            let param = parse_ident(chars, pos)?;
+            generic_params.push(param);
+            skip_whitespace(chars, pos);
+            if *pos >= chars.len() {
+                break;
+            }
+            if chars[*pos] == '>' {
+                (*pos) += 1; // consume '>'
+                break;
+            }
+        }
+    }
+
+    skip_whitespace(chars, pos);
+
+    // Parse struct name
+    let name = parse_ident(chars, pos)?;
+
+    // If no generic params before name, try after name (e.g., struct Name<T>)
+    if generic_params.is_empty() {
+        skip_whitespace(chars, pos);
+        if *pos < chars.len() && chars[*pos] == '<' {
+            (*pos) += 1; // consume '<'
+            loop {
+                skip_whitespace(chars, pos);
+                if *pos >= chars.len() {
+                    break;
+                }
+                if chars[*pos] == '>' {
+                    (*pos) += 1; // consume '>'
+                    break;
+                }
+                if chars[*pos] == ',' {
+                    (*pos) += 1; // consume ','
+                    continue;
+                }
+                let param = parse_ident(chars, pos)?;
+                generic_params.push(param);
+                skip_whitespace(chars, pos);
+                if *pos >= chars.len() {
+                    break;
+                }
+                if chars[*pos] == '>' {
+                    (*pos) += 1; // consume '>'
+                    break;
+                }
+            }
+        }
+    }
+
+    // Expect "{"
+    skip_whitespace(chars, pos);
+    if !try_consume(chars, pos, '{') {
+        return Err(ParseError {
+            message: "Expected '{{'".to_string(),
+            location: Some(*pos),
+        });
+    }
+
+    // Parse fields
+    let mut fields = Vec::new();
+    loop {
+        skip_whitespace(chars, pos);
+        if *pos >= chars.len() {
+            break;
+        }
+        if try_consume(chars, pos, '}') {
+            break;
+        }
+
+        // Check for pub field
+        let field_visibility = if try_consume_keyword(chars, pos, "pub") {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        // Parse field name
+        skip_whitespace(chars, pos);
+        let field_name = parse_ident(chars, pos)?;
+
+        // Expect ":"
+        skip_whitespace(chars, pos);
+        if !try_consume(chars, pos, ':') {
+            return Err(ParseError {
+                message: "Expected ':' in struct field".to_string(),
+                location: Some(*pos),
+            });
+        }
+
+        // Parse field type
+        skip_whitespace(chars, pos);
+        let field_ty = parse_type(chars, pos)?;
+
+        fields.push(StructField {
+            name: field_name,
+            ty: field_ty,
+            visibility: field_visibility,
+        });
+
+        skip_whitespace(chars, pos);
+        try_consume(chars, pos, ',');
+    }
+
+    // Consume optional semicolon after struct
+    skip_whitespace(chars, pos);
+    try_consume(chars, pos, ';');
+
+    let span = span(start, *pos);
+
+    Ok(StructDef {
+        name,
+        fields,
+        visibility,
+        generic_params,
+        span,
+    })
+}
+
+/// Try to parse an enum definition
+/// Syntax: pub? enum<T>? Name { Variant, Variant(Type), ... }
+fn try_parse_enum(chars: &[char], pos: &mut usize) -> Result<EnumDef, ParseError> {
+    let start = *pos;
+
+    // Check for "pub" keyword
+    let visibility = if try_consume_keyword(chars, pos, "pub") {
+        Visibility::Public
+    } else {
+        Visibility::Private
+    };
+
+    // Expect "enum"
+    if !try_consume_keyword(chars, pos, "enum") {
+        return Err(ParseError {
+            message: "Expected 'enum' keyword".to_string(),
+            location: Some(*pos),
+        });
+    }
+
+    skip_whitespace(chars, pos);
+
+    // Try to parse generic parameters BEFORE the name (e.g., enum<T>)
+    let mut generic_params = Vec::new();
+    if *pos < chars.len() && chars[*pos] == '<' {
+        (*pos) += 1; // consume '<'
+        loop {
+            skip_whitespace(chars, pos);
+            if *pos >= chars.len() {
+                break;
+            }
+            if chars[*pos] == '>' {
+                (*pos) += 1; // consume '>'
+                break;
+            }
+            if chars[*pos] == ',' {
+                (*pos) += 1; // consume ','
+                continue;
+            }
+            let param = parse_ident(chars, pos)?;
+            generic_params.push(param);
+            skip_whitespace(chars, pos);
+            if *pos >= chars.len() {
+                break;
+            }
+            if chars[*pos] == '>' {
+                (*pos) += 1; // consume '>'
+                break;
+            }
+        }
+    }
+
+    skip_whitespace(chars, pos);
+
+    // Parse enum name
+    let name = parse_ident(chars, pos)?;
+
+    // If no generic params before name, try after name (e.g., enum Name<T>)
+    if generic_params.is_empty() {
+        skip_whitespace(chars, pos);
+        if *pos < chars.len() && chars[*pos] == '<' {
+            (*pos) += 1; // consume '<'
+            loop {
+                skip_whitespace(chars, pos);
+                if *pos >= chars.len() {
+                    break;
+                }
+                if chars[*pos] == '>' {
+                    (*pos) += 1; // consume '>'
+                    break;
+                }
+                if chars[*pos] == ',' {
+                    (*pos) += 1; // consume ','
+                    continue;
+                }
+                let param = parse_ident(chars, pos)?;
+                generic_params.push(param);
+                skip_whitespace(chars, pos);
+                if *pos >= chars.len() {
+                    break;
+                }
+                if chars[*pos] == '>' {
+                    (*pos) += 1; // consume '>'
+                    break;
+                }
+            }
+        }
+    }
+
+    // Expect "{"
+    skip_whitespace(chars, pos);
+    if !try_consume(chars, pos, '{') {
+        return Err(ParseError {
+            message: "Expected '{{'".to_string(),
+            location: Some(*pos),
+        });
+    }
+
+    // Parse variants
+    let mut variants = Vec::new();
+    loop {
+        skip_whitespace(chars, pos);
+        if *pos >= chars.len() {
+            break;
+        }
+        if try_consume(chars, pos, '}') {
+            break;
+        }
+
+        // Check for pub variant
+        let variant_visibility = if try_consume_keyword(chars, pos, "pub") {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        // Parse variant name
+        skip_whitespace(chars, pos);
+        let variant_name = parse_ident(chars, pos)?;
+
+        // Parse associated types (e.g., Variant(Type))
+        let mut associated_types = Vec::new();
+        skip_whitespace(chars, pos);
+        if try_consume(chars, pos, '(') {
+            loop {
+                skip_whitespace(chars, pos);
+                if *pos >= chars.len() {
+                    break;
+                }
+                if try_consume(chars, pos, ')') {
+                    break;
+                }
+                if try_consume(chars, pos, ',') {
+                    continue;
+                }
+                let assoc_ty = parse_type(chars, pos)?;
+                associated_types.push(assoc_ty);
+                skip_whitespace(chars, pos);
+                if try_consume(chars, pos, ')') {
+                    break;
+                }
+            }
+        }
+
+        variants.push(EnumVariant {
+            name: variant_name,
+            associated_types,
+            visibility: variant_visibility,
+        });
+
+        skip_whitespace(chars, pos);
+        try_consume(chars, pos, ',');
+    }
+
+    // Consume optional semicolon after enum
+    skip_whitespace(chars, pos);
+    try_consume(chars, pos, ';');
+
+    let span = span(start, *pos);
+
+    Ok(EnumDef {
+        name,
+        variants,
+        visibility,
+        generic_params,
+        span,
+    })
+}
+
+/// Parse a type (basic types or custom types)
+fn parse_type(chars: &[char], pos: &mut usize) -> Result<Type, ParseError> {
+    skip_whitespace(chars, pos);
+
+    // Check for basic types
+    if *pos < chars.len() {
+        let remaining: String = chars[*pos..].iter().take(10).collect();
+        if remaining.starts_with("i8") {
+            *pos += 2;
+            return Ok(Type::I8);
+        } else if remaining.starts_with("i16") {
+            *pos += 3;
+            return Ok(Type::I16);
+        } else if remaining.starts_with("i32") {
+            *pos += 3;
+            return Ok(Type::I32);
+        } else if remaining.starts_with("i64") {
+            *pos += 3;
+            return Ok(Type::I64);
+        } else if remaining.starts_with("u8") {
+            *pos += 2;
+            return Ok(Type::U8);
+        } else if remaining.starts_with("u16") {
+            *pos += 3;
+            return Ok(Type::U16);
+        } else if remaining.starts_with("u32") {
+            *pos += 3;
+            return Ok(Type::U32);
+        } else if remaining.starts_with("u64") {
+            *pos += 3;
+            return Ok(Type::U64);
+        } else if remaining.starts_with("bool") {
+            *pos += 4;
+            return Ok(Type::Bool);
+        } else if remaining.starts_with("void") {
+            *pos += 4;
+            return Ok(Type::Void);
+        }
+    }
+
+    // Parse custom type (identifier)
+    let type_name = parse_ident(chars, pos)?;
+
+    // Check for generic arguments (e.g., Vec<i64>)
+    let mut generic_args = Vec::new();
+    skip_whitespace(chars, pos);
+    if try_consume(chars, pos, '<') {
+        loop {
+            skip_whitespace(chars, pos);
+            if *pos >= chars.len() {
+                break;
+            }
+            if try_consume(chars, pos, '>') {
+                break;
+            }
+            if try_consume(chars, pos, ',') {
+                continue;
+            }
+            let arg = parse_type(chars, pos)?;
+            generic_args.push(arg);
+            skip_whitespace(chars, pos);
+            if try_consume(chars, pos, '>') {
+                break;
+            }
+        }
+    }
+
+    Ok(Type::Custom {
+        name: type_name,
+        generic_args,
+        is_exported: false,
+    })
 }
 
 /// Parse error type

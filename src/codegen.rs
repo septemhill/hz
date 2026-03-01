@@ -60,12 +60,22 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Generate code for a program
     pub fn generate(&mut self, program: &Program) -> CodegenResult<()> {
-        // First, declare all functions
+        // First, declare all structs
+        for struct_def in &program.structs {
+            self.declare_struct(struct_def)?;
+        }
+
+        // Then, declare all enums
+        for enum_def in &program.enums {
+            self.declare_enum(enum_def)?;
+        }
+
+        // Then, declare all functions
         for fn_def in &program.functions {
             self.declare_function(fn_def)?;
         }
 
-        // Then, generate code for each function
+        // Generate code for each function
         for fn_def in &program.functions {
             self.generate_function(fn_def)?;
         }
@@ -73,9 +83,47 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
+    /// Declare a struct type in LLVM
+    fn declare_struct(&mut self, struct_def: &StructDef) -> CodegenResult<()> {
+        // Only generate code for exported (public) structs
+        if !struct_def.visibility.is_public() {
+            return Ok(());
+        }
+
+        let struct_name = &struct_def.name;
+
+        // Create struct type
+        let field_types: Vec<BasicTypeEnum> = struct_def
+            .fields
+            .iter()
+            .map(|f| self.llvm_type(&f.ty))
+            .collect();
+
+        let struct_type = self.context.opaque_struct_type(struct_name);
+        struct_type.set_body(&field_types, false);
+
+        Ok(())
+    }
+
+    /// Declare an enum type in LLVM
+    fn declare_enum(&mut self, enum_def: &EnumDef) -> CodegenResult<()> {
+        // Only generate code for exported (public) enums
+        if !enum_def.visibility.is_public() {
+            return Ok(());
+        }
+
+        let _enum_name = &enum_def.name;
+
+        // For enums, we use an integer type as the representation
+        // In a full implementation, we'd use a tagged union
+        let _enum_type = self.context.i64_type();
+
+        Ok(())
+    }
+
     /// Declare a function (create function signature)
     fn declare_function(&mut self, fn_def: &FnDef) -> CodegenResult<()> {
-        let return_type = self.llvm_type(&fn_def.return_ty.unwrap_or(Type::I64));
+        let return_type = self.llvm_type(fn_def.return_ty.as_ref().unwrap_or(&Type::I64));
         let param_types: Vec<BasicMetadataTypeEnum> = fn_def
             .params
             .iter()
@@ -97,7 +145,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .ok_or(format!("Function not declared: {}", fn_def.name))?;
 
         self.current_function = Some(function);
-        self.return_type = fn_def.return_ty;
+        self.return_type = fn_def.return_ty.clone();
 
         // Clear variable scope for this function
         self.variables.clear();
@@ -149,9 +197,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 name,
                 ty,
                 value,
-                ..
+                visibility: _,
+                span: _,
             } => {
-                let var_type = self.llvm_type(&ty.unwrap_or(Type::I64));
+                let var_type = self.llvm_type(ty.as_ref().unwrap_or(&Type::I64));
                 let alloca = self.builder.build_alloca(var_type, name)?;
 
                 if let Some(val) = value {
@@ -276,6 +325,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let i1_type = self.context.bool_type();
                 Ok(i1_type.const_int(if *value { 1 } else { 0 }, false).into())
             }
+            Expr::String(value, _) => {
+                // Create a global string constant (unsafe)
+                let string_const =
+                    unsafe { self.builder.build_global_string(value.as_str(), "str") }?;
+                Ok(string_const.as_basic_value_enum())
+            }
             Expr::Ident(name, _) => {
                 let ptr = self
                     .variables
@@ -290,7 +345,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 op, left, right, ..
             } => self.generate_binary_op(*op, left, right),
             Expr::Unary { op, expr, .. } => self.generate_unary_op(*op, expr),
-            Expr::Call { name, args, .. } => self.generate_call(name, args),
+            Expr::Call {
+                name,
+                namespace,
+                args,
+                ..
+            } => self.generate_call(name, namespace.as_deref(), args),
         }
     }
 
@@ -454,7 +514,19 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Generate function call
-    fn generate_call(&mut self, name: &str, args: &[Expr]) -> CodegenResult<BasicValueEnum<'ctx>> {
+    fn generate_call(
+        &mut self,
+        name: &str,
+        namespace: Option<&str>,
+        args: &[Expr],
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        // Handle std library function calls
+        if let Some(ns) = namespace {
+            if ns == "io" && name == "println" {
+                return self.generate_io_println(args);
+            }
+        }
+
         let function = self
             .module
             .get_function(name)
@@ -469,6 +541,40 @@ impl<'ctx> CodeGenerator<'ctx> {
         // (proper return handling would require tracking function return types)
         let result = self.generate_expr(&args[0])?;
         Ok(result)
+    }
+
+    /// Generate io.println function call
+    fn generate_io_println(&mut self, args: &[Expr]) -> CodegenResult<BasicValueEnum<'ctx>> {
+        // Get printf function from libc
+        let printf_type = self.context.i64_type().fn_type(
+            &[self
+                .context
+                .i8_type()
+                .ptr_type(inkwell::AddressSpace::default())
+                .into()],
+            true,
+        );
+        let printf = self.module.add_function(
+            "printf",
+            printf_type,
+            Some(inkwell::module::Linkage::External),
+        );
+
+        // Generate the string argument
+        if args.is_empty() {
+            // Print empty line
+            let empty_str = unsafe { self.builder.build_global_string("\n", "empty") }?;
+            self.builder
+                .build_call(printf, &[empty_str.as_basic_value_enum().into()], "")?;
+        } else {
+            // Generate first argument as string
+            let arg = self.generate_expr(&args[0])?;
+            // Cast BasicValueEnum to BasicMetadataValueEnum for function call
+            let metadata_arg: inkwell::values::BasicMetadataValueEnum<'_> = arg.into();
+            self.builder.build_call(printf, &[metadata_arg], "")?;
+        }
+
+        Ok(self.context.i64_type().const_int(0, false).into())
     }
 
     /// Generate if statement
@@ -582,8 +688,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::U32 => self.context.i32_type().into(),
             Type::U64 => self.context.i64_type().into(),
             Type::Bool => self.context.bool_type().into(),
-            Type::Void => {
-                // For void, we'll just use i64 to avoid the conversion issue
+            Type::Void | Type::Custom { .. } | Type::GenericParam(_) => {
+                // For void, custom types, and generics, we'll just use i64 to avoid the conversion issue
                 self.context.i64_type().into()
             }
         }

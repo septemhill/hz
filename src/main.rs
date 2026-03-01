@@ -9,9 +9,21 @@ use std::path::Path;
 mod ast;
 mod codegen;
 mod parser;
+mod stdlib;
 
 /// Compile source code to executable
 fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    // Step 0: Initialize std library
+    println!("[0/4] Loading std library...");
+    let mut stdlib = stdlib::StdLib::new();
+    // Set std path to ./std relative to current directory
+    stdlib.set_std_path("./std");
+    let _ = stdlib.preload_common();
+    println!(
+        "    Loaded std packages: {:?}",
+        stdlib.packages().keys().collect::<Vec<_>>()
+    );
+
     // Step 1: Parse source code into AST
     println!("[1/4] Parsing source code...");
     let program = parser::parse(source)?;
@@ -70,6 +82,17 @@ fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
 
 /// Run the compiled program (JIT)
 fn run_jit(source: &str) -> Result<(), Box<dyn Error>> {
+    // Initialize std library
+    println!("Loading std library...");
+    let mut stdlib = stdlib::StdLib::new();
+    // Set std path to ./std relative to current directory
+    stdlib.set_std_path("./std");
+    let _ = stdlib.preload_common();
+    println!(
+        "Loaded std packages: {:?}",
+        stdlib.packages().keys().collect::<Vec<_>>()
+    );
+
     // Parse source code
     println!("Parsing source code...");
     let program = parser::parse(source)?;

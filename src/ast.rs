@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 /// Represents a data type in the language
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
     I8,
     I16,
@@ -18,6 +18,16 @@ pub enum Type {
     U64,
     Bool,
     Void,
+    /// Custom type (struct or enum)
+    Custom {
+        name: String,
+        /// Generic type arguments
+        generic_args: Vec<Type>,
+        /// Whether this is an external/exported type
+        is_exported: bool,
+    },
+    /// Generic type parameter (for generics)
+    GenericParam(String),
 }
 
 impl Type {
@@ -29,6 +39,19 @@ impl Type {
             Type::U64
         } else {
             Type::I64
+        }
+    }
+
+    /// Check if this is a custom type
+    pub fn is_custom(&self) -> bool {
+        matches!(self, Type::Custom { .. })
+    }
+
+    /// Get the name of a custom type
+    pub fn custom_name(&self) -> Option<&String> {
+        match self {
+            Type::Custom { name, .. } => Some(name),
+            _ => None,
         }
     }
 }
@@ -46,6 +69,17 @@ impl fmt::Display for Type {
             Type::U64 => write!(f, "u64"),
             Type::Bool => write!(f, "bool"),
             Type::Void => write!(f, "void"),
+            Type::Custom {
+                name, generic_args, ..
+            } => {
+                if generic_args.is_empty() {
+                    write!(f, "{}", name)
+                } else {
+                    let args: Vec<String> = generic_args.iter().map(|a| a.to_string()).collect();
+                    write!(f, "{}<{}>", name, args.join(", "))
+                }
+            }
+            Type::GenericParam(name) => write!(f, "{}", name),
         }
     }
 }
@@ -100,6 +134,57 @@ pub enum AssignOp {
     DivAssign,
 }
 
+/// Visibility modifier (pub keyword)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    Private,
+    Public,
+}
+
+impl Visibility {
+    pub fn is_public(&self) -> bool {
+        matches!(self, Visibility::Public)
+    }
+}
+
+/// Struct field definition
+#[derive(Debug, Clone)]
+pub struct StructField {
+    pub name: String,
+    pub ty: Type,
+    pub visibility: Visibility,
+}
+
+/// Struct definition
+#[derive(Debug, Clone)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<StructField>,
+    pub visibility: Visibility,
+    /// Generic type parameters (e.g., T, U)
+    pub generic_params: Vec<String>,
+    pub span: Span,
+}
+
+/// Enum variant
+#[derive(Debug, Clone)]
+pub struct EnumVariant {
+    pub name: String,
+    pub associated_types: Vec<Type>,
+    pub visibility: Visibility,
+}
+
+/// Enum definition
+#[derive(Debug, Clone)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<EnumVariant>,
+    pub visibility: Visibility,
+    /// Generic type parameters (e.g., T, U)
+    pub generic_params: Vec<String>,
+    pub span: Span,
+}
+
 /// Position in source code (line, column)
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Span {
@@ -114,6 +199,8 @@ pub enum Expr {
     Int(i64, Span),
     /// Boolean literal
     Bool(bool, Span),
+    /// String literal
+    String(String, Span),
     /// Variable identifier
     Ident(String, Span),
     /// Binary operation
@@ -132,6 +219,7 @@ pub enum Expr {
     /// Function call
     Call {
         name: String,
+        namespace: Option<String>,
         args: Vec<Expr>,
         span: Span,
     },
@@ -148,6 +236,7 @@ pub enum Stmt {
         name: String,
         ty: Option<Type>,
         value: Option<Expr>,
+        visibility: Visibility,
         span: Span,
     },
     /// Assignment statement
@@ -182,6 +271,7 @@ pub enum Stmt {
 #[derive(Debug, Clone)]
 pub struct FnDef {
     pub name: String,
+    pub visibility: Visibility,
     pub params: Vec<FnParam>,
     pub return_ty: Option<Type>,
     pub body: Vec<Stmt>,
@@ -199,6 +289,8 @@ pub struct FnParam {
 #[derive(Debug, Clone)]
 pub struct Program {
     pub functions: Vec<FnDef>,
+    pub structs: Vec<StructDef>,
+    pub enums: Vec<EnumDef>,
 }
 
 /// Visitor trait for AST traversal
