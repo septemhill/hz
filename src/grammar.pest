@@ -193,7 +193,7 @@ const_stmt = {
 
 fn_param = { ident ~ ":" ~ ty }
 fn_params = { fn_param ~ ("," ~ fn_param)* }
-fn_signature = { "fn" ~ ident ~ "(" ~ fn_params? ~ ")" ~ ("->" ~ ty)? }
+fn_signature = { "fn" ~ ident ~ "(" ~ fn_params? ~ ")" ~ ty? }
 fn_body = { "{" ~ stmt* ~ "}" }
 fn_def = { fn_signature ~ fn_body }
 

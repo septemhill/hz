@@ -137,52 +137,43 @@ fn try_parse_fn(chars: &[char], pos: &mut usize) -> Result<FnDef, ParseError> {
         }
     }
 
-    // Parse optional return type (only basic types supported for now)
+    // Parse optional return type (directly after closing paren, no -> needed)
     let mut return_ty = None;
     skip_whitespace(chars, pos);
-    if *pos < chars.len() && chars[*pos] == '-' {
-        (*pos) += 1;
-        if *pos < chars.len() && chars[*pos] == '>' {
-            (*pos) += 1;
-            // Parse the return type
-            skip_whitespace(chars, pos);
-            let remaining: String = chars[*pos..].iter().take(10).collect();
-            if remaining.starts_with("i8") {
-                *pos += 2;
-                return_ty = Some(Type::I8);
-            } else if remaining.starts_with("i16") {
-                *pos += 3;
-                return_ty = Some(Type::I16);
-            } else if remaining.starts_with("i32") {
-                *pos += 3;
-                return_ty = Some(Type::I32);
-            } else if remaining.starts_with("i64") {
-                *pos += 3;
-                return_ty = Some(Type::I64);
-            } else if remaining.starts_with("u8") {
-                *pos += 2;
-                return_ty = Some(Type::U8);
-            } else if remaining.starts_with("u16") {
-                *pos += 3;
-                return_ty = Some(Type::U16);
-            } else if remaining.starts_with("u32") {
-                *pos += 3;
-                return_ty = Some(Type::U32);
-            } else if remaining.starts_with("u64") {
-                *pos += 3;
-                return_ty = Some(Type::U64);
-            } else if remaining.starts_with("bool") {
-                *pos += 4;
-                return_ty = Some(Type::Bool);
-            } else if remaining.starts_with("void") {
-                *pos += 4;
-                return_ty = Some(Type::Void);
-            } else {
-                // Not a basic type, rewind
-                *pos -= 2;
-            }
-        } else {
-            *pos -= 1;
+
+    // Try to parse a type for return type (without ->)
+    if *pos < chars.len() {
+        let remaining: String = chars[*pos..].iter().take(10).collect();
+        if remaining.starts_with("i8") {
+            *pos += 2;
+            return_ty = Some(Type::I8);
+        } else if remaining.starts_with("i16") {
+            *pos += 3;
+            return_ty = Some(Type::I16);
+        } else if remaining.starts_with("i32") {
+            *pos += 3;
+            return_ty = Some(Type::I32);
+        } else if remaining.starts_with("i64") {
+            *pos += 3;
+            return_ty = Some(Type::I64);
+        } else if remaining.starts_with("u8") {
+            *pos += 2;
+            return_ty = Some(Type::U8);
+        } else if remaining.starts_with("u16") {
+            *pos += 3;
+            return_ty = Some(Type::U16);
+        } else if remaining.starts_with("u32") {
+            *pos += 3;
+            return_ty = Some(Type::U32);
+        } else if remaining.starts_with("u64") {
+            *pos += 3;
+            return_ty = Some(Type::U64);
+        } else if remaining.starts_with("bool") {
+            *pos += 4;
+            return_ty = Some(Type::Bool);
+        } else if remaining.starts_with("void") {
+            *pos += 4;
+            return_ty = Some(Type::Void);
         }
     }
 

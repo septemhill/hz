@@ -1,0 +1,5 @@
+import "io"
+
+fn main() void {
+    io.println("Hello without arrow!");
+}
