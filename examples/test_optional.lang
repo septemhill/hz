@@ -1,9 +1,5 @@
 fn main() {
-    // Test optional type with null
-    var x: ?i32 = null;
-    
-    // Test optional type with value
-    var y: ?i32 = 42;
-    
-    return 0;
+    const x: ?i32 = 1;
+    const y: ?i32 = null;
+    io.println("optional types work");
 }

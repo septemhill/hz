@@ -33,6 +33,9 @@ pub struct CodeGenerator<'ctx> {
     // Variable scope (name -> LLVM value)
     variables: HashMap<String, PointerValue<'ctx>>,
 
+    // Variable types (name -> Lang type) - for correct loading
+    variable_types: HashMap<String, Type>,
+
     // Const variable scope (name -> LLVM value) - for compile-time error checking
     const_variables: HashMap<String, PointerValue<'ctx>>,
 
@@ -65,6 +68,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             current_block: None,
             variables: HashMap::new(),
             const_variables: HashMap::new(),
+            variable_types: HashMap::new(),
             return_type: None,
             stdlib,
             imported_packages: HashMap::new(),
@@ -196,6 +200,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Clear variable scope for this function
         self.variables.clear();
+        self.variable_types.clear();
 
         // Create entry basic block
         let entry_block = self.context.append_basic_block(function, "entry");
@@ -294,15 +299,40 @@ impl<'ctx> CodeGenerator<'ctx> {
                 visibility: _,
                 span: _,
             } => {
-                let var_type = self.llvm_type(ty.as_ref().unwrap_or(&Type::I64));
+                // If value exists, generate it first to get the actual type
+                let llvm_val = if let Some(val) = value {
+                    Some(self.generate_expr(val)?)
+                } else {
+                    None
+                };
+
+                // Determine the type: use explicit type or infer from generated value
+                // First determine the Lang type
+                let lang_type = match ty {
+                    Some(explicit_ty) => explicit_ty.clone(),
+                    None => {
+                        if let Some(ref val) = llvm_val {
+                            // Infer type from LLVM value using helper function
+                            let llvm_type = val.get_type();
+                            self.llvm_type_to_lang(&llvm_type)
+                        } else {
+                            Type::I64
+                        }
+                    }
+                };
+
+                let var_type = self.llvm_type(&lang_type);
+
                 let alloca = self.builder.build_alloca(var_type, name)?;
 
-                if let Some(val) = value {
-                    let llvm_val = self.generate_expr(val)?;
-                    self.builder.build_store(alloca, llvm_val)?;
+                if let Some(val) = llvm_val {
+                    self.builder.build_store(alloca, val)?;
                 }
 
                 self.variables.insert(name.clone(), alloca);
+
+                // Track the Lang type for correct loading later
+                self.variable_types.insert(name.clone(), lang_type);
 
                 // Track const variables for compile-time error checking
                 if *mutability == Mutability::Const {
@@ -446,14 +476,96 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .struct_type(&[i64_type.into(), bool_type.into()], false);
                 Ok(null_struct.const_zero().into())
             }
+            Expr::Tuple(exprs, _) => {
+                // Generate a tuple: create a struct with all elements
+                let mut values: Vec<BasicValueEnum<'ctx>> = Vec::new();
+                for expr in exprs {
+                    values.push(self.generate_expr(expr)?);
+                }
+
+                // Create struct type from the values
+                let mut element_types: Vec<BasicTypeEnum<'ctx>> = Vec::new();
+                for val in &values {
+                    element_types.push(val.get_type());
+                }
+                let struct_type = self.context.struct_type(&element_types, false);
+
+                // Build the struct value using aggregate values
+                let mut struct_val: inkwell::values::AggregateValueEnum =
+                    struct_type.const_zero().into();
+                for (i, val) in values.iter().enumerate() {
+                    struct_val = self
+                        .builder
+                        .build_insert_value(
+                            struct_val.into_struct_value(),
+                            *val,
+                            i as u32,
+                            "tuple_elem",
+                        )?
+                        .into();
+                }
+                Ok(struct_val.as_basic_value_enum())
+            }
+            Expr::TupleIndex { tuple, index, .. } => {
+                // Generate tuple index access: tuple.0, tuple.1, etc.
+                let tuple_val = self.generate_expr(tuple)?;
+
+                // Try to extract directly
+                match tuple_val {
+                    // If it's already a struct value, extract directly
+                    BasicValueEnum::StructValue(sv) => {
+                        let elem = self.builder.build_extract_value(
+                            sv,
+                            *index as u32,
+                            &format!("tuple_idx{}", index),
+                        )?;
+                        Ok(elem.into())
+                    }
+                    // If it's a pointer, use the stored variable type to load correctly
+                    BasicValueEnum::PointerValue(ptr) => {
+                        // Get the variable name if this is an Ident expression
+                        let var_name = match tuple.as_ref() {
+                            Expr::Ident(n, _) => Some(n.clone()),
+                            _ => None,
+                        };
+
+                        if let Some(name) = var_name {
+                            if let Some(var_type) = self.variable_types.get(&name) {
+                                // Load with the correct type
+                                let load_type = self.llvm_type(var_type);
+                                let loaded =
+                                    self.builder.build_load(load_type, ptr, "tuple_load")?;
+                                // Extract the element
+                                let elem = self.builder.build_extract_value(
+                                    loaded.into_struct_value(),
+                                    *index as u32,
+                                    &format!("tuple_idx{}", index),
+                                )?;
+                                return Ok(elem.into());
+                            }
+                        }
+                        // Fallback: try loading as i64
+                        let loaded =
+                            self.builder
+                                .build_load(self.context.i64_type(), ptr, "tuple_load")?;
+                        Ok(loaded.into())
+                    }
+                    // For other cases (like int value), try to extract (will fail gracefully)
+                    _ => Err("Tuple index access requires a tuple or pointer to tuple".into()),
+                }
+            }
             Expr::Ident(name, _) => {
                 let ptr = self
                     .variables
                     .get(name)
                     .ok_or(format!("Variable not found: {}", name))?;
-                let load = self
-                    .builder
-                    .build_load(self.llvm_type(&Type::I64), *ptr, name)?;
+                // Use the stored variable type for loading, default to i64
+                let load_type = if let Some(var_type) = self.variable_types.get(name) {
+                    self.llvm_type(var_type)
+                } else {
+                    self.llvm_type(&Type::I64)
+                };
+                let load = self.builder.build_load(load_type, *ptr, name)?;
                 Ok(load.into())
             }
             Expr::Binary {
@@ -839,10 +951,41 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .struct_type(&[value_type.into(), bool_type.into()], false)
                     .into()
             }
+            Type::Tuple(types) => {
+                // Tuple type: represented as a struct with all elements
+                let mut element_types: Vec<BasicTypeEnum<'ctx>> = Vec::new();
+                for t in types {
+                    element_types.push(self.llvm_type(t));
+                }
+                self.context.struct_type(&element_types, false).into()
+            }
             Type::Void | Type::Custom { .. } | Type::GenericParam(_) => {
                 // For void, custom types, and generics, we'll just use i64 to avoid the conversion issue
                 self.context.i64_type().into()
             }
+        }
+    }
+
+    /// Convert LLVM type to our Type (simplified version)
+    fn llvm_type_to_lang(&self, ty: &BasicTypeEnum<'ctx>) -> Type {
+        match ty {
+            BasicTypeEnum::IntType(it) => match it.get_bit_width() {
+                8 => Type::I8,
+                16 => Type::I16,
+                32 => Type::I32,
+                64 => Type::I64,
+                _ => Type::I64,
+            },
+            BasicTypeEnum::FloatType(_) => Type::I64, // Default float to i64
+            BasicTypeEnum::PointerType(_) => Type::I64, // Default pointer to i64
+            BasicTypeEnum::StructType(_) => {
+                // For structs, create a placeholder tuple - the actual type
+                // should be specified explicitly or inferred from the expression
+                Type::Tuple(vec![Type::I64, Type::I64])
+            }
+            BasicTypeEnum::ArrayType(_) => Type::I64, // Default array to i64
+            BasicTypeEnum::VectorType(_) => Type::I64, // Default vector to i64
+            BasicTypeEnum::ScalableVectorType(_) => Type::I64, // Default scalable vector to i64
         }
     }
 

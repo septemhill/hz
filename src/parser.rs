@@ -519,15 +519,12 @@ fn try_parse_stmt(chars: &[char], pos: &mut usize) -> Result<Stmt, ParseError> {
         skip_whitespace(chars, pos);
         let name = parse_ident(chars, pos)?;
 
-        // Const requires type annotation
-        skip_whitespace(chars, pos);
-        if !try_consume(chars, pos, ':') {
-            return Err(ParseError {
-                message: "Constant declaration requires type annotation".to_string(),
-                location: Some(*pos),
-            });
-        }
-        let ty = Some(parse_type(chars, pos)?);
+        // Const: type annotation is optional (especially for tuples)
+        let ty = if try_consume(chars, pos, ':') {
+            Some(parse_type(chars, pos)?)
+        } else {
+            None
+        };
 
         // Const requires initializer
         skip_whitespace(chars, pos);
@@ -651,6 +648,49 @@ fn try_parse_expr(chars: &[char], pos: &mut usize) -> Result<Expr, ParseError> {
         return Ok(Expr::String(value, span(start, *pos)));
     }
 
+    // Try to parse tuple literal (e.g., (1, 2, 3))
+    if *pos < chars.len() && chars[*pos] == '(' {
+        (*pos) += 1; // consume opening paren
+        skip_whitespace(chars, pos);
+
+        // Check for empty tuple ()
+        if *pos < chars.len() && chars[*pos] == ')' {
+            (*pos) += 1; // consume closing paren
+            return Ok(Expr::Tuple(vec![], span(start, *pos)));
+        }
+
+        // Parse tuple elements
+        let mut elements = Vec::new();
+        loop {
+            skip_whitespace(chars, pos);
+            if *pos >= chars.len() {
+                break;
+            }
+
+            // Parse the expression
+            let elem = try_parse_expr(chars, pos)?;
+            elements.push(elem);
+
+            skip_whitespace(chars, pos);
+            if *pos >= chars.len() {
+                break;
+            }
+
+            // Check for comma or closing paren
+            if chars[*pos] == ',' {
+                (*pos) += 1; // consume comma
+                continue;
+            } else if chars[*pos] == ')' {
+                (*pos) += 1; // consume closing paren
+                break;
+            } else {
+                break;
+            }
+        }
+
+        return Ok(Expr::Tuple(elements, span(start, *pos)));
+    }
+
     // Try to parse integer literal
     if chars[*pos].is_ascii_digit() {
         let mut num_str = String::new();
@@ -699,6 +739,30 @@ fn try_parse_expr(chars: &[char], pos: &mut usize) -> Result<Expr, ParseError> {
         } else {
             None
         };
+
+        // Check for tuple index access (e.g., variable.0, variable.1)
+        skip_whitespace(chars, pos);
+        if *pos < chars.len() && chars[*pos] == '.' {
+            (*pos) += 1; // consume '.'
+            skip_whitespace(chars, pos);
+            // Parse the index (must be a number)
+            if *pos < chars.len() && chars[*pos].is_ascii_digit() {
+                let mut index_str = String::new();
+                while *pos < chars.len() && chars[*pos].is_ascii_digit() {
+                    index_str.push(chars[*pos]);
+                    (*pos) += 1;
+                }
+                if let Ok(index) = index_str.parse::<usize>() {
+                    return Ok(Expr::TupleIndex {
+                        tuple: Box::new(Expr::Ident(name, span(start, start))),
+                        index,
+                        span: span(start, *pos),
+                    });
+                }
+            }
+            // Not a valid index, reset position and continue (the dot was part of namespace)
+            *pos -= 1; // put back the dot
+        }
 
         // Check if it's a function call
         skip_whitespace(chars, pos);

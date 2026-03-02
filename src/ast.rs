@@ -20,6 +20,8 @@ pub enum Type {
     Void,
     /// Optional type (e.g., ?i32)
     Option(Box<Type>),
+    /// Tuple type (e.g., (i32, i64))
+    Tuple(Vec<Type>),
     /// Custom type (struct or enum)
     Custom {
         name: String,
@@ -72,6 +74,10 @@ impl fmt::Display for Type {
             Type::Bool => write!(f, "bool"),
             Type::Void => write!(f, "void"),
             Type::Option(inner) => write!(f, "?{}", inner),
+            Type::Tuple(types) => {
+                let type_strs: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+                write!(f, "({})", &type_strs.join(", "))
+            }
             Type::Custom {
                 name, generic_args, ..
             } => {
@@ -215,6 +221,16 @@ pub enum Expr {
     String(String, Span),
     /// Null literal
     Null(Span),
+    /// Tuple literal (e.g., (1, 2, 3))
+    Tuple(Vec<Expr>, Span),
+    /// Tuple index access (e.g., variable.0, variable.1)
+    TupleIndex {
+        /// The tuple expression
+        tuple: Box<Expr>,
+        /// The index to access (0, 1, 2, ...)
+        index: usize,
+        span: Span,
+    },
     /// Variable identifier
     Ident(String, Span),
     /// Binary operation
