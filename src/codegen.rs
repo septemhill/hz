@@ -436,6 +436,16 @@ impl<'ctx> CodeGenerator<'ctx> {
                     unsafe { self.builder.build_global_string(value.as_str(), "str") }?;
                 Ok(string_const.as_basic_value_enum())
             }
+            Expr::Null(_) => {
+                // Null is represented as a struct { value, is_valid } with is_valid = false
+                // We'll use i64 as placeholder value and false for is_valid
+                let i64_type = self.context.i64_type();
+                let bool_type = self.context.bool_type();
+                let null_struct = self
+                    .context
+                    .struct_type(&[i64_type.into(), bool_type.into()], false);
+                Ok(null_struct.const_zero().into())
+            }
             Expr::Ident(name, _) => {
                 let ptr = self
                     .variables
@@ -806,6 +816,29 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::U32 => self.context.i32_type().into(),
             Type::U64 => self.context.i64_type().into(),
             Type::Bool => self.context.bool_type().into(),
+            Type::Option(inner) => {
+                // Optional type: represented as a struct { value, is_valid }
+                // where is_valid is a boolean indicating whether the value is present
+                let bool_type = self.context.bool_type();
+
+                // Use the appropriate value type based on the inner type
+                let value_type: BasicTypeEnum<'ctx> = match inner.as_ref() {
+                    Type::I8 => self.context.i8_type().into(),
+                    Type::I16 => self.context.i16_type().into(),
+                    Type::I32 => self.context.i32_type().into(),
+                    Type::I64 => self.context.i64_type().into(),
+                    Type::U8 => self.context.i8_type().into(),
+                    Type::U16 => self.context.i16_type().into(),
+                    Type::U32 => self.context.i32_type().into(),
+                    Type::U64 => self.context.i64_type().into(),
+                    Type::Bool => self.context.bool_type().into(),
+                    _ => self.context.i64_type().into(), // Default for custom/generic types
+                };
+
+                self.context
+                    .struct_type(&[value_type.into(), bool_type.into()], false)
+                    .into()
+            }
             Type::Void | Type::Custom { .. } | Type::GenericParam(_) => {
                 // For void, custom types, and generics, we'll just use i64 to avoid the conversion issue
                 self.context.i64_type().into()

@@ -45,6 +45,7 @@ _kw_u32 = { "u32" }
 _kw_u64 = { "u64" }
 _kw_bool = { "bool" }
 _kw_void = { "void" }
+_kw_null = { "null" }
 
 // ============================================================
 // TYPES
@@ -55,6 +56,9 @@ ty = _{
     "u8" | "u16" | "u32" | "u64" | 
     "bool" | "void" 
 }
+
+// Optional type: ? followed by a base type (e.g., ?i32, ?bool)
+optional_ty = { "?" ~ ty }
 
 // ============================================================
 // OPERATORS
@@ -98,7 +102,10 @@ expr = _{ paren_expr | unary_expr | binary_expr | literal | ident_expr | call_ex
 paren_expr = { "(" ~ expr ~ ")" }
 
 // Literal values
-literal = { int_literal | bool_literal }
+literal = { int_literal | bool_literal | null_literal }
+
+// Null literal
+null_literal = { "null" }
 
 // Identifier expression (variable reference)
 ident_expr = { ident }
@@ -180,20 +187,23 @@ assign_stmt = {
 
 // Variable declaration (var or const statement)
 var_stmt = { 
-    "var" ~ ident ~ ":" ~ ty ~ "=" ~ expr 
+    "var" ~ ident ~ ":" ~ type_with_optional ~ "=" ~ expr 
 }
 
 const_stmt = { 
-    "const" ~ ident ~ ":" ~ ty ~ "=" ~ expr 
+    "const" ~ ident ~ ":" ~ type_with_optional ~ "=" ~ expr 
 }
+
+// Type that can be optional (prefixed with ?)
+type_with_optional = { "?" ~ ty | ty }
 
 // ============================================================
 // FUNCTIONS
 // ============================================================
 
-fn_param = { ident ~ ":" ~ ty }
+fn_param = { ident ~ ":" ~ type_with_optional }
 fn_params = { fn_param ~ ("," ~ fn_param)* }
-fn_signature = { "fn" ~ ident ~ "(" ~ fn_params? ~ ")" ~ ty? }
+fn_signature = { "fn" ~ ident ~ "(" ~ fn_params? ~ ")" ~ type_with_optional? }
 fn_body = { "{" ~ stmt* ~ "}" }
 fn_def = { fn_signature ~ fn_body }
 

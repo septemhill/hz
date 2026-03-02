@@ -669,6 +669,25 @@ fn try_parse_expr(chars: &[char], pos: &mut usize) -> Result<Expr, ParseError> {
 
     // Try to parse identifier
     if chars[*pos].is_alphabetic() || chars[*pos] == '_' {
+        // Check for keywords first
+        let remaining: String = chars[*pos..].iter().take(10).collect();
+
+        // Check for null literal
+        if remaining.starts_with("null") {
+            *pos += 4; // consume "null"
+            return Ok(Expr::Null(span(start, *pos)));
+        }
+
+        // Check for boolean literals
+        if remaining.starts_with("true") {
+            *pos += 4; // consume "true"
+            return Ok(Expr::Bool(true, span(start, *pos)));
+        }
+        if remaining.starts_with("false") {
+            *pos += 5; // consume "false"
+            return Ok(Expr::Bool(false, span(start, *pos)));
+        }
+
         let name = parse_ident(chars, pos)?;
 
         // Check for namespaced call (e.g., io.println)
@@ -1299,6 +1318,52 @@ fn try_parse_enum(chars: &[char], pos: &mut usize) -> Result<EnumDef, ParseError
 /// Parse a type (basic types or custom types)
 fn parse_type(chars: &[char], pos: &mut usize) -> Result<Type, ParseError> {
     skip_whitespace(chars, pos);
+
+    // Check for optional type (? followed by a base type)
+    if *pos < chars.len() && chars[*pos] == '?' {
+        *pos += 1; // consume '?'
+
+        // Parse the inner type (don't allow nested optional for simplicity)
+        skip_whitespace(chars, pos);
+        let remaining: String = chars[*pos..].iter().take(10).collect();
+        let inner_type = if remaining.starts_with("i8") {
+            *pos += 2;
+            Type::I8
+        } else if remaining.starts_with("i16") {
+            *pos += 3;
+            Type::I16
+        } else if remaining.starts_with("i32") {
+            *pos += 3;
+            Type::I32
+        } else if remaining.starts_with("i64") {
+            *pos += 3;
+            Type::I64
+        } else if remaining.starts_with("u8") {
+            *pos += 2;
+            Type::U8
+        } else if remaining.starts_with("u16") {
+            *pos += 3;
+            Type::U16
+        } else if remaining.starts_with("u32") {
+            *pos += 3;
+            Type::U32
+        } else if remaining.starts_with("u64") {
+            *pos += 3;
+            Type::U64
+        } else if remaining.starts_with("bool") {
+            *pos += 4;
+            Type::Bool
+        } else if remaining.starts_with("void") {
+            *pos += 4;
+            Type::Void
+        } else {
+            return Err(ParseError {
+                message: format!("Invalid type after '?' at position {}", *pos),
+                location: Some(*pos),
+            });
+        };
+        return Ok(Type::Option(Box::new(inner_type)));
+    }
 
     // Check for basic types
     if *pos < chars.len() {

@@ -18,6 +18,8 @@ pub enum Type {
     U64,
     Bool,
     Void,
+    /// Optional type (e.g., ?i32)
+    Option(Box<Type>),
     /// Custom type (struct or enum)
     Custom {
         name: String,
@@ -69,6 +71,7 @@ impl fmt::Display for Type {
             Type::U64 => write!(f, "u64"),
             Type::Bool => write!(f, "bool"),
             Type::Void => write!(f, "void"),
+            Type::Option(inner) => write!(f, "?{}", inner),
             Type::Custom {
                 name, generic_args, ..
             } => {
@@ -210,6 +213,8 @@ pub enum Expr {
     Bool(bool, Span),
     /// String literal
     String(String, Span),
+    /// Null literal
+    Null(Span),
     /// Variable identifier
     Ident(String, Span),
     /// Binary operation
