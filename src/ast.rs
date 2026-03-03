@@ -32,6 +32,13 @@ pub enum Type {
     },
     /// Generic type parameter (for generics)
     GenericParam(String),
+    /// Array type (e.g., [3]u8)
+    Array {
+        /// Size of the array (if known at compile time)
+        size: Option<usize>,
+        /// Element type
+        element_type: Box<Type>,
+    },
 }
 
 impl Type {
@@ -89,6 +96,10 @@ impl fmt::Display for Type {
                 }
             }
             Type::GenericParam(name) => write!(f, "{}", name),
+            Type::Array { size, element_type } => match size {
+                Some(s) => write!(f, "[{}]{}", s, element_type),
+                None => write!(f, "[]{}", element_type),
+            },
         }
     }
 }

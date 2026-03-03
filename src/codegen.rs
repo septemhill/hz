@@ -1043,8 +1043,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 self.context.struct_type(&element_types, false).into()
             }
-            Type::Void | Type::Custom { .. } | Type::GenericParam(_) => {
-                // For void, custom types, and generics, we'll just use i64 to avoid the conversion issue
+            Type::Void | Type::Custom { .. } | Type::GenericParam(_) | Type::Array { .. } => {
+                // For void, custom types, generics, and arrays, we'll just use i64 to avoid the conversion issue
                 self.context.i64_type().into()
             }
         }

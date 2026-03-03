@@ -430,7 +430,10 @@ fn main() i64 {
     /// Get test cases: (filename, expected_success)
     fn get_test_cases() -> Vec<(&'static str, bool)> {
         vec![
-            ("examples/test_import_group.lang", true),
+            ("examples/test_import_stmt.lang", true),
+            // ("examples/test_for_stmt.lang", true),
+            ("examples/test_if_else_stmt.lang", true),
+            ("examples/test_array.lang", true),
             // // These require struct/interface parsing fix - parser fails
             // ("examples/test_features.lang", false),
             // // These require pub keyword - parser doesn't handle it properly
@@ -447,7 +450,6 @@ fn main() i64 {
             // ("examples/test_tuple.lang", true),
             // ("examples/test_tuple_destructure.lang", true),
             // ("examples/test_tuple_ret.lang", true),
-            ("examples/test_if_else_stmt.lang", true),
             // ("examples/test_loop_syntax.lang", true),
             // // Error cases - these should fail parsing
             // // Note: import error is only detected at codegen stage, not parsing - expects error was wrong
@@ -663,13 +665,34 @@ impl Parser {
                 continue;
             }
 
-            // Try to parse function definition
-            self.set_state(ParserState::ParsingFunction);
-            match self.parse_function() {
-                Ok(f) => functions.push(f),
-                Err(e) => return Err(e),
+            // Try to parse function definition (including pub fn)
+            // Check if we have 'fn' or 'pub fn'
+            let is_pub = self.peek(0).map(|t| t.token == Token::Pub).unwrap_or(false);
+            let is_fn = self
+                .peek(if is_pub { 1 } else { 0 })
+                .map(|t| t.token == Token::Fn)
+                .unwrap_or(false);
+
+            if is_fn {
+                if is_pub {
+                    self.advance(); // consume pub, leave fn for parse_function
+                }
+                // Don't consume fn here - let parse_function handle it
+                self.set_state(ParserState::ParsingFunction);
+                match self.parse_function() {
+                    Ok(f) => functions.push(f),
+                    Err(e) => return Err(e),
+                }
+                self.set_state(ParserState::Initial);
+            } else {
+                // Try to parse function definition
+                self.set_state(ParserState::ParsingFunction);
+                match self.parse_function() {
+                    Ok(f) => functions.push(f),
+                    Err(e) => return Err(e),
+                }
+                self.set_state(ParserState::Initial);
             }
-            self.set_state(ParserState::Initial);
         }
 
         self.set_state(ParserState::Completed);
@@ -1085,12 +1108,14 @@ impl Parser {
             });
         };
 
-        // Expect ':'
+        // Expect ':' (optional for type inference)
         self.skip_whitespace();
-        self.match_token(Token::Colon);
-
-        // Parse type
-        let ty = Some(self.parse_type()?);
+        let ty = if self.match_token(Token::Colon) {
+            // Parse type
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
 
         // Expect '='
         self.skip_whitespace();
@@ -1382,18 +1407,25 @@ impl Parser {
 
         let mut var_name = None;
 
-        // Check if there's a loop variable: for i in iterable
+        // Handle optional opening parenthesis
+        self.match_token(Token::LParen);
+
+        // Check if there's a loop variable: for i range iterable
         if let Token::Ident(name) = self.current().cloned().unwrap_or(Token::Eof) {
             if let Some(next) = self.peek(1) {
                 if next.token == Token::Range {
                     var_name = Some(name);
                     self.advance(); // consume name
-                    self.advance(); // consume 'in'
+                    self.advance(); // consume 'range'
                 }
             }
         }
 
         let iterable = self.parse_expression()?;
+
+        self.skip_whitespace();
+        // Check for closing parenthesis
+        self.match_token(Token::RParen);
 
         self.skip_whitespace();
         // Check for capture: |e|
@@ -1829,7 +1861,67 @@ impl Parser {
                     return Ok(Expr::Array(vec![], Span { start: 0, end: 0 }));
                 }
 
-                // Parse array
+                // Check for typed array: [size]Type{elements} or [size]Type
+                // Look ahead to see if we have a number followed by ] then a type
+                let token0 = self.peek(0).map(|t| t.token.clone());
+                let token1 = self.peek(1).map(|t| t.token.clone());
+                let token2 = self.peek(2).map(|t| t.token.clone());
+
+                if let Some(Token::Int(_)) = token0 {
+                    // We have a number - check if next is RBracket (closing the size)
+                    if let Some(Token::RBracket) = token1 {
+                        // Consume the size number and RBracket
+                        self.advance(); // consume the number
+                        self.advance(); // consume the RBracket
+
+                        // Now check if next is a type (identifier)
+                        let token_after_bracket = self.peek(0).map(|t| t.token.clone());
+                        if let Some(Token::Ident(_)) = token_after_bracket {
+                            // This is [size]Type - consume the type
+                            self.advance(); // consume the type name
+
+                            self.skip_whitespace();
+
+                            // Check for array literal body: {elements}
+                            if self.match_token(Token::LBrace) {
+                                let mut elements = Vec::new();
+                                loop {
+                                    self.skip_whitespace();
+                                    if self.match_token(Token::RBrace) {
+                                        break;
+                                    }
+                                    elements.push(self.parse_expression()?);
+                                    self.skip_whitespace();
+
+                                    // After element, expect either comma or closing brace
+                                    if self.match_token(Token::Comma) {
+                                        // Continue to next element
+                                        continue;
+                                    } else if self.match_token(Token::RBrace) {
+                                        // End of array
+                                        break;
+                                    } else {
+                                        // Error - neither comma nor closing brace
+                                        return Err(ParseError {
+                                            message: "Expected ',' or '}' in array literal"
+                                                .to_string(),
+                                            location: self.current_token().map(|t| t.span.start),
+                                        });
+                                    }
+                                }
+                                return Ok(Expr::Array(elements, Span { start: 0, end: 0 }));
+                            }
+
+                            // Just typed array without elements
+                            return Ok(Expr::Array(vec![], Span { start: 0, end: 0 }));
+                        }
+
+                        // If no type follows, we have [number] - treat as single element array
+                        // Put the tokens back by returning to parse it as a regular array
+                    }
+                }
+
+                // Parse array (bracket syntax)
                 let mut elements = Vec::new();
                 loop {
                     elements.push(self.parse_expression()?);
@@ -1839,6 +1931,34 @@ impl Parser {
                         break;
                     }
 
+                    if !self.match_token(Token::Comma) {
+                        break;
+                    }
+                }
+
+                Ok(Expr::Array(elements, Span { start: 0, end: 0 }))
+            }
+            // Handle array literals with curly braces: {1, 2, 3}
+            Token::LBrace => {
+                self.advance();
+                self.skip_whitespace();
+
+                // Empty array
+                if self.match_token(Token::RBrace) {
+                    return Ok(Expr::Array(vec![], Span { start: 0, end: 0 }));
+                }
+
+                // Parse array elements
+                let mut elements = Vec::new();
+                loop {
+                    elements.push(self.parse_expression()?);
+                    self.skip_whitespace();
+
+                    if self.match_token(Token::RBrace) {
+                        break;
+                    }
+
+                    // Must have comma to continue
                     if !self.match_token(Token::Comma) {
                         break;
                     }
@@ -1867,6 +1987,53 @@ impl Parser {
         if self.match_token(Token::Question) {
             let inner = self.parse_type()?;
             return Ok(Type::Option(Box::new(inner)));
+        }
+
+        // Check for array type: [size]Type or []Type
+        if self.match_token(Token::LBracket) {
+            self.skip_whitespace();
+
+            // Parse optional size
+            let size = if self.match_token(Token::RBracket) {
+                // Dynamic array / slice: []Type
+                None
+            } else {
+                // Try to parse a number for fixed-size array
+                if let Token::Int(n) = self.current().cloned().ok_or_else(|| ParseError {
+                    message: "Expected array size or ']' in array type".to_string(),
+                    location: None,
+                })? {
+                    let size = n as usize;
+                    self.advance();
+                    self.skip_whitespace();
+
+                    // Expect closing bracket
+                    if !self.match_token(Token::RBracket) {
+                        return Err(ParseError {
+                            message: "Expected ']' in array type".to_string(),
+                            location: self.current_token().map(|t| t.span.start),
+                        });
+                    }
+
+                    // Parse element type
+                    let element_type = Box::new(self.parse_type()?);
+
+                    return Ok(Type::Array {
+                        size: Some(size),
+                        element_type,
+                    });
+                } else {
+                    return Err(ParseError {
+                        message: "Expected array size or ']' in array type".to_string(),
+                        location: self.current_token().map(|t| t.span.start),
+                    });
+                }
+            };
+
+            // Parse element type for dynamic array
+            let element_type = Box::new(self.parse_type()?);
+
+            return Ok(Type::Array { size, element_type });
         }
 
         // Check for tuple type
@@ -2009,17 +2176,19 @@ impl Parser {
                 break;
             }
 
+            // Skip optional comma (for trailing commas in struct)
+            if self.match_token(Token::Comma) {
+                self.skip_whitespace();
+                if self.match_token(Token::RBrace) {
+                    break;
+                }
+            }
+
             // Check for method (fn keyword)
             if self.match_token(Token::Fn) || self.match_token(Token::Pub) {
-                // This is a method, go back
-                // Note: Previous token tracking changed - using current token instead
-                if let Some(prev) = self.peek(0) {
-                    if let Token::Pub = prev.token {
-                        // Already consumed pub, now consume fn
-                        self.match_token(Token::Fn);
-                    }
-                }
-
+                // This is a method - if we matched pub, we're already past it
+                // If we matched fn, current is fn. If we matched pub, current is fn now.
+                // Just call parse_function which will handle it
                 methods.push(self.parse_function()?);
                 self.match_token(Token::Comma);
                 continue;

@@ -1,0 +1,24 @@
+import "io"
+
+struct Base {
+    name: String,
+    age: i32,
+    married: bool,
+
+    pub fn new(name: String, age: i32, married: bool) Self {
+        return Self{ name, age, married };
+    }
+};
+
+fn main() {
+    const b: Base = Base.new("Septem", 123, true);
+
+    io.println(b.name);
+    io.println(b.age);
+    io.println(b.married);
+
+    const c: Base = Base{ name: "Septem", age: 123, married: true };
+    io.println(c.name);
+    io.println(c.age);
+    io.println(c.married);
+}

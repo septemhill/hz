@@ -5,14 +5,12 @@ fn main() {
         io.println(i);
     }
 
-    for (i range [3]u8{'a', 'b', 'c'}) {
-        io.println(i);
-    }
-
     const c = [3]u8{'a', 'b', 'c'};
     for (i range c) {
         io.println(i);
     }
+
+    var f = Iter { i: 0 };
 
     for (iter.next()) |e| {
         io.println(e);
@@ -30,4 +28,5 @@ struct Iter {
         }
         return null;
     }
+    
 }
