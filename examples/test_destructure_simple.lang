@@ -1,4 +1,0 @@
-fn main() i64 {
-    const (a, b, c) = (1, 2, 3);
-    return a;
-}

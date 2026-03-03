@@ -291,14 +291,17 @@ pub enum Expr {
         span: Span,
     },
     /// Block expression (a sequence of statements that evaluates to a value)
-    Block {
-        stmts: Vec<Stmt>,
-        span: Span,
-    },
+    Block { stmts: Vec<Stmt>, span: Span },
     /// Member access (e.g., Status.Todo or object.field)
     MemberAccess {
         object: Box<Expr>,
         member: String,
+        span: Span,
+    },
+    /// Struct literal (e.g., Base{ name, age, married })
+    Struct {
+        name: String,
+        fields: Vec<(String, Expr)>,
         span: Span,
     },
 }

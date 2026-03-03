@@ -450,12 +450,13 @@ fn main() i64 {
     /// Get test cases: (filename, expected_success)
     fn get_test_cases() -> Vec<(&'static str, bool)> {
         vec![
+            ("examples/test_array_decl.lang", true),
             ("examples/test_import_stmt.lang", true),
-            // ("examples/test_for_stmt.lang", true),
             ("examples/test_if_else_stmt.lang", true),
-            ("examples/test_array.lang", true),
             ("examples/test_optional.lang", true),
             ("examples/test_switch_stmt.lang", true),
+            ("examples/test_struct.lang", true),
+            // ("examples/test_for_stmt.lang", true),
             // // These require struct/interface parsing fix - parser fails
             // ("examples/test_features.lang", false),
             // // These require pub keyword - parser doesn't handle it properly
@@ -465,8 +466,6 @@ fn main() i64 {
             // ("examples/test_add.lang", true),
             // ("examples/test_add_literal.lang", true),
             // ("examples/test_add_simple.lang", true),
-            // ("examples/test_destructure_simple.lang", true),
-            // ("examples/test_destructure_underscore.lang", true),
             // ("examples/test_return_simple.lang", true),
             // ("examples/test_return_simple2.lang", true),
             // ("examples/test_tuple.lang", true),
@@ -1659,7 +1658,10 @@ impl Parser {
         Ok(Stmt::Switch {
             condition,
             cases,
-            span: Span { start: start_location, end: end_location },
+            span: Span {
+                start: start_location,
+                end: end_location,
+            },
         })
     }
 
@@ -1936,6 +1938,98 @@ impl Parser {
                     name,
                     namespace,
                     args,
+                    span: Span { start: 0, end: 0 },
+                };
+                continue;
+            }
+
+            // Struct literal: TypeName{ field1: value1, field2: value2 }
+            // or shorthand: TypeName{ field1, field2 }
+            if self.match_token(Token::LBrace) {
+                // Check if we have a valid struct name (expr should be an Ident)
+                let struct_name = match &expr {
+                    Expr::Ident(n, _) => n.clone(),
+                    _ => {
+                        return Err(ParseError {
+                            message: "Expected struct type name".to_string(),
+                            location: self.current_token().map(|t| t.span.start),
+                        });
+                    }
+                };
+
+                self.skip_whitespace();
+
+                // Empty struct
+                if self.match_token(Token::RBrace) {
+                    expr = Expr::Struct {
+                        name: struct_name,
+                        fields: vec![],
+                        span: Span { start: 0, end: 0 },
+                    };
+                    continue;
+                }
+
+                // Parse struct fields
+                let mut fields = Vec::new();
+                loop {
+                    self.skip_whitespace();
+
+                    // Check for field name
+                    let current_token = self.current().cloned();
+                    let field_name = match current_token {
+                        Some(Token::Ident(n)) => n.clone(),
+                        _ => {
+                            return Err(ParseError {
+                                message: "Expected field name in struct literal".to_string(),
+                                location: self.current_token().map(|t| t.span.start),
+                            });
+                        }
+                    };
+                    self.advance();
+
+                    self.skip_whitespace();
+
+                    // Check if this is a shorthand field or full field
+                    let current_after_name = self.current().cloned();
+                    match current_after_name {
+                        Some(Token::Colon) => {
+                            // Full field: name: value
+                            self.advance(); // consume colon
+                            let value = self.parse_expression()?;
+                            fields.push((field_name, value));
+                        }
+                        _ => {
+                            // Shorthand field: name (means name: name)
+                            let ident_expr =
+                                Expr::Ident(field_name.clone(), Span { start: 0, end: 0 });
+                            fields.push((field_name, ident_expr));
+                        }
+                    }
+
+                    self.skip_whitespace();
+
+                    if self.match_token(Token::RBrace) {
+                        break;
+                    }
+
+                    if !self.match_token(Token::Comma) {
+                        return Err(ParseError {
+                            message: "Expected ',' or '}' in struct literal".to_string(),
+                            location: self.current_token().map(|t| t.span.start),
+                        });
+                    }
+
+                    self.skip_whitespace();
+
+                    // Check if we're done (handle trailing comma case)
+                    if let Some(Token::RBrace) = self.current().cloned() {
+                        break;
+                    }
+                }
+
+                expr = Expr::Struct {
+                    name: struct_name,
+                    fields,
                     span: Span { start: 0, end: 0 },
                 };
                 continue;
@@ -2385,9 +2479,19 @@ impl Parser {
                 if self.match_token(Token::RBrace) {
                     break;
                 }
+                // After matching comma, check if next is a method
+                if self.match_token(Token::Fn) || self.match_token(Token::Pub) {
+                    // This is a method - if we matched pub, we're already past it
+                    // If we matched fn, current is fn. If we matched pub, current is fn now.
+                    // Just call parse_function which will handle it
+                    methods.push(self.parse_function()?);
+                    self.match_token(Token::Comma);
+                    continue;
+                }
+                // Otherwise, continue to parse the next field
             }
 
-            // Check for method (fn keyword)
+            // Check for method (fn keyword) - only if we didn't just handle a trailing comma
             if self.match_token(Token::Fn) || self.match_token(Token::Pub) {
                 // This is a method - if we matched pub, we're already past it
                 // If we matched fn, current is fn. If we matched pub, current is fn now.

@@ -1,4 +1,0 @@
-fn main() i64 {
-    var x: ?i32 = 42;
-    return 0;
-}

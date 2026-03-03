@@ -681,6 +681,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(last_val.unwrap_or_else(|| self.context.i64_type().const_int(0, false).into()))
             }
             Expr::MemberAccess { .. } => todo!("Codegen for MemberAccess not implemented"),
+            Expr::Struct { .. } => todo!("Codegen for Struct not implemented"),
         }
     }
 
@@ -1100,7 +1101,10 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // PHI node
         let phi = self.builder.build_phi(then_val.get_type(), "ifphi")?;
-        phi.add_incoming(&[(&then_val, then_actual_block), (&else_val, else_actual_block)]);
+        phi.add_incoming(&[
+            (&then_val, then_actual_block),
+            (&else_val, else_actual_block),
+        ]);
 
         Ok(phi.as_basic_value())
     }

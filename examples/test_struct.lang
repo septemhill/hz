@@ -1,0 +1,49 @@
+import "io"
+
+struct Base {
+    name: String,
+    age: i32,
+    married: bool,
+    inner: Inner,
+
+    // Considering support inner struct
+    //  struct Inner {
+    //      checked: bool,
+    //  }
+
+
+    pub fn new(name: String, age: i32, married: bool) Base {
+        return Base{ name, age, married };
+    }
+}
+
+fn main() {
+    {
+        const a: Base = Base.new("Septem", 123, true);
+
+        io.println(a.name);
+        io.println(a.age);
+        io.println(a.married);
+    }
+
+    {
+        const b: Base = Base{ name: "Septem", age: 123, married: true };
+        io.println(b.name);
+        io.println(b.age);
+        io.println(b.married);
+    }
+
+    {
+        const c = Base{ name: "Septem", age: 123, married: true };
+        io.println(c.name);
+        io.println(c.age);
+        io.println(c.married);
+    }
+
+    {
+        const d = Base.new("Septem", 123, true);
+        io.println(d.name);
+        io.println(d.age);
+        io.println(d.married);
+    }
+}
