@@ -1,0 +1,5 @@
+fn main() i64 {
+    const a = 1;
+    const c = 3;
+    return a + c;
+}

@@ -1,8 +1,16 @@
 import (
   "io"
+  m "math"
 )
 
-fn main() -> i64 {
+import "http"
+
+fn main() i64 {
     io.println("Hello from grouped import!");
+
+    http.head();
+
+    m.max(123,343);
+    
     return 0;
 }

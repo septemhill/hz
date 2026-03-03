@@ -6,7 +6,7 @@ pub struct Simple {
         return;
     }
 
-    pub fn get_age() -> i32 {
+    pub fn get_age() i32 {
         return 0;
     }
 

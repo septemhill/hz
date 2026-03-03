@@ -8,6 +8,7 @@ use std::path::Path;
 
 mod ast;
 mod codegen;
+mod lexer;
 mod parser;
 mod stdlib;
 
@@ -18,7 +19,8 @@ fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
     let mut stdlib = stdlib::StdLib::new();
     // Set std path to ./std relative to current directory
     stdlib.set_std_path("./std");
-    let _ = stdlib.preload_common();
+    // Don't preload packages - require explicit imports
+    // let _ = stdlib.preload_common();
     println!(
         "    Loaded std packages: {:?}",
         stdlib.packages().keys().collect::<Vec<_>>()
@@ -87,7 +89,8 @@ fn run_jit(source: &str) -> Result<(), Box<dyn Error>> {
     let mut stdlib = stdlib::StdLib::new();
     // Set std path to ./std relative to current directory
     stdlib.set_std_path("./std");
-    let _ = stdlib.preload_common();
+    // Don't preload packages - require explicit imports
+    // let _ = stdlib.preload_common();
     println!(
         "Loaded std packages: {:?}",
         stdlib.packages().keys().collect::<Vec<_>>()

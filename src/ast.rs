@@ -270,6 +270,9 @@ pub enum Stmt {
     Let {
         mutability: Mutability,
         name: String,
+        /// For tuple destructuring: names[i] = Some(name) to bind, None to ignore
+        /// e.g., const (a, _, c) = tuple; => names = [Some("a"), None, Some("c")]
+        names: Option<Vec<Option<String>>>,
         ty: Option<Type>,
         value: Option<Expr>,
         visibility: Visibility,

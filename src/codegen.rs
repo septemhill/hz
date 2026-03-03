@@ -294,6 +294,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             Stmt::Let {
                 mutability,
                 name,
+                names,
                 ty,
                 value,
                 visibility: _,
@@ -305,6 +306,77 @@ impl<'ctx> CodeGenerator<'ctx> {
                 } else {
                     None
                 };
+
+                // Handle tuple destructuring: const (a, b, c) = tuple_expr
+                if let Some(names) = &names {
+                    // Tuple destructuring
+                    let tuple_val = llvm_val.ok_or("Tuple destructuring requires a value")?;
+
+                    // Get the tuple as a struct value
+                    let struct_val = match tuple_val {
+                        BasicValueEnum::StructValue(sv) => sv,
+                        _ => return Err("Tuple destructuring requires a tuple value".into()),
+                    };
+
+                    let num_names = names.len();
+
+                    // Get element types by extracting first element and getting its type
+                    // We need to know how many elements there are
+                    let mut element_types: Vec<BasicTypeEnum<'ctx>> = Vec::new();
+
+                    // Try to get element types by iterating - we assume tuple has at most num_names elements
+                    // We'll try to extract up to num_names elements to validate
+                    for i in 0..num_names {
+                        // We can't directly get element type from struct type in inkwell
+                        // Instead, we extract each element and use its type
+                        if let Ok(elem) = self.builder.build_extract_value(
+                            struct_val,
+                            i as u32,
+                            &format!("tuple_elem{}", i),
+                        ) {
+                            element_types.push(elem.get_type());
+                        } else {
+                            break;
+                        }
+                    }
+
+                    let num_elements = element_types.len();
+
+                    if num_names != num_elements {
+                        return Err(format!(
+                            "Tuple destructuring: expected {} elements, got {}",
+                            num_names, num_elements
+                        )
+                        .into());
+                    }
+
+                    // Process each name in the destructuring
+                    for (i, name_opt) in names.iter().enumerate() {
+                        if let Some(var_name) = name_opt {
+                            let elem_type = element_types[i];
+                            let elem = self.builder.build_extract_value(
+                                struct_val,
+                                i as u32,
+                                &format!("tuple_elem{}", i),
+                            )?;
+
+                            // Create variable
+                            let alloca = self.builder.build_alloca(elem_type, var_name)?;
+                            self.builder.build_store(alloca, elem)?;
+
+                            self.variables.insert(var_name.clone(), alloca);
+                            self.variable_types
+                                .insert(var_name.clone(), self.llvm_type_to_lang(&elem_type));
+
+                            if *mutability == Mutability::Const {
+                                self.const_variables.insert(var_name.clone(), alloca);
+                            }
+                        }
+                        // If name_opt is None, we're ignoring this element - no code to generate
+                    }
+
+                    return Ok(());
+                }
 
                 // Determine the type: use explicit type or infer from generated value
                 // First determine the Lang type
@@ -756,7 +828,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map(|s| s.as_str())
                 .unwrap_or(ns);
 
+            // Only allow io.println if io was explicitly imported
             if actual_package == "io" && name == "println" {
+                // Check if io was imported
+                if !self.imported_packages.contains_key(ns) {
+                    return Err(format!(
+                        "Package 'io' not imported. Use 'import \"io\"' to import it."
+                    )
+                    .into());
+                }
                 return self.generate_io_println(args);
             }
 

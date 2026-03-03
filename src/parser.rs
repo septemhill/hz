@@ -1,1502 +1,1596 @@
 //! # Parser for Lang Programming Language
 //!
 //! This module parses source code and generates AST nodes.
+//! It uses a state machine to track parsing progress for debugging purposes.
 
 use crate::ast::*;
+use crate::lexer::{PeekableLexerIterator, Token, TokenWithSpan, iter as lexer_iter};
 
-/// Parse a source string into an AST Program
-pub fn parse(source: &str) -> Result<Program, ParseError> {
-    let mut chars: Vec<char> = source.chars().collect();
-    let mut pos = 0;
-
-    let mut functions = Vec::new();
-    let mut structs = Vec::new();
-    let mut enums = Vec::new();
-    let mut imports = Vec::new();
-
-    while pos < chars.len() {
-        skip_whitespace(&chars, &mut pos);
-        if pos >= chars.len() {
-            break;
-        }
-
-        // Try to parse import statement at top level
-        if let Ok(import_items) = try_parse_import(&chars, &mut pos) {
-            imports.extend(import_items);
-            skip_whitespace(&chars, &mut pos);
-            continue;
-        }
-
-        // Try to parse struct definition
-        if try_parse_struct(&chars, &mut pos)
-            .map(|s| structs.push(s))
-            .is_ok()
-        {
-            skip_whitespace(&chars, &mut pos);
-            continue;
-        }
-
-        // Try to parse enum definition
-        if try_parse_enum(&chars, &mut pos)
-            .map(|e| enums.push(e))
-            .is_ok()
-        {
-            skip_whitespace(&chars, &mut pos);
-            continue;
-        }
-
-        // Try to parse function definition
-        if try_parse_fn(&chars, &mut pos)
-            .map(|f| functions.push(f))
-            .is_err()
-        {
-            return Err(ParseError {
-                message: format!("Unexpected token at position {}", pos),
-                location: Some(pos),
-            });
-        }
-
-        skip_whitespace(&chars, &mut pos);
-    }
-
-    Ok(Program {
-        functions,
-        structs,
-        enums,
-        imports,
-    })
+/// Parser state for tracking current parsing context
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParserState {
+    /// Initial state - waiting for top-level declaration
+    Initial,
+    /// Parsing import statement
+    ParsingImport,
+    /// Parsing struct definition
+    ParsingStruct,
+    /// Parsing enum definition
+    ParsingEnum,
+    /// Parsing function definition
+    ParsingFunction,
+    /// Parsing function parameters
+    ParsingFunctionParams,
+    /// Parsing function return type
+    ParsingFunctionReturnType,
+    /// Parsing function body
+    ParsingFunctionBody,
+    /// Parsing statement
+    ParsingStatement,
+    /// Parsing expression
+    ParsingExpression,
+    /// Parsing type
+    ParsingType,
+    /// Parsing complete
+    Completed,
+    /// Error state
+    Error(String),
 }
 
-/// Try to parse a function definition
-fn try_parse_fn(chars: &[char], pos: &mut usize) -> Result<FnDef, ParseError> {
-    // Check for "pub" keyword (visibility modifier)
-    let visibility = if try_consume_keyword(chars, pos, "pub") {
-        Visibility::Public
-    } else {
-        Visibility::Private
-    };
-
-    // Expect "fn"
-    if !try_consume_keyword(chars, pos, "fn") {
-        return Err(ParseError {
-            message: "Expected 'fn' keyword".to_string(),
-            location: Some(*pos),
-        });
-    }
-
-    skip_whitespace(chars, pos);
-
-    // Parse function name
-    let name = parse_ident(chars, pos)?;
-
-    // Expect "("
-    skip_whitespace(chars, pos);
-    if !try_consume(chars, pos, '(') {
-        return Err(ParseError {
-            message: "Expected '('".to_string(),
-            location: Some(*pos),
-        });
-    }
-
-    // Parse parameters
-    let mut params = Vec::new();
-    skip_whitespace(chars, pos);
-    while !try_consume(chars, pos, ')') {
-        if *pos >= chars.len() {
-            break;
-        }
-
-        // Parse parameter name
-        let param_name = parse_ident(chars, pos)?;
-
-        // Expect ':'
-        skip_whitespace(chars, pos);
-        if !try_consume(chars, pos, ':') {
-            return Err(ParseError {
-                message: "Expected ':' in parameter".to_string(),
-                location: Some(*pos),
-            });
-        }
-
-        // Parse parameter type
-        let param_ty = parse_type(chars, pos)?;
-
-        params.push(FnParam {
-            name: param_name,
-            ty: param_ty,
-        });
-
-        // Try to consume comma for next parameter
-        skip_whitespace(chars, pos);
-        if !try_consume(chars, pos, ',') {
-            // If no comma, try to find closing paren
-            skip_whitespace(chars, pos);
-            if try_consume(chars, pos, ')') {
-                break;
-            }
+impl ParserState {
+    /// Get a human-readable name for the state
+    pub fn name(&self) -> &'static str {
+        match self {
+            ParserState::Initial => "Initial",
+            ParserState::ParsingImport => "ParsingImport",
+            ParserState::ParsingStruct => "ParsingStruct",
+            ParserState::ParsingEnum => "ParsingEnum",
+            ParserState::ParsingFunction => "ParsingFunction",
+            ParserState::ParsingFunctionParams => "ParsingFunctionParams",
+            ParserState::ParsingFunctionReturnType => "ParsingFunctionReturnType",
+            ParserState::ParsingFunctionBody => "ParsingFunctionBody",
+            ParserState::ParsingStatement => "ParsingStatement",
+            ParserState::ParsingExpression => "ParsingExpression",
+            ParserState::ParsingType => "ParsingType",
+            ParserState::Completed => "Completed",
+            ParserState::Error(_) => "Error",
         }
     }
-
-    // Parse optional return type (directly after closing paren, no -> needed)
-    let mut return_ty = None;
-    skip_whitespace(chars, pos);
-
-    // Try to parse a type for return type (without ->)
-    if *pos < chars.len() {
-        let remaining: String = chars[*pos..].iter().take(10).collect();
-        if remaining.starts_with("i8") {
-            *pos += 2;
-            return_ty = Some(Type::I8);
-        } else if remaining.starts_with("i16") {
-            *pos += 3;
-            return_ty = Some(Type::I16);
-        } else if remaining.starts_with("i32") {
-            *pos += 3;
-            return_ty = Some(Type::I32);
-        } else if remaining.starts_with("i64") {
-            *pos += 3;
-            return_ty = Some(Type::I64);
-        } else if remaining.starts_with("u8") {
-            *pos += 2;
-            return_ty = Some(Type::U8);
-        } else if remaining.starts_with("u16") {
-            *pos += 3;
-            return_ty = Some(Type::U16);
-        } else if remaining.starts_with("u32") {
-            *pos += 3;
-            return_ty = Some(Type::U32);
-        } else if remaining.starts_with("u64") {
-            *pos += 3;
-            return_ty = Some(Type::U64);
-        } else if remaining.starts_with("bool") {
-            *pos += 4;
-            return_ty = Some(Type::Bool);
-        } else if remaining.starts_with("void") {
-            *pos += 4;
-            return_ty = Some(Type::Void);
-        }
-    }
-
-    // Expect "{"
-    skip_whitespace(chars, pos);
-    if !try_consume(chars, pos, '{') {
-        return Err(ParseError {
-            message: "Expected '{{'".to_string(),
-            location: Some(*pos),
-        });
-    }
-
-    // Parse function body (simplified)
-    let mut body = Vec::new();
-    let start = *pos;
-
-    while *pos < chars.len() {
-        skip_whitespace(chars, pos);
-        if *pos >= chars.len() {
-            break;
-        }
-
-        if try_consume(chars, pos, '}') {
-            break;
-        }
-
-        // Try to parse a statement
-        if let Ok(stmt) = try_parse_stmt(chars, pos) {
-            body.push(stmt);
-        } else {
-            (*pos) += 1;
-        }
-    }
-
-    let span = span(start, *pos);
-
-    Ok(FnDef {
-        name,
-        visibility,
-        params,
-        return_ty,
-        body,
-        span,
-    })
 }
 
-/// Try to parse an import statement at the top level
-/// Returns Vec<(Option<alias>, package_name)>
-fn try_parse_import(
-    chars: &[char],
-    pos: &mut usize,
-) -> Result<Vec<(Option<String>, String)>, ParseError> {
-    let start = *pos;
-    skip_whitespace(chars, pos);
+/// Parser with state machine tracking
+pub struct Parser {
+    tokens: PeekableLexerIterator,
+    state: ParserState,
+    state_history: Vec<ParserState>,
+}
 
-    // Try to parse "import"
-    if !try_consume_keyword(chars, pos, "import") {
-        return Err(ParseError {
-            message: "Expected 'import' keyword".to_string(),
-            location: Some(*pos),
-        });
+impl Parser {
+    /// Create a new parser from tokens (iterator)
+    pub fn new(tokens: PeekableLexerIterator) -> Self {
+        Parser {
+            tokens,
+            state: ParserState::Initial,
+            state_history: Vec::new(),
+        }
     }
 
-    skip_whitespace(chars, pos);
+    /// Create a new parser from source code directly
+    pub fn from_source(source: &str) -> Result<Self, ParseError> {
+        let tokens = lexer_iter(source);
+        Ok(Parser::new(tokens))
+    }
 
-    let mut packages = Vec::new();
+    /// Set the current state and record in history for debugging
+    fn set_state(&mut self, new_state: ParserState) {
+        eprintln!(
+            "DEBUG: Parser state transition: {:?} -> {:?}",
+            self.state.name(),
+            new_state.name()
+        );
+        self.state_history.push(self.state.clone());
+        self.state = new_state;
+    }
 
-    // Check for grouped imports with parentheses
-    if try_consume(chars, pos, '(') {
-        skip_whitespace(chars, pos);
+    /// Get current state
+    pub fn current_state(&self) -> &ParserState {
+        &self.state
+    }
 
-        while !try_consume(chars, pos, ')') {
-            if *pos >= chars.len() {
+    /// Get state history for debugging
+    pub fn state_history(&self) -> &[ParserState] {
+        &self.state_history
+    }
+
+    /// Get current token without advancing (mutable version)
+    fn current_token(&mut self) -> Option<&TokenWithSpan> {
+        self.tokens.peek()
+    }
+
+    /// Get current token value (for internal use with mutable reference)
+    fn current(&mut self) -> Option<&Token> {
+        self.tokens.peek().map(|t| &t.token)
+    }
+
+    /// Advance to next token
+    fn advance(&mut self) {
+        self.tokens.next();
+    }
+
+    /// Try to consume a specific token
+    fn expect(&mut self, expected: Token) -> Result<TokenWithSpan, ParseError> {
+        let token = match self.tokens.next() {
+            Some(Ok(token)) => token,
+            Some(Err(e)) => {
                 return Err(ParseError {
-                    message: "Expected ')' in import statement".to_string(),
-                    location: Some(*pos),
+                    message: e.message,
+                    location: Some(e.location),
                 });
             }
-
-            // Parse string literal for package name, possibly with alias
-            // Syntax: "package" or alias "package"
-            if chars[*pos] == '"' {
-                (*pos) += 1; // consume opening quote
-                let mut package_name = String::new();
-                while *pos < chars.len() && chars[*pos] != '"' {
-                    package_name.push(chars[*pos]);
-                    (*pos) += 1;
-                }
-                if *pos < chars.len() && chars[*pos] == '"' {
-                    (*pos) += 1; // consume closing quote
-                }
-                packages.push((None, package_name)); // No alias in grouped imports for now
-            } else {
+            None => {
                 return Err(ParseError {
-                    message: "Expected package name in quotes".to_string(),
-                    location: Some(*pos),
+                    message: "Unexpected end of input".to_string(),
+                    location: None,
                 });
             }
-
-            skip_whitespace(chars, pos);
-            try_consume(chars, pos, ';'); // optional semicolon
-            skip_whitespace(chars, pos);
-        }
-
-        try_consume(chars, pos, ';'); // consume optional semicolon after closing paren
-    } else {
-        // Single import: "package" or alias "package"
-        skip_whitespace(chars, pos);
-
-        // Check if we have an alias (identifier followed by string)
-        let alias: Option<String> = if *pos < chars.len() {
-            let start = *pos;
-            let mut potential_alias = String::new();
-            while *pos < chars.len() {
-                let c = chars[*pos];
-                if c.is_ascii_alphanumeric() || c == '_' {
-                    potential_alias.push(c);
-                    (*pos) += 1;
-                } else {
-                    break;
-                }
-            }
-
-            // Skip whitespace before checking for quote
-            skip_whitespace(chars, pos);
-
-            // Check if next char is '"' (indicating alias)
-            if !potential_alias.is_empty() && *pos < chars.len() && chars[*pos] == '"' {
-                // This is an alias
-                Some(potential_alias)
-            } else {
-                // Not an alias, reset position
-                *pos = start;
-                None
-            }
-        } else {
-            None
         };
 
-        if chars[*pos] == '"' {
-            (*pos) += 1; // consume opening quote
-            let mut package_name = String::new();
-            while *pos < chars.len() && chars[*pos] != '"' {
-                package_name.push(chars[*pos]);
-                (*pos) += 1;
-            }
-            if *pos < chars.len() && chars[*pos] == '"' {
-                (*pos) += 1; // consume closing quote
-            }
-            packages.push((alias, package_name));
+        if std::mem::discriminant(&token.token) == std::mem::discriminant(&expected) {
+            Ok(token)
         } else {
-            return Err(ParseError {
-                message: "Expected package name in quotes".to_string(),
-                location: Some(*pos),
-            });
+            Err(ParseError {
+                message: format!("Expected {:?}, got {:?}", expected, token.token),
+                location: Some(token.span.start),
+            })
         }
-
-        try_consume(chars, pos, ';');
     }
 
-    Ok(packages)
-}
-
-/// Try to parse a statement
-fn try_parse_stmt(chars: &[char], pos: &mut usize) -> Result<Stmt, ParseError> {
-    let start = *pos;
-    skip_whitespace(chars, pos);
-
-    // Try to parse "return"
-    if try_consume_keyword(chars, pos, "return") {
-        skip_whitespace(chars, pos);
-
-        if try_consume(chars, pos, ';') {
-            return Ok(Stmt::Return {
-                value: None,
-                span: span(start, *pos),
-            });
-        }
-
-        // Parse expression
-        let expr = try_parse_expr(chars, pos)?;
-        try_consume(chars, pos, ';');
-        return Ok(Stmt::Return {
-            value: Some(expr),
-            span: span(start, *pos),
-        });
-    }
-
-    // Try to parse "import"
-    if try_consume_keyword(chars, pos, "import") {
-        skip_whitespace(chars, pos);
-
-        let mut packages = Vec::new();
-
-        // Check for grouped imports with parentheses
-        if try_consume(chars, pos, '(') {
-            skip_whitespace(chars, pos);
-
-            while !try_consume(chars, pos, ')') {
-                if *pos >= chars.len() {
-                    return Err(ParseError {
-                        message: "Expected ')' in import statement".to_string(),
-                        location: Some(*pos),
-                    });
-                }
-
-                // Parse string literal for package name (no alias support in grouped imports)
-                if chars[*pos] == '"' {
-                    (*pos) += 1; // consume opening quote
-                    let mut package_name = String::new();
-                    while *pos < chars.len() && chars[*pos] != '"' {
-                        package_name.push(chars[*pos]);
-                        (*pos) += 1;
-                    }
-                    if *pos < chars.len() && chars[*pos] == '"' {
-                        (*pos) += 1; // consume closing quote
-                    }
-                    packages.push((None, package_name)); // No alias in grouped imports
-                } else {
-                    return Err(ParseError {
-                        message: "Expected package name in quotes".to_string(),
-                        location: Some(*pos),
-                    });
-                }
-
-                skip_whitespace(chars, pos);
-                try_consume(chars, pos, ';'); // optional semicolon
-                skip_whitespace(chars, pos);
-            }
-
-            try_consume(chars, pos, ';'); // consume optional semicolon after closing paren
-        } else {
-            // Single import: "package" or alias "package"
-            skip_whitespace(chars, pos);
-
-            // Check if we have an alias (identifier followed by string)
-            let alias: Option<String> = if *pos < chars.len() {
-                let start = *pos;
-                let mut potential_alias = String::new();
-                while *pos < chars.len() {
-                    let c = chars[*pos];
-                    if c.is_ascii_alphanumeric() || c == '_' {
-                        potential_alias.push(c);
-                        (*pos) += 1;
-                    } else {
-                        break;
-                    }
-                }
-
-                // Check if next char is '"' (indicating alias)
-                if !potential_alias.is_empty() && *pos < chars.len() && chars[*pos] == '"' {
-                    // This is an alias
-                    Some(potential_alias)
-                } else {
-                    // Not an alias, reset position
-                    *pos = start;
-                    None
-                }
-            } else {
-                None
-            };
-
-            if chars[*pos] == '"' {
-                (*pos) += 1; // consume opening quote
-                let mut package_name = String::new();
-                while *pos < chars.len() && chars[*pos] != '"' {
-                    package_name.push(chars[*pos]);
-                    (*pos) += 1;
-                }
-                if *pos < chars.len() && chars[*pos] == '"' {
-                    (*pos) += 1; // consume closing quote
-                }
-                packages.push((alias, package_name));
-            } else {
-                return Err(ParseError {
-                    message: "Expected package name in quotes".to_string(),
-                    location: Some(*pos),
-                });
-            }
-
-            try_consume(chars, pos, ';');
-        }
-
-        return Ok(Stmt::Import {
-            packages,
-            span: span(start, *pos),
-        });
-    }
-
-    // Try to parse "var"
-    if try_consume_keyword(chars, pos, "var") {
-        // Check for "pub" keyword
-        let visibility = if try_consume_keyword(chars, pos, "pub") {
-            Visibility::Public
-        } else {
-            Visibility::Private
-        };
-
-        skip_whitespace(chars, pos);
-        let name = parse_ident(chars, pos)?;
-
-        // Var requires type annotation
-        skip_whitespace(chars, pos);
-        if !try_consume(chars, pos, ':') {
-            return Err(ParseError {
-                message: "Variable declaration requires type annotation".to_string(),
-                location: Some(*pos),
-            });
-        }
-        let ty = Some(parse_type(chars, pos)?);
-
-        // Var requires initializer
-        skip_whitespace(chars, pos);
-        if !try_consume(chars, pos, '=') {
-            return Err(ParseError {
-                message: "Variable declaration requires initialization".to_string(),
-                location: Some(*pos),
-            });
-        }
-        let value = Some(try_parse_expr(chars, pos)?);
-
-        try_consume(chars, pos, ';');
-
-        return Ok(Stmt::Let {
-            mutability: Mutability::Var,
-            name,
-            ty,
-            value,
-            visibility,
-            span: span(start, *pos),
-        });
-    }
-
-    // Try to parse "const"
-    if try_consume_keyword(chars, pos, "const") {
-        // Check for "pub" keyword
-        let visibility = if try_consume_keyword(chars, pos, "pub") {
-            Visibility::Public
-        } else {
-            Visibility::Private
-        };
-
-        skip_whitespace(chars, pos);
-        let name = parse_ident(chars, pos)?;
-
-        // Const: type annotation is optional (especially for tuples)
-        let ty = if try_consume(chars, pos, ':') {
-            Some(parse_type(chars, pos)?)
-        } else {
-            None
-        };
-
-        // Const requires initializer
-        skip_whitespace(chars, pos);
-        if !try_consume(chars, pos, '=') {
-            return Err(ParseError {
-                message: "Constant declaration requires initialization".to_string(),
-                location: Some(*pos),
-            });
-        }
-        let value = try_parse_expr(chars, pos)?;
-
-        try_consume(chars, pos, ';');
-
-        return Ok(Stmt::Let {
-            mutability: Mutability::Const,
-            name,
-            ty,
-            value: Some(value),
-            visibility,
-            span: span(start, *pos),
-        });
-    }
-
-    // Try to parse assignment statement (identifier followed by assignment operator)
-    if chars[*pos].is_alphabetic() || chars[*pos] == '_' {
-        let old_pos = *pos;
-        let name = parse_ident(chars, pos)?;
-        skip_whitespace(chars, pos);
-
-        // Check for assignment operators
-        let assign_op = if *pos < chars.len() {
-            if try_consume(chars, pos, '=') {
-                // Check if it's = (simple assignment) and not == (comparison)
-                if *pos < chars.len() && chars[*pos] != '=' {
-                    Some(AssignOp::Assign)
-                } else {
-                    *pos = old_pos; // Reset position, it's a comparison
-                    None
-                }
-            } else if try_consume(chars, pos, '+') && try_consume(chars, pos, '=') {
-                Some(AssignOp::AddAssign)
-            } else if try_consume(chars, pos, '-') && try_consume(chars, pos, '=') {
-                Some(AssignOp::SubAssign)
-            } else if try_consume(chars, pos, '*') && try_consume(chars, pos, '=') {
-                Some(AssignOp::MulAssign)
-            } else if try_consume(chars, pos, '/') && try_consume(chars, pos, '=') {
-                Some(AssignOp::DivAssign)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        if let Some(op) = assign_op {
-            let value = try_parse_expr(chars, pos)?;
-            try_consume(chars, pos, ';');
-            return Ok(Stmt::Assign {
-                target: name,
-                op,
-                value,
-                span: span(start, *pos),
-            });
-        }
-
-        // Not an assignment, reset position
-        *pos = old_pos;
-    }
-
-    // Try to parse "let" (deprecated, fall back to var)
-    if try_consume_keyword(chars, pos, "let") {
-        // Check for "pub" keyword
-        let visibility = if try_consume_keyword(chars, pos, "pub") {
-            Visibility::Public
-        } else {
-            Visibility::Private
-        };
-
-        skip_whitespace(chars, pos);
-        let name = parse_ident(chars, pos)?;
-
-        skip_whitespace(chars, pos);
-        try_consume(chars, pos, ';');
-
-        return Ok(Stmt::Let {
-            mutability: Mutability::Var,
-            name,
-            ty: None,
-            value: None,
-            visibility,
-            span: span(start, *pos),
-        });
-    }
-
-    // Try to parse expression statement
-    let expr = try_parse_expr(chars, pos)?;
-    try_consume(chars, pos, ';');
-
-    Ok(Stmt::Expr {
-        expr,
-        span: span(start, *pos),
-    })
-}
-
-/// Try to parse an expression
-fn try_parse_expr(chars: &[char], pos: &mut usize) -> Result<Expr, ParseError> {
-    let start = *pos;
-    skip_whitespace(chars, pos);
-
-    // Try to parse string literal
-    if *pos < chars.len() && chars[*pos] == '"' {
-        (*pos) += 1; // consume opening quote
-        let mut value = String::new();
-        while *pos < chars.len() && chars[*pos] != '"' {
-            value.push(chars[*pos]);
-            (*pos) += 1;
-        }
-        if *pos < chars.len() && chars[*pos] == '"' {
-            (*pos) += 1; // consume closing quote
-        }
-        return Ok(Expr::String(value, span(start, *pos)));
-    }
-
-    // Try to parse tuple literal (e.g., (1, 2, 3))
-    if *pos < chars.len() && chars[*pos] == '(' {
-        (*pos) += 1; // consume opening paren
-        skip_whitespace(chars, pos);
-
-        // Check for empty tuple ()
-        if *pos < chars.len() && chars[*pos] == ')' {
-            (*pos) += 1; // consume closing paren
-            return Ok(Expr::Tuple(vec![], span(start, *pos)));
-        }
-
-        // Parse tuple elements
-        let mut elements = Vec::new();
-        loop {
-            skip_whitespace(chars, pos);
-            if *pos >= chars.len() {
-                break;
-            }
-
-            // Parse the expression
-            let elem = try_parse_expr(chars, pos)?;
-            elements.push(elem);
-
-            skip_whitespace(chars, pos);
-            if *pos >= chars.len() {
-                break;
-            }
-
-            // Check for comma or closing paren
-            if chars[*pos] == ',' {
-                (*pos) += 1; // consume comma
-                continue;
-            } else if chars[*pos] == ')' {
-                (*pos) += 1; // consume closing paren
-                break;
-            } else {
-                break;
-            }
-        }
-
-        return Ok(Expr::Tuple(elements, span(start, *pos)));
-    }
-
-    // Try to parse integer literal
-    if chars[*pos].is_ascii_digit() {
-        let mut num_str = String::new();
-        while *pos < chars.len() && chars[*pos].is_ascii_digit() {
-            num_str.push(chars[*pos]);
-            (*pos) += 1;
-        }
-
-        let value: i64 = num_str.parse().map_err(|_| ParseError {
-            message: "Invalid number".to_string(),
-            location: Some(*pos),
-        })?;
-
-        return Ok(Expr::Int(value, span(start, *pos)));
-    }
-
-    // Try to parse identifier
-    if chars[*pos].is_alphabetic() || chars[*pos] == '_' {
-        // Check for keywords first
-        let remaining: String = chars[*pos..].iter().take(10).collect();
-
-        // Check for null literal
-        if remaining.starts_with("null") {
-            *pos += 4; // consume "null"
-            return Ok(Expr::Null(span(start, *pos)));
-        }
-
-        // Check for boolean literals
-        if remaining.starts_with("true") {
-            *pos += 4; // consume "true"
-            return Ok(Expr::Bool(true, span(start, *pos)));
-        }
-        if remaining.starts_with("false") {
-            *pos += 5; // consume "false"
-            return Ok(Expr::Bool(false, span(start, *pos)));
-        }
-
-        let name = parse_ident(chars, pos)?;
-
-        // Check for namespaced call (e.g., io.println)
-        skip_whitespace(chars, pos);
-        let namespace = if *pos < chars.len() && chars[*pos] == '.' {
-            (*pos) += 1; // consume '.'
-            let ns = parse_ident(chars, pos)?;
-            Some(ns)
-        } else {
-            None
-        };
-
-        // Check for tuple index access (e.g., variable.0, variable.1)
-        skip_whitespace(chars, pos);
-        if *pos < chars.len() && chars[*pos] == '.' {
-            (*pos) += 1; // consume '.'
-            skip_whitespace(chars, pos);
-            // Parse the index (must be a number)
-            if *pos < chars.len() && chars[*pos].is_ascii_digit() {
-                let mut index_str = String::new();
-                while *pos < chars.len() && chars[*pos].is_ascii_digit() {
-                    index_str.push(chars[*pos]);
-                    (*pos) += 1;
-                }
-                if let Ok(index) = index_str.parse::<usize>() {
-                    return Ok(Expr::TupleIndex {
-                        tuple: Box::new(Expr::Ident(name, span(start, start))),
-                        index,
-                        span: span(start, *pos),
-                    });
-                }
-            }
-            // Not a valid index, reset position and continue (the dot was part of namespace)
-            *pos -= 1; // put back the dot
-        }
-
-        // Check if it's a function call
-        skip_whitespace(chars, pos);
-        if try_consume(chars, pos, '(') {
-            // Parse function call
-            let mut args = Vec::new();
-            skip_whitespace(chars, pos);
-
-            if !try_consume(chars, pos, ')') {
-                loop {
-                    args.push(try_parse_expr(chars, pos)?);
-                    skip_whitespace(chars, pos);
-
-                    if try_consume(chars, pos, ')') {
-                        break;
-                    }
-
-                    if !try_consume(chars, pos, ',') {
-                        break;
-                    }
-                }
-            }
-
-            // Swap namespace and name for namespaced calls (io.println -> name=println, namespace=io)
-            let (final_name, final_namespace) = if let Some(ns) = namespace {
-                (ns, Some(name))
-            } else {
-                (name, None)
-            };
-
-            return Ok(Expr::Call {
-                name: final_name,
-                namespace: final_namespace,
-                args,
-                span: span(start, *pos),
-            });
-        }
-
-        // If not a function call but has namespace, it's an error (for now)
-        if namespace.is_some() {
-            return Err(ParseError {
-                message: "Unexpected namespace without function call".to_string(),
-                location: Some(*pos),
-            });
-        }
-
-        return Ok(Expr::Ident(name, span(start, *pos)));
-    }
-
-    // Try to parse binary expression
-    let left = try_parse_expr(chars, pos)?;
-    skip_whitespace(chars, pos);
-
-    // Look for binary operator
-    let op = if *pos + 1 < chars.len() {
-        let op_str: String = chars[*pos..*pos + 2].iter().collect();
-        match op_str.as_str() {
-            "+=" => {
-                (*pos) += 2;
-                Some(BinaryOp::Add)
-            }
-            "-=" => {
-                (*pos) += 2;
-                Some(BinaryOp::Sub)
-            }
-            "*=" => {
-                (*pos) += 2;
-                Some(BinaryOp::Mul)
-            }
-            "/=" => {
-                (*pos) += 2;
-                Some(BinaryOp::Div)
-            }
-            "==" => {
-                (*pos) += 2;
-                Some(BinaryOp::Eq)
-            }
-            "!=" => {
-                (*pos) += 2;
-                Some(BinaryOp::Ne)
-            }
-            "<=" => {
-                (*pos) += 2;
-                Some(BinaryOp::Le)
-            }
-            ">=" => {
-                (*pos) += 2;
-                Some(BinaryOp::Ge)
-            }
-            "&&" => {
-                (*pos) += 2;
-                Some(BinaryOp::And)
-            }
-            "||" => {
-                (*pos) += 2;
-                Some(BinaryOp::Or)
-            }
-            _ => {
-                let c = chars[*pos];
-                *pos += 1;
-                match c {
-                    '+' => Some(BinaryOp::Add),
-                    '-' => Some(BinaryOp::Sub),
-                    '*' => Some(BinaryOp::Mul),
-                    '/' => Some(BinaryOp::Div),
-                    '%' => Some(BinaryOp::Mod),
-                    '<' => Some(BinaryOp::Lt),
-                    '>' => Some(BinaryOp::Gt),
-                    _ => None,
-                }
-            }
-        }
-    } else {
-        None
-    };
-
-    if let Some(op) = op {
-        let right = try_parse_expr(chars, pos)?;
-        return Ok(Expr::Binary {
-            op,
-            left: Box::new(left),
-            right: Box::new(right),
-            span: span(start, *pos),
-        });
-    }
-
-    // Try unary operators
-    if chars[*pos] == '!' {
-        (*pos) += 1;
-        let expr = try_parse_expr(chars, pos)?;
-        return Ok(Expr::Unary {
-            op: UnaryOp::Not,
-            expr: Box::new(expr),
-            span: span(start, *pos),
-        });
-    }
-
-    if chars[*pos] == '-' {
-        (*pos) += 1;
-        let expr = try_parse_expr(chars, pos)?;
-        return Ok(Expr::Unary {
-            op: UnaryOp::Neg,
-            expr: Box::new(expr),
-            span: span(start, *pos),
-        });
-    }
-
-    Err(ParseError {
-        message: "Expected expression".to_string(),
-        location: Some(*pos),
-    })
-}
-
-/// Parse an identifier
-fn parse_ident(chars: &[char], pos: &mut usize) -> Result<String, ParseError> {
-    let start = *pos;
-
-    while *pos < chars.len() && (chars[*pos].is_alphanumeric() || chars[*pos] == '_') {
-        (*pos) += 1;
-    }
-
-    if start == *pos {
-        return Err(ParseError {
-            message: "Expected identifier".to_string(),
-            location: Some(*pos),
-        });
-    }
-
-    Ok(chars[start..*pos].iter().collect())
-}
-
-/// Try to consume a specific character
-fn try_consume(chars: &[char], pos: &mut usize, c: char) -> bool {
-    skip_whitespace(chars, pos);
-    if *pos < chars.len() && chars[*pos] == c {
-        (*pos) += 1;
-        return true;
-    }
-    false
-}
-
-/// Try to consume a keyword
-fn try_consume_keyword(chars: &[char], pos: &mut usize, keyword: &str) -> bool {
-    let start = *pos;
-    skip_whitespace(chars, pos);
-
-    let keyword_chars: Vec<char> = keyword.chars().collect();
-
-    if *pos + keyword_chars.len() <= chars.len() {
-        let slice = &chars[*pos..*pos + keyword_chars.len()];
-        if slice.iter().collect::<String>() == keyword {
-            // Make sure it's a complete word
-            if *pos + keyword_chars.len() >= chars.len()
-                || !chars[*pos + keyword_chars.len()].is_alphanumeric()
-            {
-                *pos += keyword_chars.len();
+    /// Try to match and consume a token without error
+    fn match_token(&mut self, token: Token) -> bool {
+        if let Some(current) = self.tokens.peek() {
+            if std::mem::discriminant(&current.token) == std::mem::discriminant(&token) {
+                self.advance();
                 return true;
             }
         }
+        false
     }
 
-    *pos = start;
-    false
-}
+    /// Peek at current token without consuming
+    fn peek(&mut self) -> Option<&TokenWithSpan> {
+        self.tokens.peek()
+    }
 
-/// Skip whitespace
-fn skip_whitespace(chars: &[char], pos: &mut usize) {
-    while *pos < chars.len() && chars[*pos].is_whitespace() {
-        (*pos) += 1;
+    /// Peek at nth token ahead (0 = current, 1 = next)
+    fn peek_n(&mut self, n: usize) -> Option<&TokenWithSpan> {
+        self.tokens.peek_n(n)
+    }
+
+    /// Check if at end of input
+    fn is_at_end(&mut self) -> bool {
+        self.tokens.is_at_end()
+    }
+
+    /// Skip whitespace (not needed with tokenized input, but kept for compatibility)
+    fn skip_whitespace(&mut self) {
+        // With lexer, we don't have whitespace tokens
     }
 }
 
-/// Create span
-fn span(start: usize, end: usize) -> Span {
-    Span { start, end }
+/// Parse a source string into an AST Program
+pub fn parse(source: &str) -> Result<Program, ParseError> {
+    // Step 1: Lexer - create token iterator
+    eprintln!("DEBUG: Starting lexer...");
+    let tokens = lexer_iter(source);
+    eprintln!("DEBUG: Created token iterator");
+
+    // Step 2: Parser - parse tokens into AST
+    let mut parser = Parser::new(tokens);
+    parser.parse_program()
 }
 
-/// Try to parse a struct definition
-/// Syntax: pub? struct<T>? Name { field: Type, ... }
-fn try_parse_struct(chars: &[char], pos: &mut usize) -> Result<StructDef, ParseError> {
-    let start = *pos;
+impl Parser {
+    /// Parse the entire program
+    pub fn parse_program(&mut self) -> Result<Program, ParseError> {
+        self.set_state(ParserState::Initial);
 
-    // Check for "pub" keyword
-    let visibility = if try_consume_keyword(chars, pos, "pub") {
-        Visibility::Public
-    } else {
-        Visibility::Private
-    };
+        let mut functions = Vec::new();
+        let mut structs = Vec::new();
+        let mut enums = Vec::new();
+        let mut imports = Vec::new();
 
-    // Expect "struct"
-    if !try_consume_keyword(chars, pos, "struct") {
-        return Err(ParseError {
-            message: "Expected 'struct' keyword".to_string(),
-            location: Some(*pos),
-        });
-    }
+        while !self.is_at_end() {
+            // -1 to skip EOF
+            self.skip_whitespace();
 
-    skip_whitespace(chars, pos);
-
-    // Try to parse generic parameters BEFORE the name (e.g., struct<T>)
-    let mut generic_params = Vec::new();
-    if *pos < chars.len() && chars[*pos] == '<' {
-        (*pos) += 1; // consume '<'
-        loop {
-            skip_whitespace(chars, pos);
-            if *pos >= chars.len() {
+            // Skip empty tokens
+            while let Some(token) = self.current() {
+                if matches!(token, Token::Eof) {
+                    break;
+                }
+                // Skip semicolons at top level
+                if matches!(token, Token::Semicolon) {
+                    self.advance();
+                    continue;
+                }
                 break;
             }
-            if chars[*pos] == '>' {
-                (*pos) += 1; // consume '>'
+
+            if self
+                .current()
+                .map(|t| matches!(t, Token::Eof))
+                .unwrap_or(true)
+            {
                 break;
             }
-            if chars[*pos] == ',' {
-                (*pos) += 1; // consume ','
+
+            eprintln!(
+                "DEBUG: Top-level parse loop, current token: {:?}",
+                self.current()
+            );
+
+            // Try to parse import statement
+            if self.match_token(Token::Import) {
+                self.set_state(ParserState::ParsingImport);
+                match self.parse_import_statement() {
+                    Ok(import_items) => imports.extend(import_items),
+                    Err(e) => return Err(e),
+                }
+                self.set_state(ParserState::Initial);
                 continue;
             }
-            let param = parse_ident(chars, pos)?;
-            generic_params.push(param);
-            skip_whitespace(chars, pos);
-            if *pos >= chars.len() {
-                break;
-            }
-            if chars[*pos] == '>' {
-                (*pos) += 1; // consume '>'
-                break;
-            }
-        }
-    }
 
-    skip_whitespace(chars, pos);
-
-    // Parse struct name
-    let name = parse_ident(chars, pos)?;
-
-    // If no generic params before name, try after name (e.g., struct Name<T>)
-    if generic_params.is_empty() {
-        skip_whitespace(chars, pos);
-        if *pos < chars.len() && chars[*pos] == '<' {
-            (*pos) += 1; // consume '<'
-            loop {
-                skip_whitespace(chars, pos);
-                if *pos >= chars.len() {
-                    break;
+            // Try to parse struct definition
+            if self.match_token(Token::Struct)
+                || (self.match_token(Token::Pub) && self.match_token(Token::Struct))
+            {
+                self.set_state(ParserState::ParsingStruct);
+                match self.parse_struct() {
+                    Ok(s) => structs.push(s),
+                    Err(e) => return Err(e),
                 }
-                if chars[*pos] == '>' {
-                    (*pos) += 1; // consume '>'
-                    break;
-                }
-                if chars[*pos] == ',' {
-                    (*pos) += 1; // consume ','
-                    continue;
-                }
-                let param = parse_ident(chars, pos)?;
-                generic_params.push(param);
-                skip_whitespace(chars, pos);
-                if *pos >= chars.len() {
-                    break;
-                }
-                if chars[*pos] == '>' {
-                    (*pos) += 1; // consume '>'
-                    break;
-                }
-            }
-        }
-    }
-
-    // Expect "{"
-    skip_whitespace(chars, pos);
-    if !try_consume(chars, pos, '{') {
-        return Err(ParseError {
-            message: "Expected '{{'".to_string(),
-            location: Some(*pos),
-        });
-    }
-
-    // Parse fields and methods
-    let mut fields = Vec::new();
-    let mut methods = Vec::new();
-    loop {
-        skip_whitespace(chars, pos);
-        if *pos >= chars.len() {
-            break;
-        }
-        if try_consume(chars, pos, '}') {
-            break;
-        }
-
-        // Check if it's a function definition (method) - look for "pub fn" or just "fn"
-        let method_start = *pos;
-        let is_fn = {
-            // Try to find "fn" keyword after optional "pub"
-            let mut test_pos = *pos;
-            skip_whitespace(chars, &mut test_pos);
-            if try_consume_keyword(chars, &mut test_pos, "pub") {
-                skip_whitespace(chars, &mut test_pos);
-                try_consume_keyword(chars, &mut test_pos, "fn")
-            } else {
-                try_consume_keyword(chars, &mut test_pos, "fn")
-            }
-        };
-
-        if is_fn {
-            // Parse as method
-            *pos = method_start;
-            match try_parse_fn(chars, pos) {
-                Ok(method) => {
-                    methods.push(method);
-                    skip_whitespace(chars, pos);
-                    try_consume(chars, pos, ',');
-                    continue;
-                }
-                Err(e) => {
-                    // Failed to parse as method, try as field
-                    // Reset position
-                }
-            }
-        }
-
-        // Parse as field
-        let field_visibility = if try_consume_keyword(chars, pos, "pub") {
-            Visibility::Public
-        } else {
-            Visibility::Private
-        };
-
-        // Parse field name
-        skip_whitespace(chars, pos);
-        let field_name = parse_ident(chars, pos)?;
-
-        // Expect ":"
-        skip_whitespace(chars, pos);
-        if !try_consume(chars, pos, ':') {
-            return Err(ParseError {
-                message: "Expected ':' in struct field".to_string(),
-                location: Some(*pos),
-            });
-        }
-
-        // Parse field type
-        skip_whitespace(chars, pos);
-        let field_ty = parse_type(chars, pos)?;
-
-        fields.push(StructField {
-            name: field_name,
-            ty: field_ty,
-            visibility: field_visibility,
-        });
-
-        skip_whitespace(chars, pos);
-        try_consume(chars, pos, ',');
-    }
-
-    // Consume optional semicolon after struct
-    skip_whitespace(chars, pos);
-    try_consume(chars, pos, ';');
-
-    let span = span(start, *pos);
-
-    Ok(StructDef {
-        name,
-        fields,
-        methods,
-        visibility,
-        generic_params,
-        span,
-    })
-}
-
-/// Try to parse an enum definition
-/// Syntax: pub? enum<T>? Name { Variant, Variant(Type), ... }
-fn try_parse_enum(chars: &[char], pos: &mut usize) -> Result<EnumDef, ParseError> {
-    let start = *pos;
-
-    // Check for "pub" keyword
-    let visibility = if try_consume_keyword(chars, pos, "pub") {
-        Visibility::Public
-    } else {
-        Visibility::Private
-    };
-
-    // Expect "enum"
-    if !try_consume_keyword(chars, pos, "enum") {
-        return Err(ParseError {
-            message: "Expected 'enum' keyword".to_string(),
-            location: Some(*pos),
-        });
-    }
-
-    skip_whitespace(chars, pos);
-
-    // Try to parse generic parameters BEFORE the name (e.g., enum<T>)
-    let mut generic_params = Vec::new();
-    if *pos < chars.len() && chars[*pos] == '<' {
-        (*pos) += 1; // consume '<'
-        loop {
-            skip_whitespace(chars, pos);
-            if *pos >= chars.len() {
-                break;
-            }
-            if chars[*pos] == '>' {
-                (*pos) += 1; // consume '>'
-                break;
-            }
-            if chars[*pos] == ',' {
-                (*pos) += 1; // consume ','
+                self.set_state(ParserState::Initial);
                 continue;
             }
-            let param = parse_ident(chars, pos)?;
-            generic_params.push(param);
-            skip_whitespace(chars, pos);
-            if *pos >= chars.len() {
-                break;
+
+            // Try to parse enum definition
+            if self.match_token(Token::Enum)
+                || (self.match_token(Token::Pub) && self.match_token(Token::Enum))
+            {
+                self.set_state(ParserState::ParsingEnum);
+                match self.parse_enum() {
+                    Ok(e) => enums.push(e),
+                    Err(e) => return Err(e),
+                }
+                self.set_state(ParserState::Initial);
+                continue;
             }
-            if chars[*pos] == '>' {
-                (*pos) += 1; // consume '>'
-                break;
+
+            // Try to parse function definition
+            self.set_state(ParserState::ParsingFunction);
+            match self.parse_function() {
+                Ok(f) => functions.push(f),
+                Err(e) => return Err(e),
             }
+            self.set_state(ParserState::Initial);
         }
+
+        self.set_state(ParserState::Completed);
+
+        Ok(Program {
+            functions,
+            structs,
+            enums,
+            imports,
+        })
     }
 
-    skip_whitespace(chars, pos);
+    /// Parse an import statement
+    fn parse_import_statement(&mut self) -> Result<Vec<(Option<String>, String)>, ParseError> {
+        let mut packages = Vec::new();
 
-    // Parse enum name
-    let name = parse_ident(chars, pos)?;
-
-    // If no generic params before name, try after name (e.g., enum Name<T>)
-    if generic_params.is_empty() {
-        skip_whitespace(chars, pos);
-        if *pos < chars.len() && chars[*pos] == '<' {
-            (*pos) += 1; // consume '<'
+        // Check for grouped imports with parentheses
+        if self.match_token(Token::LParen) {
             loop {
-                skip_whitespace(chars, pos);
-                if *pos >= chars.len() {
-                    break;
-                }
-                if chars[*pos] == '>' {
-                    (*pos) += 1; // consume '>'
-                    break;
-                }
-                if chars[*pos] == ',' {
-                    (*pos) += 1; // consume ','
-                    continue;
-                }
-                let param = parse_ident(chars, pos)?;
-                generic_params.push(param);
-                skip_whitespace(chars, pos);
-                if *pos >= chars.len() {
-                    break;
-                }
-                if chars[*pos] == '>' {
-                    (*pos) += 1; // consume '>'
-                    break;
-                }
-            }
-        }
-    }
+                self.skip_whitespace();
 
-    // Expect "{"
-    skip_whitespace(chars, pos);
-    if !try_consume(chars, pos, '{') {
-        return Err(ParseError {
-            message: "Expected '{{'".to_string(),
-            location: Some(*pos),
-        });
-    }
-
-    // Parse variants and methods
-    let mut variants = Vec::new();
-    let mut methods = Vec::new();
-    loop {
-        skip_whitespace(chars, pos);
-        if *pos >= chars.len() {
-            break;
-        }
-        if try_consume(chars, pos, '}') {
-            break;
-        }
-
-        // Check if it's a function definition (method)
-        let method_start = *pos;
-        if try_consume_keyword(chars, pos, "pub") || try_consume_keyword(chars, pos, "fn") {
-            // It's a method, go back to method_start
-            *pos = method_start;
-            match try_parse_fn(chars, pos) {
-                Ok(method) => {
-                    methods.push(method);
-                    skip_whitespace(chars, pos);
-                    try_consume(chars, pos, ',');
-                    continue;
+                // Check for closing paren
+                if self.match_token(Token::RParen) {
+                    self.match_token(Token::Semicolon);
+                    break;
                 }
-                Err(_) => {
-                    // Not a valid method, try as variant
-                }
-            }
-        } else if *pos < chars.len() && (chars[*pos].is_alphabetic() || chars[*pos] == '_') {
-            // Check if it's "fn" keyword without pub
-            let fn_start = *pos;
-            let name = parse_ident(chars, pos)?;
-            if name == "fn" {
-                // It's a method, go back to fn_start
-                *pos = fn_start;
-                match try_parse_fn(chars, pos) {
-                    Ok(method) => {
-                        methods.push(method);
-                        skip_whitespace(chars, pos);
-                        try_consume(chars, pos, ',');
-                        continue;
+
+                // Check for alias first (identifier followed by string)
+                let alias: Option<String> = if let Some(Token::Ident(id)) = self.current().cloned()
+                {
+                    if let Some(Token::String(_)) = self.peek_n(1).map(|t| &t.token) {
+                        Some(id.clone())
+                    } else {
+                        None
                     }
-                    Err(_) => {}
+                } else {
+                    None
+                };
+
+                if alias.is_some() {
+                    self.advance(); // consume alias
                 }
+
+                // Parse string literal for package name
+                if let Token::String(name) = self.current().cloned().ok_or_else(|| ParseError {
+                    message: "Expected package name".to_string(),
+                    location: None,
+                })? {
+                    self.advance();
+                    packages.push((alias, name));
+                } else {
+                    return Err(ParseError {
+                        message: "Expected package name in quotes".to_string(),
+                        location: self.current_token().map(|t| t.span.start),
+                    });
+                }
+
+                self.skip_whitespace();
+                self.match_token(Token::Semicolon);
             }
-            // It's a variant, go back to variant_start
-            *pos = fn_start;
+        } else {
+            // Single import: "package" or alias "package"
+            self.skip_whitespace();
+
+            // Check for alias (identifier followed by string)
+            let alias: Option<String> = if let Some(Token::Ident(id)) = self.current().cloned() {
+                if let Some(Token::String(_)) = self.peek_n(1).map(|t| &t.token) {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if alias.is_some() {
+                self.advance(); // consume alias
+            }
+
+            // Parse package name
+            if let Token::String(name) = self.current().cloned().ok_or_else(|| ParseError {
+                message: "Expected package name".to_string(),
+                location: None,
+            })? {
+                self.advance();
+                packages.push((alias, name));
+            } else {
+                return Err(ParseError {
+                    message: "Expected package name in quotes".to_string(),
+                    location: self.current_token().map(|t| t.span.start),
+                });
+            }
+
+            self.match_token(Token::Semicolon);
         }
 
-        // Check for pub variant
-        let variant_visibility = if try_consume_keyword(chars, pos, "pub") {
+        Ok(packages)
+    }
+
+    /// Parse a function definition
+    fn parse_function(&mut self) -> Result<FnDef, ParseError> {
+        // Check for "pub" keyword (already consumed if present)
+        let visibility = if self
+            .current()
+            .map(|t| matches!(t, Token::Pub))
+            .unwrap_or(false)
+        {
+            self.advance();
             Visibility::Public
         } else {
             Visibility::Private
         };
 
-        // Parse variant name
-        skip_whitespace(chars, pos);
-        let variant_name = parse_ident(chars, pos)?;
-
-        // Parse associated types (e.g., Variant(Type))
-        let mut associated_types = Vec::new();
-        skip_whitespace(chars, pos);
-        if try_consume(chars, pos, '(') {
-            loop {
-                skip_whitespace(chars, pos);
-                if *pos >= chars.len() {
-                    break;
-                }
-                if try_consume(chars, pos, ')') {
-                    break;
-                }
-                if try_consume(chars, pos, ',') {
-                    continue;
-                }
-                let assoc_ty = parse_type(chars, pos)?;
-                associated_types.push(assoc_ty);
-                skip_whitespace(chars, pos);
-                if try_consume(chars, pos, ')') {
-                    break;
-                }
-            }
+        // Consume "fn" if not already consumed
+        if !self.match_token(Token::Fn) {
+            return Err(ParseError {
+                message: "Expected 'fn' keyword".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
         }
 
-        variants.push(EnumVariant {
-            name: variant_name,
-            associated_types,
-            visibility: variant_visibility,
-        });
-
-        skip_whitespace(chars, pos);
-        try_consume(chars, pos, ',');
-    }
-
-    // Consume optional semicolon after enum
-    skip_whitespace(chars, pos);
-    try_consume(chars, pos, ';');
-
-    let span = span(start, *pos);
-
-    Ok(EnumDef {
-        name,
-        variants,
-        methods,
-        visibility,
-        generic_params,
-        span,
-    })
-}
-
-/// Parse a type (basic types or custom types)
-fn parse_type(chars: &[char], pos: &mut usize) -> Result<Type, ParseError> {
-    skip_whitespace(chars, pos);
-
-    // Check for optional type (? followed by a base type)
-    if *pos < chars.len() && chars[*pos] == '?' {
-        *pos += 1; // consume '?'
-
-        // Parse the inner type (don't allow nested optional for simplicity)
-        skip_whitespace(chars, pos);
-        let remaining: String = chars[*pos..].iter().take(10).collect();
-        let inner_type = if remaining.starts_with("i8") {
-            *pos += 2;
-            Type::I8
-        } else if remaining.starts_with("i16") {
-            *pos += 3;
-            Type::I16
-        } else if remaining.starts_with("i32") {
-            *pos += 3;
-            Type::I32
-        } else if remaining.starts_with("i64") {
-            *pos += 3;
-            Type::I64
-        } else if remaining.starts_with("u8") {
-            *pos += 2;
-            Type::U8
-        } else if remaining.starts_with("u16") {
-            *pos += 3;
-            Type::U16
-        } else if remaining.starts_with("u32") {
-            *pos += 3;
-            Type::U32
-        } else if remaining.starts_with("u64") {
-            *pos += 3;
-            Type::U64
-        } else if remaining.starts_with("bool") {
-            *pos += 4;
-            Type::Bool
-        } else if remaining.starts_with("void") {
-            *pos += 4;
-            Type::Void
+        // Parse function name
+        let name = if let Token::Ident(name) =
+            self.current().cloned().ok_or_else(|| ParseError {
+                message: "Expected function name".to_string(),
+                location: None,
+            })? {
+            let name = name.clone();
+            self.advance();
+            name
         } else {
             return Err(ParseError {
-                message: format!("Invalid type after '?' at position {}", *pos),
-                location: Some(*pos),
+                message: "Expected function name".to_string(),
+                location: self.current_token().map(|t| t.span.start),
             });
         };
-        return Ok(Type::Option(Box::new(inner_type)));
+
+        // Parse parameters
+        self.set_state(ParserState::ParsingFunctionParams);
+        let params = self.parse_function_params()?;
+
+        // Parse return type
+        self.set_state(ParserState::ParsingFunctionReturnType);
+        let return_ty = self.parse_return_type()?;
+
+        // Parse function body
+        self.set_state(ParserState::ParsingFunctionBody);
+        let body = self.parse_function_body()?;
+
+        let span = Span {
+            start: 0, // Would need to track start position properly
+            end: self.current_token().map(|t| t.span.end).unwrap_or(0),
+        };
+
+        Ok(FnDef {
+            name,
+            visibility,
+            params,
+            return_ty,
+            body,
+            span,
+        })
     }
 
-    // Check for basic types
-    if *pos < chars.len() {
-        let remaining: String = chars[*pos..].iter().take(10).collect();
-        if remaining.starts_with("i8") {
-            *pos += 2;
-            return Ok(Type::I8);
-        } else if remaining.starts_with("i16") {
-            *pos += 3;
-            return Ok(Type::I16);
-        } else if remaining.starts_with("i32") {
-            *pos += 3;
-            return Ok(Type::I32);
-        } else if remaining.starts_with("i64") {
-            *pos += 3;
-            return Ok(Type::I64);
-        } else if remaining.starts_with("u8") {
-            *pos += 2;
-            return Ok(Type::U8);
-        } else if remaining.starts_with("u16") {
-            *pos += 3;
-            return Ok(Type::U16);
-        } else if remaining.starts_with("u32") {
-            *pos += 3;
-            return Ok(Type::U32);
-        } else if remaining.starts_with("u64") {
-            *pos += 3;
-            return Ok(Type::U64);
-        } else if remaining.starts_with("bool") {
-            *pos += 4;
-            return Ok(Type::Bool);
-        } else if remaining.starts_with("void") {
-            *pos += 4;
-            return Ok(Type::Void);
+    /// Parse function parameters
+    fn parse_function_params(&mut self) -> Result<Vec<FnParam>, ParseError> {
+        if !self.match_token(Token::LParen) {
+            return Err(ParseError {
+                message: "Expected '('".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        let mut params = Vec::new();
+
+        // Check for empty parameter list
+        if self.match_token(Token::RParen) {
+            return Ok(params);
+        }
+
+        loop {
+            self.skip_whitespace();
+
+            // Check for closing paren
+            if self.match_token(Token::RParen) {
+                break;
+            }
+
+            // Parse parameter name
+            let param_name = if let Token::Ident(name) =
+                self.current().cloned().ok_or_else(|| ParseError {
+                    message: "Expected parameter name".to_string(),
+                    location: None,
+                })? {
+                let name = name.clone();
+                self.advance();
+                name
+            } else {
+                return Err(ParseError {
+                    message: "Expected parameter name".to_string(),
+                    location: self.current_token().map(|t| t.span.start),
+                });
+            };
+
+            // Expect ':'
+            self.skip_whitespace();
+            if !self.match_token(Token::Colon) {
+                return Err(ParseError {
+                    message: "Expected ':' in parameter".to_string(),
+                    location: self.current_token().map(|t| t.span.start),
+                });
+            }
+
+            // Parse parameter type
+            let param_ty = self.parse_type()?;
+
+            params.push(FnParam {
+                name: param_name,
+                ty: param_ty,
+            });
+
+            self.skip_whitespace();
+
+            // Try to consume comma for next parameter
+            if !self.match_token(Token::Comma) {
+                // If no comma, check for closing paren
+                if self.match_token(Token::RParen) {
+                    break;
+                }
+            }
+        }
+
+        Ok(params)
+    }
+
+    /// Parse return type
+    fn parse_return_type(&mut self) -> Result<Option<Type>, ParseError> {
+        self.skip_whitespace();
+
+        // Check for void return type
+        if let Some(Token::Ident(id)) = self.current().cloned() {
+            if id == "void" {
+                self.advance();
+                return Ok(Some(Type::Void));
+            }
+        }
+
+        // Try to parse a type
+        if let Ok(ty) = self.parse_type() {
+            return Ok(Some(ty));
+        }
+
+        Ok(None)
+    }
+
+    /// Parse function body
+    fn parse_function_body(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        if !self.match_token(Token::LBrace) {
+            return Err(ParseError {
+                message: "Expected '{'".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        let mut body = Vec::new();
+
+        loop {
+            self.skip_whitespace();
+
+            // Check for closing brace
+            if self.match_token(Token::RBrace) {
+                break;
+            }
+
+            // Check for end of input
+            if self
+                .current()
+                .map(|t| matches!(t, Token::Eof))
+                .unwrap_or(true)
+            {
+                break;
+            }
+
+            // Parse statement
+            self.set_state(ParserState::ParsingStatement);
+            match self.parse_statement() {
+                Ok(stmt) => body.push(stmt),
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(body)
+    }
+
+    /// Parse a statement
+    fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
+        let token = self.current().cloned().ok_or_else(|| ParseError {
+            message: "Unexpected end of input".to_string(),
+            location: None,
+        })?;
+
+        match token {
+            Token::Return => self.parse_return_stmt(),
+            Token::Import => self.parse_import_stmt(),
+            Token::Var => self.parse_var_stmt(),
+            Token::Const => self.parse_const_stmt(),
+            Token::Let => self.parse_let_stmt(),
+            Token::If => self.parse_if_stmt(),
+            Token::While => self.parse_while_stmt(),
+            Token::Loop => self.parse_loop_stmt(),
+            Token::LBrace => self.parse_block_stmt(),
+            _ => self.parse_expr_stmt(),
         }
     }
 
-    // Parse custom type (identifier)
-    let type_name = parse_ident(chars, pos)?;
+    /// Parse return statement
+    fn parse_return_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'return'
 
-    // Check for generic arguments (e.g., Vec<i64>)
-    let mut generic_args = Vec::new();
-    skip_whitespace(chars, pos);
-    if try_consume(chars, pos, '<') {
+        self.skip_whitespace();
+
+        // Check for empty return
+        if self.match_token(Token::Semicolon) {
+            return Ok(Stmt::Return {
+                value: None,
+                span: Span { start: 0, end: 0 },
+            });
+        }
+
+        // Parse return value
+        let value = self.parse_expression()?;
+        self.match_token(Token::Semicolon);
+
+        Ok(Stmt::Return {
+            value: Some(value),
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse import statement (inside function body)
+    fn parse_import_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'import'
+
+        let mut packages = Vec::new();
+
+        // Check for grouped imports
+        if self.match_token(Token::LParen) {
+            loop {
+                self.skip_whitespace();
+
+                if self.match_token(Token::RParen) {
+                    break;
+                }
+
+                if let Token::String(name) = self.current().cloned().ok_or_else(|| ParseError {
+                    message: "Expected package name".to_string(),
+                    location: None,
+                })? {
+                    self.advance();
+                    packages.push((None, name));
+                }
+
+                self.skip_whitespace();
+                self.match_token(Token::Semicolon);
+            }
+        } else {
+            // Single import
+            if let Token::String(name) = self.current().cloned().ok_or_else(|| ParseError {
+                message: "Expected package name".to_string(),
+                location: None,
+            })? {
+                self.advance();
+                packages.push((None, name));
+            }
+        }
+
+        self.match_token(Token::Semicolon);
+
+        Ok(Stmt::Import {
+            packages,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse var statement
+    fn parse_var_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'var'
+
+        // Check for pub
+        let visibility = if self.match_token(Token::Pub) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        // Parse name
+        let name = if let Token::Ident(n) = self.current().cloned().ok_or_else(|| ParseError {
+            message: "Expected variable name".to_string(),
+            location: None,
+        })? {
+            let n = n.clone();
+            self.advance();
+            n
+        } else {
+            return Err(ParseError {
+                message: "Expected variable name".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        };
+
+        // Expect ':'
+        self.skip_whitespace();
+        self.match_token(Token::Colon);
+
+        // Parse type
+        let ty = Some(self.parse_type()?);
+
+        // Expect '='
+        self.skip_whitespace();
+        if !self.match_token(Token::Assign) {
+            return Err(ParseError {
+                message: "Variable declaration requires initialization".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        // Parse value
+        let value = Some(self.parse_expression()?);
+
+        self.match_token(Token::Semicolon);
+
+        Ok(Stmt::Let {
+            mutability: Mutability::Var,
+            name,
+            names: None,
+            ty,
+            value,
+            visibility,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse const statement
+    fn parse_const_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'const'
+
+        // Check for pub
+        let visibility = if self.match_token(Token::Pub) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        self.skip_whitespace();
+
+        // Check for tuple destructuring
+        let (name, names) = if self.match_token(Token::LParen) {
+            let mut names = Vec::new();
+
+            loop {
+                self.skip_whitespace();
+
+                if self.match_token(Token::RParen) {
+                    break;
+                }
+
+                // Check for underscore
+                if self.match_token(Token::Not) {
+                    // Using Not for _ since we don't have underscore token
+                    names.push(None);
+                } else if let Token::Ident(n) =
+                    self.current().cloned().ok_or_else(|| ParseError {
+                        message: "Expected identifier".to_string(),
+                        location: None,
+                    })?
+                {
+                    self.advance();
+                    names.push(Some(n));
+                }
+
+                self.skip_whitespace();
+                if !self.match_token(Token::Comma) {
+                    self.match_token(Token::RParen);
+                    break;
+                }
+            }
+
+            (String::new(), Some(names))
+        } else {
+            // Single variable
+            let name = if let Token::Ident(n) =
+                self.current().cloned().ok_or_else(|| ParseError {
+                    message: "Expected constant name".to_string(),
+                    location: None,
+                })? {
+                let n = n.clone();
+                self.advance();
+                n
+            } else {
+                return Err(ParseError {
+                    message: "Expected constant name".to_string(),
+                    location: self.current_token().map(|t| t.span.start),
+                });
+            };
+            (name, None)
+        };
+
+        // Parse optional type annotation
+        let ty = if self.match_token(Token::Colon) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        // Expect '='
+        self.skip_whitespace();
+        if !self.match_token(Token::Assign) {
+            return Err(ParseError {
+                message: "Constant declaration requires initialization".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        // Parse value
+        let value = self.parse_expression()?;
+
+        self.match_token(Token::Semicolon);
+
+        Ok(Stmt::Let {
+            mutability: Mutability::Const,
+            name,
+            names,
+            ty,
+            value: Some(value),
+            visibility,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse let statement (deprecated, falls back to var)
+    fn parse_let_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'let'
+
+        let visibility = if self.match_token(Token::Pub) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        let name = if let Token::Ident(n) = self.current().cloned().ok_or_else(|| ParseError {
+            message: "Expected variable name".to_string(),
+            location: None,
+        })? {
+            let n = n.clone();
+            self.advance();
+            n
+        } else {
+            return Err(ParseError {
+                message: "Expected variable name".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        };
+
+        self.match_token(Token::Semicolon);
+
+        Ok(Stmt::Let {
+            mutability: Mutability::Var,
+            name,
+            names: None,
+            ty: None,
+            value: None,
+            visibility,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse if statement
+    fn parse_if_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'if'
+
+        let condition = self.parse_expression()?;
+        let then_branch = Box::new(self.parse_statement()?);
+
+        let else_branch = if self.match_token(Token::Else) {
+            Some(Box::new(self.parse_statement()?))
+        } else {
+            None
+        };
+
+        Ok(Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse while statement
+    fn parse_while_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'while'
+
+        let condition = self.parse_expression()?;
+        let body = Box::new(self.parse_statement()?);
+
+        Ok(Stmt::While {
+            condition,
+            body,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse loop statement
+    fn parse_loop_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'loop'
+
+        let body = Box::new(self.parse_statement()?);
+
+        Ok(Stmt::Loop {
+            body,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse block statement
+    fn parse_block_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume '{'
+
+        let mut stmts = Vec::new();
+
         loop {
-            skip_whitespace(chars, pos);
-            if *pos >= chars.len() {
+            self.skip_whitespace();
+
+            if self.match_token(Token::RBrace) {
                 break;
             }
-            if try_consume(chars, pos, '>') {
+
+            if self
+                .current()
+                .map(|t| matches!(t, Token::Eof))
+                .unwrap_or(true)
+            {
                 break;
             }
-            if try_consume(chars, pos, ',') {
+
+            stmts.push(self.parse_statement()?);
+        }
+
+        Ok(Stmt::Block {
+            stmts,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse expression statement
+    fn parse_expr_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let expr = self.parse_expression()?;
+        self.match_token(Token::Semicolon);
+
+        Ok(Stmt::Expr {
+            expr,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse an expression
+    fn parse_expression(&mut self) -> Result<Expr, ParseError> {
+        self.set_state(ParserState::ParsingExpression);
+
+        // Try to parse assignment first (lowest precedence)
+        self.parse_assignment_expr()
+    }
+
+    /// Parse assignment expression
+    fn parse_assignment_expr(&mut self) -> Result<Expr, ParseError> {
+        let left = self.parse_or_expr()?;
+        Ok(left)
+    }
+
+    /// Parse OR expression (||)
+    fn parse_or_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_and_expr()?;
+
+        while self.match_token(Token::Pipe) {
+            let right = self.parse_and_expr()?;
+            left = Expr::Binary {
+                op: BinaryOp::Or,
+                left: Box::new(left),
+                right: Box::new(right),
+                span: Span { start: 0, end: 0 },
+            };
+        }
+
+        Ok(left)
+    }
+
+    /// Parse AND expression (&&)
+    fn parse_and_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_equality_expr()?;
+
+        while self.match_token(Token::Ampersand) {
+            let right = self.parse_equality_expr()?;
+            left = Expr::Binary {
+                op: BinaryOp::And,
+                left: Box::new(left),
+                right: Box::new(right),
+                span: Span { start: 0, end: 0 },
+            };
+        }
+
+        Ok(left)
+    }
+
+    /// Parse equality expression (==, !=)
+    fn parse_equality_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_comparison_expr()?;
+
+        while let Token::Equal | Token::NotEqual = self.current().cloned().unwrap_or(Token::Eof) {
+            let op = if self.match_token(Token::Equal) {
+                BinaryOp::Eq
+            } else {
+                BinaryOp::Ne
+            };
+
+            let right = self.parse_comparison_expr()?;
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span: Span { start: 0, end: 0 },
+            };
+        }
+
+        Ok(left)
+    }
+
+    /// Parse comparison expression (<, >, <=, >=)
+    fn parse_comparison_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_additive_expr()?;
+
+        while let Token::Less | Token::Greater | Token::LessEq | Token::GreaterEq =
+            self.current().cloned().unwrap_or(Token::Eof)
+        {
+            let op = match self.current().unwrap() {
+                Token::Less => {
+                    self.advance();
+                    BinaryOp::Lt
+                }
+                Token::Greater => {
+                    self.advance();
+                    BinaryOp::Gt
+                }
+                Token::LessEq => {
+                    self.advance();
+                    BinaryOp::Le
+                }
+                Token::GreaterEq => {
+                    self.advance();
+                    BinaryOp::Ge
+                }
+                _ => break,
+            };
+
+            let right = self.parse_additive_expr()?;
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span: Span { start: 0, end: 0 },
+            };
+        }
+
+        Ok(left)
+    }
+
+    /// Parse additive expression (+, -)
+    fn parse_additive_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_multiplicative_expr()?;
+
+        while let Token::Plus | Token::Minus = self.current().cloned().unwrap_or(Token::Eof) {
+            let op = if self.match_token(Token::Plus) {
+                BinaryOp::Add
+            } else {
+                BinaryOp::Sub
+            };
+
+            let right = self.parse_multiplicative_expr()?;
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span: Span { start: 0, end: 0 },
+            };
+        }
+
+        Ok(left)
+    }
+
+    /// Parse multiplicative expression (*, /, %)
+    fn parse_multiplicative_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_unary_expr()?;
+
+        while let Token::Star | Token::Slash | Token::Percent =
+            self.current().cloned().unwrap_or(Token::Eof)
+        {
+            let op = match self.current().unwrap() {
+                Token::Star => {
+                    self.advance();
+                    BinaryOp::Mul
+                }
+                Token::Slash => {
+                    self.advance();
+                    BinaryOp::Div
+                }
+                Token::Percent => {
+                    self.advance();
+                    BinaryOp::Mod
+                }
+                _ => break,
+            };
+
+            let right = self.parse_unary_expr()?;
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span: Span { start: 0, end: 0 },
+            };
+        }
+
+        Ok(left)
+    }
+
+    /// Parse unary expression (!, -)
+    fn parse_unary_expr(&mut self) -> Result<Expr, ParseError> {
+        if let Token::Not | Token::Minus = self.current().cloned().unwrap_or(Token::Eof) {
+            let op = if self.match_token(Token::Not) {
+                UnaryOp::Not
+            } else {
+                UnaryOp::Neg
+            };
+
+            let expr = Box::new(self.parse_unary_expr()?);
+            return Ok(Expr::Unary {
+                op,
+                expr,
+                span: Span { start: 0, end: 0 },
+            });
+        }
+
+        self.parse_call_expr()
+    }
+
+    /// Parse call expression
+    fn parse_call_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.parse_primary_expr()?;
+
+        loop {
+            // Function call
+            if self.match_token(Token::LParen) {
+                let mut args = Vec::new();
+
+                if !self.match_token(Token::RParen) {
+                    loop {
+                        args.push(self.parse_expression()?);
+                        self.skip_whitespace();
+
+                        if self.match_token(Token::RParen) {
+                            break;
+                        }
+
+                        if !self.match_token(Token::Comma) {
+                            break;
+                        }
+                    }
+                }
+
+                expr = Expr::Call {
+                    name: match &expr {
+                        Expr::Ident(n, _) => n.clone(),
+                        _ => {
+                            return Err(ParseError {
+                                message: "Expected function name".to_string(),
+                                location: None,
+                            });
+                        }
+                    },
+                    namespace: None,
+                    args,
+                    span: Span { start: 0, end: 0 },
+                };
                 continue;
             }
-            let arg = parse_type(chars, pos)?;
-            generic_args.push(arg);
-            skip_whitespace(chars, pos);
-            if try_consume(chars, pos, '>') {
-                break;
+
+            // Tuple index access
+            if self.match_token(Token::Dot) {
+                if let Token::Int(i) = self.current().cloned().ok_or_else(|| ParseError {
+                    message: "Expected index".to_string(),
+                    location: None,
+                })? {
+                    self.advance();
+                    expr = Expr::TupleIndex {
+                        tuple: Box::new(expr),
+                        index: i as usize,
+                        span: Span { start: 0, end: 0 },
+                    };
+                    continue;
+                }
             }
+
+            break;
+        }
+
+        Ok(expr)
+    }
+
+    /// Parse primary expression (literals, identifiers, etc.)
+    fn parse_primary_expr(&mut self) -> Result<Expr, ParseError> {
+        let token = self.current().cloned().ok_or_else(|| ParseError {
+            message: "Unexpected end of input".to_string(),
+            location: None,
+        })?;
+
+        match token {
+            Token::Int(n) => {
+                self.advance();
+                Ok(Expr::Int(n, Span { start: 0, end: 0 }))
+            }
+            Token::String(s) => {
+                self.advance();
+                Ok(Expr::String(s, Span { start: 0, end: 0 }))
+            }
+            Token::True => {
+                self.advance();
+                Ok(Expr::Bool(true, Span { start: 0, end: 0 }))
+            }
+            Token::False => {
+                self.advance();
+                Ok(Expr::Bool(false, Span { start: 0, end: 0 }))
+            }
+            Token::Null => {
+                self.advance();
+                Ok(Expr::Null(Span { start: 0, end: 0 }))
+            }
+            Token::LParen => {
+                self.advance();
+                self.skip_whitespace();
+
+                // Empty tuple
+                if self.match_token(Token::RParen) {
+                    return Ok(Expr::Tuple(vec![], Span { start: 0, end: 0 }));
+                }
+
+                // Parse tuple
+                let mut elements = Vec::new();
+                loop {
+                    elements.push(self.parse_expression()?);
+                    self.skip_whitespace();
+
+                    if self.match_token(Token::RParen) {
+                        break;
+                    }
+
+                    if !self.match_token(Token::Comma) {
+                        break;
+                    }
+                }
+
+                Ok(Expr::Tuple(elements, Span { start: 0, end: 0 }))
+            }
+            Token::Ident(name) => {
+                self.advance();
+                Ok(Expr::Ident(name, Span { start: 0, end: 0 }))
+            }
+            _ => Err(ParseError {
+                message: format!("Unexpected token: {:?}", token),
+                location: self.current_token().map(|t| t.span.start),
+            }),
         }
     }
 
-    Ok(Type::Custom {
-        name: type_name,
-        generic_args,
-        is_exported: false,
-    })
+    /// Parse a type
+    fn parse_type(&mut self) -> Result<Type, ParseError> {
+        self.set_state(ParserState::ParsingType);
+
+        self.skip_whitespace();
+
+        // Check for optional type
+        if self.match_token(Token::Question) {
+            let inner = self.parse_type()?;
+            return Ok(Type::Option(Box::new(inner)));
+        }
+
+        // Parse basic types or custom type
+        let type_name = if let Token::Ident(name) =
+            self.current().cloned().ok_or_else(|| ParseError {
+                message: "Expected type".to_string(),
+                location: None,
+            })? {
+            let name = name.clone();
+            self.advance();
+            name
+        } else {
+            return Err(ParseError {
+                message: "Expected type".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        };
+
+        // Check for basic types
+        let ty = match type_name.as_str() {
+            "i8" => Type::I8,
+            "i16" => Type::I16,
+            "i32" => Type::I32,
+            "i64" => Type::I64,
+            "u8" => Type::U8,
+            "u16" => Type::U16,
+            "u32" => Type::U32,
+            "u64" => Type::U64,
+            "bool" => Type::Bool,
+            "void" => Type::Void,
+            _ => Type::Custom {
+                name: type_name,
+                generic_args: Vec::new(),
+                is_exported: false,
+            },
+        };
+
+        // Check for generic arguments
+        if self.match_token(Token::Less) {
+            let mut generic_args = Vec::new();
+
+            loop {
+                self.skip_whitespace();
+
+                if self.match_token(Token::Greater) {
+                    break;
+                }
+
+                generic_args.push(self.parse_type()?);
+
+                self.skip_whitespace();
+
+                if self.match_token(Token::Greater) {
+                    break;
+                }
+
+                self.match_token(Token::Comma);
+            }
+
+            if let Type::Custom { name, .. } = ty {
+                return Ok(Type::Custom {
+                    name,
+                    generic_args,
+                    is_exported: false,
+                });
+            }
+        }
+
+        Ok(ty)
+    }
+
+    /// Parse a struct definition
+    fn parse_struct(&mut self) -> Result<StructDef, ParseError> {
+        // "pub" and "struct" already consumed
+        let visibility = Visibility::Public;
+
+        // Parse generic parameters
+        let generic_params = self.parse_generic_params()?;
+
+        // Parse struct name
+        let name = if let Token::Ident(n) = self.current().cloned().ok_or_else(|| ParseError {
+            message: "Expected struct name".to_string(),
+            location: None,
+        })? {
+            let n = n.clone();
+            self.advance();
+            n
+        } else {
+            return Err(ParseError {
+                message: "Expected struct name".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        };
+
+        // Parse fields and methods
+        if !self.match_token(Token::LBrace) {
+            return Err(ParseError {
+                message: "Expected '{'".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        let mut fields = Vec::new();
+        let mut methods = Vec::new();
+
+        loop {
+            self.skip_whitespace();
+
+            if self.match_token(Token::RBrace) {
+                break;
+            }
+
+            // Check for method (fn keyword)
+            if self.match_token(Token::Fn) || self.match_token(Token::Pub) {
+                // This is a method, go back
+                // Note: Previous token tracking changed - using current token instead
+                if let Some(prev) = self.peek() {
+                    if let Token::Pub = prev.token {
+                        // Already consumed pub, now consume fn
+                        self.match_token(Token::Fn);
+                    }
+                }
+
+                methods.push(self.parse_function()?);
+                self.match_token(Token::Comma);
+                continue;
+            }
+
+            // Parse field
+            let field_visibility = if self.match_token(Token::Pub) {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            };
+
+            let field_name = if let Token::Ident(n) =
+                self.current().cloned().ok_or_else(|| ParseError {
+                    message: "Expected field name".to_string(),
+                    location: None,
+                })? {
+                let n = n.clone();
+                self.advance();
+                n
+            } else {
+                return Err(ParseError {
+                    message: "Expected field name".to_string(),
+                    location: self.current_token().map(|t| t.span.start),
+                });
+            };
+
+            self.match_token(Token::Colon);
+            let field_ty = self.parse_type()?;
+
+            fields.push(StructField {
+                name: field_name,
+                ty: field_ty,
+                visibility: field_visibility,
+            });
+
+            self.match_token(Token::Comma);
+        }
+
+        self.match_token(Token::Semicolon);
+
+        Ok(StructDef {
+            name,
+            fields,
+            methods,
+            visibility,
+            generic_params,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse an enum definition
+    fn parse_enum(&mut self) -> Result<EnumDef, ParseError> {
+        // "pub" and "enum" already consumed
+        let visibility = Visibility::Public;
+
+        // Parse generic parameters
+        let generic_params = self.parse_generic_params()?;
+
+        // Parse enum name
+        let name = if let Token::Ident(n) = self.current().cloned().ok_or_else(|| ParseError {
+            message: "Expected enum name".to_string(),
+            location: None,
+        })? {
+            let n = n.clone();
+            self.advance();
+            n
+        } else {
+            return Err(ParseError {
+                message: "Expected enum name".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        };
+
+        // Parse variants
+        if !self.match_token(Token::LBrace) {
+            return Err(ParseError {
+                message: "Expected '{'".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        let mut variants = Vec::new();
+        let mut methods = Vec::new();
+
+        loop {
+            self.skip_whitespace();
+
+            if self.match_token(Token::RBrace) {
+                break;
+            }
+
+            // Check for method
+            if self.match_token(Token::Fn) || self.match_token(Token::Pub) {
+                // Note: Previous token tracking changed - using current token instead
+                if let Some(prev) = self.peek() {
+                    if let Token::Pub = prev.token {
+                        self.match_token(Token::Fn);
+                    }
+                }
+
+                methods.push(self.parse_function()?);
+                self.match_token(Token::Comma);
+                continue;
+            }
+
+            // Parse variant
+            let variant_visibility = if self.match_token(Token::Pub) {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            };
+
+            let variant_name = if let Token::Ident(n) =
+                self.current().cloned().ok_or_else(|| ParseError {
+                    message: "Expected variant name".to_string(),
+                    location: None,
+                })? {
+                let n = n.clone();
+                self.advance();
+                n
+            } else {
+                return Err(ParseError {
+                    message: "Expected variant name".to_string(),
+                    location: self.current_token().map(|t| t.span.start),
+                });
+            };
+
+            // Parse associated types
+            let mut associated_types = Vec::new();
+            if self.match_token(Token::LParen) {
+                loop {
+                    self.skip_whitespace();
+
+                    if self.match_token(Token::RParen) {
+                        break;
+                    }
+
+                    associated_types.push(self.parse_type()?);
+
+                    self.skip_whitespace();
+
+                    if self.match_token(Token::RParen) {
+                        break;
+                    }
+
+                    self.match_token(Token::Comma);
+                }
+            }
+
+            variants.push(EnumVariant {
+                name: variant_name,
+                associated_types,
+                visibility: variant_visibility,
+            });
+
+            self.match_token(Token::Comma);
+        }
+
+        self.match_token(Token::Semicolon);
+
+        Ok(EnumDef {
+            name,
+            variants,
+            methods,
+            visibility,
+            generic_params,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse generic parameters (<T, U, ...>)
+    fn parse_generic_params(&mut self) -> Result<Vec<String>, ParseError> {
+        if !self.match_token(Token::Less) {
+            return Ok(Vec::new());
+        }
+
+        let mut params = Vec::new();
+
+        loop {
+            self.skip_whitespace();
+
+            if self.match_token(Token::Greater) {
+                break;
+            }
+
+            if let Token::Ident(n) = self.current().cloned().ok_or_else(|| ParseError {
+                message: "Expected generic parameter".to_string(),
+                location: None,
+            })? {
+                params.push(n);
+                self.advance();
+            }
+
+            self.skip_whitespace();
+
+            if self.match_token(Token::Greater) {
+                break;
+            }
+
+            self.match_token(Token::Comma);
+        }
+
+        Ok(params)
+    }
 }
 
 /// Parse error type

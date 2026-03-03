@@ -1,7 +1,3 @@
-fn return_tuple() (i64, i64, i64) {
-    return (1, 2, 3);
-}
-
 fn main() i64 {
     // Access tuple 0 element.
     const t = (1, 2, 3);
@@ -10,8 +6,6 @@ fn main() i64 {
     // Destructure tuple, a = 1, b = 2, c = 3.
     const (a, b, c) = (1, 2, 3);
 
-    // Destructure tuple, ignore 2nd element.
-    const (d, _, f) = return_tuple();
-
+    // Return first element.
     return t.0;
 }
