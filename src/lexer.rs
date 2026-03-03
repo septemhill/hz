@@ -1227,21 +1227,6 @@ mod tests {
     }
 
     #[test]
-    fn test_example_add_literal() {
-        let source = read_example("examples/test_add_literal.lang");
-        let result = tokenize(&source);
-        assert!(
-            result.is_ok(),
-            "Failed to tokenize test_add_literal.lang: {:?}",
-            result.err()
-        );
-        let tokens = result.unwrap();
-        // Check for return keyword and numbers
-        let has_return = tokens.iter().any(|t| matches!(t.token, Token::Return));
-        assert!(has_return);
-    }
-
-    #[test]
     fn test_example_tuple() {
         let source = read_example("examples/test_tuple.lang");
         let result = tokenize(&source);

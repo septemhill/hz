@@ -510,13 +510,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             Stmt::If {
                 condition,
+                capture,
                 then_branch,
                 else_branch,
                 ..
-            } => self.generate_if(condition, then_branch, else_branch.as_deref()),
+            } => self.generate_if(condition, capture, then_branch, else_branch.as_deref()),
             Stmt::While {
-                condition, body, ..
-            } => self.generate_while(condition, body),
+                condition,
+                capture,
+                body,
+                ..
+            } => self.generate_while(condition, capture, body),
             Stmt::Loop { body, .. } => self.generate_loop(body),
             Stmt::For { .. } => todo!("Codegen for For loops not implemented"),
         }
@@ -653,6 +657,28 @@ impl<'ctx> CodeGenerator<'ctx> {
             } => self.generate_call(name, namespace.as_deref(), args),
             Expr::Array(_, _) => todo!("Codegen for Array literals not implemented"),
             Expr::Char(_, _) => todo!("Codegen for character literals not implemented"),
+            Expr::If {
+                condition,
+                capture,
+                then_branch,
+                else_branch,
+                ..
+            } => self.generate_expr_if(condition, capture, then_branch, else_branch),
+            Expr::Block { stmts, .. } => {
+                let mut last_val = None;
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Expr { expr, .. } => {
+                            last_val = Some(self.generate_expr(expr)?);
+                        }
+                        _ => {
+                            self.generate_stmt(stmt)?;
+                            last_val = None;
+                        }
+                    }
+                }
+                Ok(last_val.unwrap_or_else(|| self.context.i64_type().const_int(0, false).into()))
+            }
         }
     }
 
@@ -905,31 +931,74 @@ impl<'ctx> CodeGenerator<'ctx> {
     fn generate_if(
         &mut self,
         condition: &Expr,
+        capture: &Option<String>,
         then_branch: &Stmt,
         else_branch: Option<&Stmt>,
     ) -> CodegenResult<()> {
         let function = self.current_function.unwrap();
 
         let cond_val = self.generate_expr(condition)?;
-        let zero = self.context.i64_type().const_int(0, false);
-        let cond_nonzero = self.builder.build_int_compare(
-            inkwell::IntPredicate::NE,
-            cond_val.into_int_value(),
-            zero,
-            "cond",
-        )?;
+
+        // Check if it's an optional type: struct { value, is_valid }
+        let is_valid = if let BasicValueEnum::StructValue(sv) = cond_val {
+            if sv.get_type().get_field_types().len() == 2 {
+                self.builder
+                    .build_extract_value(sv, 1, "is_valid")?
+                    .into_int_value()
+            } else {
+                let zero = self.context.i64_type().const_int(0, false);
+                self.builder.build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    cond_val.into_int_value(),
+                    zero,
+                    "cond",
+                )?
+            }
+        } else {
+            let zero = self.context.i64_type().const_int(0, false);
+            self.builder.build_int_compare(
+                inkwell::IntPredicate::NE,
+                cond_val.into_int_value(),
+                zero,
+                "cond",
+            )?
+        };
 
         let then_block = self.context.append_basic_block(function, "then");
         let else_block = self.context.append_basic_block(function, "else");
         let merge_block = self.context.append_basic_block(function, "ifcont");
 
         self.builder
-            .build_conditional_branch(cond_nonzero, then_block, else_block)?;
+            .build_conditional_branch(is_valid, then_block, else_block)?;
 
         // Then block
         self.builder.position_at_end(then_block);
+
+        // Handle capture
+        let mut old_var = None;
+        if let Some(name) = capture {
+            if let BasicValueEnum::StructValue(sv) = cond_val {
+                let val = self.builder.build_extract_value(sv, 0, "captured")?;
+                let alloca = self.builder.build_alloca(val.get_type(), name)?;
+                self.builder.build_store(alloca, val)?;
+
+                old_var = self.variables.insert(name.clone(), alloca);
+                self.variable_types
+                    .insert(name.clone(), self.llvm_type_to_lang(&val.get_type()));
+            }
+        }
+
         self.generate_stmt(then_branch)?;
         self.builder.build_unconditional_branch(merge_block)?;
+
+        // Restore variable if shadowed
+        if let Some(name) = capture {
+            if let Some(old) = old_var {
+                self.variables.insert(name.clone(), old);
+            } else {
+                self.variables.remove(name);
+            }
+        }
 
         // Else block
         self.builder.position_at_end(else_block);
@@ -944,8 +1013,103 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
+    /// Generate if expression
+    fn generate_expr_if(
+        &mut self,
+        condition: &Expr,
+        capture: &Option<String>,
+        then_branch: &Expr,
+        else_branch: &Expr,
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        let function = self.current_function.unwrap();
+
+        let cond_val = self.generate_expr(condition)?;
+
+        // Check if it's an optional type: struct { value, is_valid }
+        let is_valid = if let BasicValueEnum::StructValue(sv) = cond_val {
+            if sv.get_type().get_field_types().len() == 2 {
+                self.builder
+                    .build_extract_value(sv, 1, "is_valid")?
+                    .into_int_value()
+            } else {
+                let zero = self.context.i64_type().const_int(0, false);
+                self.builder.build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    cond_val.into_int_value(),
+                    zero,
+                    "cond",
+                )?
+            }
+        } else {
+            let zero = self.context.i64_type().const_int(0, false);
+            self.builder.build_int_compare(
+                inkwell::IntPredicate::NE,
+                cond_val.into_int_value(),
+                zero,
+                "cond",
+            )?
+        };
+
+        let then_block = self.context.append_basic_block(function, "then");
+        let else_block = self.context.append_basic_block(function, "else");
+        let merge_block = self.context.append_basic_block(function, "ifcont");
+
+        self.builder
+            .build_conditional_branch(is_valid, then_block, else_block)?;
+
+        // Then block
+        self.builder.position_at_end(then_block);
+
+        // Handle capture
+        let mut old_var = None;
+        if let Some(name) = capture {
+            if let BasicValueEnum::StructValue(sv) = cond_val {
+                let val = self.builder.build_extract_value(sv, 0, "captured")?;
+                let alloca = self.builder.build_alloca(val.get_type(), name)?;
+                self.builder.build_store(alloca, val)?;
+
+                old_var = self.variables.insert(name.clone(), alloca);
+                self.variable_types
+                    .insert(name.clone(), self.llvm_type_to_lang(&val.get_type()));
+            }
+        }
+
+        let then_val = self.generate_expr(then_branch)?;
+        let then_actual_block = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_block)?;
+
+        // Restore variable if shadowed
+        if let Some(name) = capture {
+            if let Some(old) = old_var {
+                self.variables.insert(name.clone(), old);
+            } else {
+                self.variables.remove(name);
+            }
+        }
+
+        // Else block
+        self.builder.position_at_end(else_block);
+        let else_val = self.generate_expr(else_branch)?;
+        let else_actual_block = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_block)?;
+
+        // Merge block
+        self.builder.position_at_end(merge_block);
+
+        // PHI node
+        let phi = self.builder.build_phi(then_val.get_type(), "ifphi")?;
+        phi.add_incoming(&[(&then_val, then_actual_block), (&else_val, else_actual_block)]);
+
+        Ok(phi.as_basic_value())
+    }
+
     /// Generate while loop
-    fn generate_while(&mut self, condition: &Expr, body: &Stmt) -> CodegenResult<()> {
+    fn generate_while(
+        &mut self,
+        condition: &Expr,
+        capture: &Option<String>,
+        body: &Stmt,
+    ) -> CodegenResult<()> {
         let function = self.current_function.unwrap();
 
         let cond_block = self.context.append_basic_block(function, "while_cond");
@@ -958,20 +1122,63 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Condition block
         self.builder.position_at_end(cond_block);
         let cond_val = self.generate_expr(condition)?;
-        let zero = self.context.i64_type().const_int(0, false);
-        let cond_nonzero = self.builder.build_int_compare(
-            inkwell::IntPredicate::NE,
-            cond_val.into_int_value(),
-            zero,
-            "while_cond",
-        )?;
+
+        // Check if it's an optional type: struct { value, is_valid }
+        let is_valid = if let BasicValueEnum::StructValue(sv) = cond_val {
+            if sv.get_type().get_field_types().len() == 2 {
+                self.builder
+                    .build_extract_value(sv, 1, "is_valid")?
+                    .into_int_value()
+            } else {
+                let zero = self.context.i64_type().const_int(0, false);
+                self.builder.build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    cond_val.into_int_value(),
+                    zero,
+                    "cond",
+                )?
+            }
+        } else {
+            let zero = self.context.i64_type().const_int(0, false);
+            self.builder.build_int_compare(
+                inkwell::IntPredicate::NE,
+                cond_val.into_int_value(),
+                zero,
+                "cond",
+            )?
+        };
+
         self.builder
-            .build_conditional_branch(cond_nonzero, body_block, end_block)?;
+            .build_conditional_branch(is_valid, body_block, end_block)?;
 
         // Body block
         self.builder.position_at_end(body_block);
+
+        // Handle capture
+        let mut old_var = None;
+        if let Some(name) = capture {
+            if let BasicValueEnum::StructValue(sv) = cond_val {
+                let val = self.builder.build_extract_value(sv, 0, "captured")?;
+                let alloca = self.builder.build_alloca(val.get_type(), name)?;
+                self.builder.build_store(alloca, val)?;
+
+                old_var = self.variables.insert(name.clone(), alloca);
+                self.variable_types
+                    .insert(name.clone(), self.llvm_type_to_lang(&val.get_type()));
+            }
+        }
+
         self.generate_stmt(body)?;
         self.builder.build_unconditional_branch(cond_block)?;
+
+        // Restore variable if shadowed
+        if let Some(name) = capture {
+            if let Some(old) = old_var {
+                self.variables.insert(name.clone(), old);
+            } else {
+                self.variables.remove(name);
+            }
+        }
 
         // End block
         self.builder.position_at_end(end_block);

@@ -271,6 +271,20 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// If expression
+    If {
+        condition: Box<Expr>,
+        /// Optional capture variable (e.g., if (opt) |data| { ... })
+        capture: Option<String>,
+        then_branch: Box<Expr>,
+        else_branch: Box<Expr>,
+        span: Span,
+    },
+    /// Block expression (a sequence of statements that evaluates to a value)
+    Block {
+        stmts: Vec<Stmt>,
+        span: Span,
+    },
 }
 
 /// Statement AST node

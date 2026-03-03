@@ -1,0 +1,26 @@
+fn main () {
+    {
+        const g: ?i32 = 432;
+        const z = if (g) |v| v else 10;
+    }
+
+    {
+        const g: ?i32 = 332;
+        const z = if (g) |v| {
+            const temp = v * 100;
+            temp + 30
+        } else 10;
+    }
+
+    {
+        const c: ?i32 = 332;
+        const z = if (c) |v| {
+            const temp = v * 100;
+            temp + 30
+        } else {
+            var c = 3 * 220;
+            c += 330;
+            c
+        };
+    }
+}

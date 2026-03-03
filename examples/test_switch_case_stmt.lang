@@ -1,0 +1,29 @@
+import "io"
+
+fn main() {
+    {
+        const f: ?i32 = 123;
+
+        switch (f) {
+            null => { 
+                io.println("null");
+            }
+            else => {
+                io.println("default");
+            }
+        }
+    }
+
+    {
+        const c = 123;
+
+        switch (c) {
+            case 123 => {
+                io.println("123");
+            }
+            else => {
+                io.println("default");
+            }
+        }
+    }
+}

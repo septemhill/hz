@@ -147,13 +147,33 @@ impl Parser {
 
     /// Try to match and consume a token without error
     fn match_token(&mut self, token: Token) -> bool {
-        if let Some(current) = self.tokens.peek(0) {
-            if std::mem::discriminant(&current.token) == std::mem::discriminant(&token) {
+        self.skip_whitespace();
+        if let Some(t) = self.current() {
+            if *t == token {
                 self.advance();
                 return true;
             }
         }
         false
+    }
+
+    /// Match any assignment operator and return the corresponding AssignOp
+    fn match_assign_op(&mut self) -> Option<AssignOp> {
+        self.skip_whitespace();
+        let token = self.current()?;
+        let op = match token {
+            Token::Assign => Some(AssignOp::Assign),
+            Token::PlusAssign => Some(AssignOp::AddAssign),
+            Token::MinusAssign => Some(AssignOp::SubAssign),
+            Token::StarAssign => Some(AssignOp::MulAssign),
+            Token::SlashAssign => Some(AssignOp::DivAssign),
+            _ => None,
+        };
+
+        if op.is_some() {
+            self.advance();
+        }
+        op
     }
 
     /// Peek at token without consuming
@@ -434,6 +454,7 @@ fn main() i64 {
             // ("examples/test_for_stmt.lang", true),
             ("examples/test_if_else_stmt.lang", true),
             ("examples/test_array.lang", true),
+            ("examples/test_optional.lang", true),
             // // These require struct/interface parsing fix - parser fails
             // ("examples/test_features.lang", false),
             // // These require pub keyword - parser doesn't handle it properly
@@ -1287,14 +1308,10 @@ impl Parser {
         self.advance(); // consume 'if'
 
         // Check for parenthesized condition: if (expr) ...
-        // The parentheses are part of the if syntax, not a tuple
         self.skip_whitespace();
         let condition = if self.match_token(Token::LParen) {
-            // Parse the expression inside the parentheses
             let cond = self.parse_expression()?;
             self.skip_whitespace();
-
-            // Expect closing parenthesis
             if !self.match_token(Token::RParen) {
                 return Err(ParseError {
                     message: "Expected ')' after if condition".to_string(),
@@ -1307,7 +1324,6 @@ impl Parser {
         };
 
         self.skip_whitespace();
-        // Check for capture: |data|
         let mut capture = None;
         if self.match_token(Token::Pipe) {
             if let Token::Ident(name) = self.current().cloned().ok_or_else(|| ParseError {
@@ -1329,7 +1345,6 @@ impl Parser {
         let then_branch = Box::new(self.parse_statement()?);
 
         let else_branch = if self.match_token(Token::Else) {
-            // Check for else if
             if let Token::If = self.current().cloned().unwrap_or(Token::Eof) {
                 Some(Box::new(self.parse_if_stmt()?))
             } else {
@@ -1346,6 +1361,76 @@ impl Parser {
             else_branch,
             span: Span { start: 0, end: 0 },
         })
+    }
+
+    /// Parse if expression
+    fn parse_if_expr(&mut self) -> Result<Expr, ParseError> {
+        self.advance(); // consume 'if'
+
+        self.skip_whitespace();
+        let condition = if self.match_token(Token::LParen) {
+            let cond = self.parse_expression()?;
+            self.skip_whitespace();
+            if !self.match_token(Token::RParen) {
+                return Err(ParseError {
+                    message: "Expected ')' after if condition".to_string(),
+                    location: self.current_token().map(|t| t.span.start),
+                });
+            }
+            cond
+        } else {
+            self.parse_expression()?
+        };
+
+        self.skip_whitespace();
+        let mut capture = None;
+        if self.match_token(Token::Pipe) {
+            if let Token::Ident(name) = self.current().cloned().ok_or_else(|| ParseError {
+                message: "Expected identifier after '|'".to_string(),
+                location: None,
+            })? {
+                capture = Some(name);
+                self.advance();
+                if !self.match_token(Token::Pipe) {
+                    return Err(ParseError {
+                        message: "Expected closing '|'".to_string(),
+                        location: self.current_token().map(|t| t.span.start),
+                    });
+                }
+            }
+        }
+
+        self.skip_whitespace();
+        let then_branch = self.parse_if_branch_expr()?;
+
+        self.skip_whitespace();
+        if !self.match_token(Token::Else) {
+            return Err(ParseError {
+                message: "Expected 'else' in if expression".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+        self.skip_whitespace();
+        let else_branch = self.parse_if_branch_expr()?;
+
+        Ok(Expr::If {
+            condition: Box::new(condition),
+            capture,
+            then_branch: Box::new(then_branch),
+            else_branch: Box::new(else_branch),
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    fn parse_if_branch_expr(&mut self) -> Result<Expr, ParseError> {
+        self.skip_whitespace();
+        if let Some(Token::LBrace) = self.current() {
+            let block = self.parse_block_stmt()?;
+            if let Stmt::Block { stmts, span } = block {
+                return Ok(Expr::Block { stmts, span });
+            }
+        }
+        self.parse_expression()
     }
 
     /// Parse while statement
@@ -1505,6 +1590,23 @@ impl Parser {
     fn parse_expr_stmt(&mut self) -> Result<Stmt, ParseError> {
         let expr = self.parse_expression()?;
         self.skip_whitespace();
+
+        // Check for assignment: target op value;
+        if let Expr::Ident(name, _) = &expr {
+            if let Some(op) = self.match_assign_op() {
+                let value = self.parse_expression()?;
+                self.skip_whitespace();
+                self.match_token(Token::Semicolon);
+
+                return Ok(Stmt::Assign {
+                    target: name.clone(),
+                    op,
+                    value,
+                    span: Span { start: 0, end: 0 },
+                });
+            }
+        }
+
         self.match_token(Token::Semicolon);
 
         Ok(Stmt::Expr {
@@ -1970,6 +2072,7 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Ident(name, Span { start: 0, end: 0 }))
             }
+            Token::If => self.parse_if_expr(),
             _ => Err(ParseError {
                 message: format!("Unexpected token: {:?}", token),
                 location: self.current_token().map(|t| t.span.start),
