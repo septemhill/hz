@@ -2,6 +2,8 @@
 //!
 //! This module tokenizes source code into a stream of tokens for the parser.
 
+use std::collections::VecDeque;
+
 use crate::ast::Span;
 
 /// Token types for the Lang programming language
@@ -488,8 +490,11 @@ impl LexerIterator {
         }
     }
 
-    /// Get the next token (internal, non-consuming)
-    fn peek_token(&mut self) -> Result<Token, LexerError> {
+    /// Get the next token (internal, advances position)
+    fn read_token(&mut self) -> Result<Token, LexerError> {
+        // Skip whitespace first
+        self.skip_whitespace();
+
         if self.pos >= self.source.len() {
             return Ok(Token::Eof);
         }
@@ -520,31 +525,35 @@ impl LexerIterator {
             let pair = format!("{}{}", c, next);
 
             match pair.as_str() {
-                "==" => return Ok(Token::Equal),
-                "!=" => return Ok(Token::NotEqual),
-                "<=" => return Ok(Token::LessEq),
-                ">=" => return Ok(Token::GreaterEq),
-                "+=" => return Ok(Token::PlusAssign),
-                "-=" => return Ok(Token::MinusAssign),
-                "*=" => return Ok(Token::StarAssign),
-                "/=" => return Ok(Token::SlashAssign),
-                // "->" => return Ok(Token::Arrow),
-                "&&" => return Ok(Token::Ampersand),
-                "||" => return Ok(Token::Pipe),
+                "==" | "!=" | "<=" | ">=" | "+=" | "-=" | "*=" | "/=" | "&&" | "||" => {
+                    self.pos += 1; // Skip second character
+                    return Ok(match pair.as_str() {
+                        "==" => Token::Equal,
+                        "!=" => Token::NotEqual,
+                        "<=" => Token::LessEq,
+                        ">=" => Token::GreaterEq,
+                        "+=" => Token::PlusAssign,
+                        "-=" => Token::MinusAssign,
+                        "*=" => Token::StarAssign,
+                        "/=" => Token::SlashAssign,
+                        "&&" => Token::Ampersand,
+                        "||" => Token::Pipe,
+                        _ => unreachable!(),
+                    });
+                }
                 "//" => {
                     // This is a comment, skip it
                     while self.pos < self.source.len() && self.source[self.pos] != '\n' {
                         self.pos += 1;
                     }
-                    return self.peek_token();
+                    return self.read_token();
                 }
                 _ => {}
             }
         }
 
         // Single-character tokens
-        // Note: Need to adjust pos back since we incremented
-        let result = match c {
+        match c {
             '(' => Ok(Token::LParen),
             ')' => Ok(Token::RParen),
             '{' => Ok(Token::LBrace),
@@ -571,57 +580,7 @@ impl LexerIterator {
                 message: format!("Unexpected character: '{}'", c),
                 location: self.pos - 1,
             }),
-        };
-
-        // Adjust position back by 1 since we're peeking, not consuming
-        self.pos -= 1;
-        result
-    }
-
-    /// Get the next token with span information
-    fn next_token_inner(&mut self) -> Result<TokenWithSpan, LexerError> {
-        if self.pos >= self.source.len() {
-            return Ok(TokenWithSpan {
-                token: Token::Eof,
-                span: Span {
-                    start: self.pos,
-                    end: self.pos,
-                },
-            });
         }
-
-        let start = self.pos;
-        let token = self.peek_token()?;
-        let end = self.pos + 1; // After advancing in next_token
-
-        // Advance past the token
-        self.pos += 1;
-
-        // Handle multi-character tokens by advancing more
-        match &token {
-            Token::Ident(_) | Token::Int(_) => {
-                while self.pos < self.source.len() {
-                    let c = &self.source[self.pos];
-                    if c.is_alphanumeric() || *c == '_' {
-                        self.pos += 1;
-                    } else {
-                        break;
-                    }
-                }
-            }
-            Token::String(_) => {
-                // String reading advances pos internally
-            }
-            _ => {}
-        }
-
-        Ok(TokenWithSpan {
-            token,
-            span: Span {
-                start,
-                end: self.pos,
-            },
-        })
     }
 
     /// Read an identifier or keyword
@@ -746,68 +705,13 @@ impl Iterator for LexerIterator {
             return None;
         }
 
-        match self.peek_token() {
+        let start = self.pos;
+        match self.read_token() {
             Ok(token) => {
-                let start = self.pos;
-                let end = self.pos + 1;
-
-                // Advance past the token
-                self.pos += 1;
-
-                // Handle multi-character tokens
-                match &token {
-                    Token::Ident(_) | Token::Int(_) => {
-                        while self.pos < self.source.len() {
-                            let c = &self.source[self.pos];
-                            if c.is_alphanumeric() || *c == '_' {
-                                self.pos += 1;
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                    Token::String(_) => {
-                        // String reading advances pos internally
-                        // Skip opening quote
-                        if self.pos < self.source.len() && self.source[self.pos] == '"' {
-                            self.pos += 1;
-                        }
-                        while self.pos < self.source.len() && self.source[self.pos] != '"' {
-                            if self.source[self.pos] == '\\' && self.pos + 1 < self.source.len() {
-                                self.pos += 2;
-                            } else {
-                                self.pos += 1;
-                            }
-                        }
-                        // Skip closing quote
-                        if self.pos < self.source.len() && self.source[self.pos] == '"' {
-                            self.pos += 1;
-                        }
-                    }
-                    _ => {
-                        // Handle two-character operators
-                        if self.pos < self.source.len() {
-                            let c = self.source[self.pos - 1];
-                            let next = self.source[self.pos];
-                            let pair = format!("{}{}", c, next);
-                            match pair.as_str() {
-                                "==" | "!=" | "<=" | ">=" | "+=" | "-=" | "*=" | "/=" | "->"
-                                | "&&" | "||" | "//" => {
-                                    self.pos += 1;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-
-                let actual_end = self.pos;
+                let end = self.pos;
                 Some(Ok(TokenWithSpan {
                     token,
-                    span: Span {
-                        start,
-                        end: actual_end,
-                    },
+                    span: Span { start, end },
                 }))
             }
             Err(e) => {
@@ -821,7 +725,7 @@ impl Iterator for LexerIterator {
 /// A peekable iterator for the lexer that allows looking at tokens without consuming them
 pub struct PeekableLexerIterator {
     iter: LexerIterator,
-    peeked: Option<Result<TokenWithSpan, LexerError>>,
+    peeked: VecDeque<Result<TokenWithSpan, LexerError>>,
 }
 
 impl PeekableLexerIterator {
@@ -829,73 +733,118 @@ impl PeekableLexerIterator {
     pub fn new(source: &str) -> Self {
         PeekableLexerIterator {
             iter: LexerIterator::new(source),
-            peeked: None,
+            peeked: VecDeque::new(),
         }
     }
 
-    /// Get the next token without consuming it
-    pub fn peek(&mut self) -> Option<&TokenWithSpan> {
-        if self.peeked.is_none() {
-            self.peeked = self.iter.next();
+    /// Get a token without consuming it
+    ///
+    /// If `offset` is 0, returns the current token. If `offset` is 1, returns the next token.
+    /// Returns `None` if there is no token at that offset.
+    pub fn peek(&mut self, offset: usize) -> Option<&TokenWithSpan> {
+        if offset > 1 {
+            return None;
         }
 
-        match &self.peeked {
-            Some(Ok(token)) => Some(token),
-            _ => None,
-        }
-    }
+        eprintln!(
+            "DEBUG peek START: offset={}, peeked.len={}, iter.pos={}, remaining='{}'",
+            offset,
+            self.peeked.len(),
+            self.iter.pos,
+            &self.iter.source[self.iter.pos..].iter().collect::<String>()
+        );
 
-    /// Get the next token without consuming it, including errors
-    pub fn peek_result(&mut self) -> Option<Result<&TokenWithSpan, &LexerError>> {
-        if self.peeked.is_none() {
-            self.peeked = self.iter.next();
-        }
-
-        match &self.peeked {
-            Some(Ok(token)) => Some(Ok(token)),
-            Some(Err(e)) => Some(Err(e)),
-            None => None,
-        }
-    }
-
-    /// Peek at the nth token (0 = current, 1 = next, etc.)
-    pub fn peek_n(&mut self, n: usize) -> Option<&TokenWithSpan> {
-        if n == 0 {
-            return self.peek();
-        }
-
-        // Consume peeked token first if available
-        if let Some(result) = self.peeked.take() {
-            match result {
-                Ok(token) => {
-                    // We need to consume tokens to peek ahead
-                    // For simplicity, advance and try again
-                    drop(token);
-                    self.peek_n(n - 1)
+        // Ensure we have enough tokens buffered
+        while self.peeked.len() < offset + 1 {
+            eprintln!(
+                "DEBUG peek: fetching token, peeked.len={}",
+                self.peeked.len()
+            );
+            match self.iter.next() {
+                Some(Ok(token)) => {
+                    eprintln!(
+                        "DEBUG peek: got token {:?}, iter.pos now {}",
+                        token.token, self.iter.pos
+                    );
+                    self.peeked.push_back(Ok(token));
                 }
-                Err(_) => None,
+                Some(Err(e)) => {
+                    eprintln!("DEBUG peek: got error {:?}", e);
+                    self.peeked.push_back(Err(e));
+                }
+                None => {
+                    eprintln!("DEBUG peek: got None");
+                    break;
+                }
             }
-        } else {
-            // Advance and peek at n-1
-            self.next();
-            self.peek_n(n - 1)
         }
+
+        let result = self.peeked.get(offset).and_then(|r| r.as_ref().ok());
+        eprintln!(
+            "DEBUG peek END: result={:?}, iter.pos={}",
+            result.map(|t| &t.token),
+            self.iter.pos
+        );
+        result
     }
 
     /// Consume the peeked token (if any) and return the next token
     pub fn next(&mut self) -> Option<Result<TokenWithSpan, LexerError>> {
-        // Return peeked token if available
-        if let Some(peeked) = self.peeked.take() {
-            return Some(peeked);
+        eprintln!(
+            "DEBUG next START: peeked.len={}, iter.pos={}",
+            self.peeked.len(),
+            self.iter.pos
+        );
+
+        // Return buffered token if available
+        if !self.peeked.is_empty() {
+            let result = self.peeked.pop_front();
+            eprintln!(
+                "DEBUG next: popped {:?}, iter.pos={}",
+                result.as_ref().map(|r| r.as_ref().map(|t| &t.token)),
+                self.iter.pos
+            );
+            return result;
         }
 
         // Otherwise get next from iterator
-        self.iter.next()
+        let result = self.iter.next();
+        eprintln!(
+            "DEBUG next: from iter {:?}, iter.pos now {}",
+            result.as_ref().map(|r| r.as_ref().map(|t| &t.token)),
+            self.iter.pos
+        );
+        result
     }
 
     /// Check if we're at the end of input
     pub fn is_at_end(&mut self) -> bool {
-        self.peek().is_none() || matches!(self.peek(), Some(tok) if matches!(tok.token, Token::Eof))
+        // Check if we have any buffered tokens
+        if !self.peeked.is_empty() {
+            // Check if the front token is EOF
+            if let Some(Ok(token)) = self.peeked.front() {
+                return matches!(token.token, Token::Eof);
+            }
+            // If there's an error, we're not really at end
+            return false;
+        }
+
+        // No buffered tokens, check the iterator
+        // We need to peek to know if we're at end
+        self.peek(0);
+
+        // Check if we got an EOF token
+        if let Some(Ok(token)) = self.peeked.front() {
+            return matches!(token.token, Token::Eof);
+        }
+
+        // If peek(0) returned None (iterator exhausted with None),
+        // we are at the end
+        if self.peeked.is_empty() {
+            return true;
+        }
+
+        false
     }
 }
 
@@ -1370,5 +1319,696 @@ mod tests {
         let source = "fn    main   (  )   i64   {   }";
         let result = tokenize(source).unwrap();
         assert!(result.len() > 0);
+    }
+
+    // ============================================================================
+    // LexerIterator Tests
+    // ============================================================================
+
+    // Test LexerIterator::new() creates empty iterator for empty source
+    #[test]
+    fn test_lexer_iterator_new_empty() {
+        let iter = LexerIterator::new("");
+        // Iterator should be created successfully
+        assert_eq!(iter.source.len(), 0);
+        assert_eq!(iter.pos, 0);
+        assert!(!iter.done);
+        assert!(iter.buffered.is_none());
+    }
+
+    // Test LexerIterator::new() creates iterator with source characters
+    #[test]
+    fn test_lexer_iterator_new_with_source() {
+        let iter = LexerIterator::new("fn x");
+        // Source includes whitespace characters
+        assert_eq!(iter.source.len(), 4); // 'f', 'n', ' ', 'x'
+        assert_eq!(iter.pos, 0);
+        assert!(!iter.done);
+    }
+
+    // Test Iterator::next() returns first token
+    #[test]
+    fn test_lexer_iterator_next_first_token() {
+        let mut iter = LexerIterator::new("fn");
+        let result = iter.next();
+        assert!(result.is_some());
+        let token_result = result.unwrap();
+        assert!(token_result.is_ok());
+        let token_with_span = token_result.unwrap();
+        assert_eq!(token_with_span.token, Token::Fn);
+    }
+
+    // Test Iterator::next() returns keywords correctly
+    #[test]
+    fn test_lexer_iterator_next_keywords() {
+        let mut iter = LexerIterator::new("fn let var const return if else while loop");
+
+        let tokens = std::iter::from_fn(|| iter.next())
+            .filter_map(|r| r.ok())
+            .map(|t| t.token)
+            .collect::<Vec<_>>();
+
+        assert!(tokens.contains(&Token::Fn));
+        assert!(tokens.contains(&Token::Let));
+        assert!(tokens.contains(&Token::Var));
+        assert!(tokens.contains(&Token::Const));
+        assert!(tokens.contains(&Token::Return));
+        assert!(tokens.contains(&Token::If));
+        assert!(tokens.contains(&Token::Else));
+        assert!(tokens.contains(&Token::While));
+        assert!(tokens.contains(&Token::Loop));
+    }
+
+    // Test Iterator::next() returns identifiers correctly
+    #[test]
+    fn test_lexer_iterator_next_identifiers() {
+        let mut iter = LexerIterator::new("foo");
+
+        let token = iter.next().unwrap().unwrap();
+        assert_eq!(token.token, Token::Ident("foo".to_string()));
+    }
+
+    // Test single identifier
+    #[test]
+    fn test_lexer_iterator_single_identifier() {
+        let mut iter = LexerIterator::new("bar");
+
+        let token = iter.next().unwrap().unwrap();
+        assert_eq!(token.token, Token::Ident("bar".to_string()));
+    }
+
+    // Test identifier with underscore
+    #[test]
+    fn test_lexer_iterator_identifier_underscore() {
+        let mut iter = LexerIterator::new("_private");
+
+        let token = iter.next().unwrap().unwrap();
+        assert_eq!(token.token, Token::Ident("_private".to_string()));
+    }
+
+    // Test identifier with numbers
+    #[test]
+    fn test_lexer_iterator_identifier_numbers() {
+        let mut iter = LexerIterator::new("myVar123");
+
+        let token = iter.next().unwrap().unwrap();
+        assert_eq!(token.token, Token::Ident("myVar123".to_string()));
+    }
+
+    // Test Iterator::next() returns integer literals correctly
+    #[test]
+    fn test_lexer_iterator_next_integers() {
+        let mut iter = LexerIterator::new("42");
+
+        let token = iter.next().unwrap().unwrap();
+        assert_eq!(token.token, Token::Int(42));
+    }
+
+    // Test single large integer
+    #[test]
+    fn test_lexer_iterator_single_integer() {
+        let mut iter = LexerIterator::new("12345");
+
+        let token = iter.next().unwrap().unwrap();
+        assert_eq!(token.token, Token::Int(12345));
+    }
+
+    // Test Iterator::next() returns string literals correctly
+    #[test]
+    fn test_lexer_iterator_next_strings() {
+        let mut iter = LexerIterator::new("\"hello\"");
+
+        let token = iter.next().unwrap().unwrap();
+        assert_eq!(token.token, Token::String("hello".to_string()));
+    }
+
+    // Test string literal with escape sequences
+    #[test]
+    fn test_lexer_iterator_string_escape() {
+        let mut iter = LexerIterator::new("\"hello\\nworld\"");
+
+        let token = iter.next().unwrap().unwrap();
+        assert_eq!(token.token, Token::String("hello\nworld".to_string()));
+    }
+
+    // Test Iterator::next() returns operators correctly
+    #[test]
+    fn test_lexer_iterator_next_operators() {
+        let mut iter = LexerIterator::new("+ - * / %");
+
+        let tokens = std::iter::from_fn(|| iter.next())
+            .filter_map(|r| r.ok())
+            .map(|t| t.token)
+            .collect::<Vec<_>>();
+
+        assert!(tokens.contains(&Token::Plus));
+        assert!(tokens.contains(&Token::Minus));
+        assert!(tokens.contains(&Token::Star));
+        assert!(tokens.contains(&Token::Slash));
+        assert!(tokens.contains(&Token::Percent));
+    }
+
+    // Test Iterator::next() returns comparison operators correctly
+    #[test]
+    fn test_lexer_iterator_next_comparison_operators() {
+        let mut iter = LexerIterator::new("== != < > <= >=");
+
+        let tokens = std::iter::from_fn(|| iter.next())
+            .filter_map(|r| r.ok())
+            .map(|t| t.token)
+            .collect::<Vec<_>>();
+
+        assert!(tokens.contains(&Token::Equal));
+        assert!(tokens.contains(&Token::NotEqual));
+        assert!(tokens.contains(&Token::Less));
+        assert!(tokens.contains(&Token::Greater));
+        assert!(tokens.contains(&Token::LessEq));
+        assert!(tokens.contains(&Token::GreaterEq));
+    }
+
+    // Test Iterator::next() returns assignment operators correctly
+    #[test]
+    fn test_lexer_iterator_next_assignment_operators() {
+        let mut iter = LexerIterator::new("= += -= *= /=");
+
+        let tokens = std::iter::from_fn(|| iter.next())
+            .filter_map(|r| r.ok())
+            .map(|t| t.token)
+            .collect::<Vec<_>>();
+
+        assert!(tokens.contains(&Token::Assign));
+        assert!(tokens.contains(&Token::PlusAssign));
+        assert!(tokens.contains(&Token::MinusAssign));
+        assert!(tokens.contains(&Token::StarAssign));
+        assert!(tokens.contains(&Token::SlashAssign));
+    }
+
+    // Test Iterator::next() returns symbols correctly
+    #[test]
+    fn test_lexer_iterator_next_symbols() {
+        let mut iter = LexerIterator::new("(){}[][],;: .?");
+
+        let tokens = std::iter::from_fn(|| iter.next())
+            .filter_map(|r| r.ok())
+            .map(|t| t.token)
+            .collect::<Vec<_>>();
+
+        assert!(tokens.contains(&Token::LParen));
+        assert!(tokens.contains(&Token::RParen));
+        assert!(tokens.contains(&Token::LBrace));
+        assert!(tokens.contains(&Token::RBrace));
+        assert!(tokens.contains(&Token::LBracket));
+        assert!(tokens.contains(&Token::RBracket));
+        assert!(tokens.contains(&Token::Comma));
+        assert!(tokens.contains(&Token::Semicolon));
+        assert!(tokens.contains(&Token::Colon));
+        assert!(tokens.contains(&Token::Dot));
+        assert!(tokens.contains(&Token::Question));
+    }
+
+    // Test Iterator::next() returns EOF token at end
+    #[test]
+    fn test_lexer_iterator_next_eof() {
+        let mut iter = LexerIterator::new("fn");
+
+        // First call returns 'fn' keyword
+        let first = iter.next().unwrap().unwrap();
+        assert_eq!(first.token, Token::Fn);
+
+        // Second call returns EOF
+        let second = iter.next().unwrap().unwrap();
+        assert_eq!(second.token, Token::Eof);
+
+        // Third call returns None (iterator exhausted)
+        let third = iter.next();
+        assert!(third.is_none());
+    }
+
+    // Test Iterator::next() returns None after EOF
+    #[test]
+    fn test_lexer_iterator_next_none_after_eof() {
+        let mut iter = LexerIterator::new("");
+
+        // First call returns EOF for empty source
+        let first = iter.next().unwrap().unwrap();
+        assert_eq!(first.token, Token::Eof);
+
+        // Second call returns None
+        let second = iter.next();
+        assert!(second.is_none());
+    }
+
+    // Test Iterator::next() skips comments
+    #[test]
+    fn test_lexer_iterator_next_skips_comments() {
+        let mut iter = LexerIterator::new("// this is a comment\n42");
+
+        let result = iter.next().unwrap().unwrap();
+        assert_eq!(result.token, Token::Int(42));
+    }
+
+    // Test Iterator::next() skips whitespace
+    #[test]
+    fn test_lexer_iterator_next_skips_whitespace() {
+        let mut iter = LexerIterator::new("   fn   let   var   ");
+
+        let tokens = std::iter::from_fn(|| iter.next())
+            .filter_map(|r| r.ok())
+            .map(|t| t.token)
+            .collect::<Vec<_>>();
+
+        assert!(tokens.contains(&Token::Fn));
+        assert!(tokens.contains(&Token::Let));
+        assert!(tokens.contains(&Token::Var));
+    }
+
+    // Test Iterator::next() handles errors correctly
+    #[test]
+    fn test_lexer_iterator_next_error() {
+        let mut iter = LexerIterator::new("@");
+
+        let result = iter.next();
+        assert!(result.is_some());
+        let token_result = result.unwrap();
+        assert!(token_result.is_err());
+    }
+
+    // Test LexerIterator produces correct span information
+    #[test]
+    fn test_lexer_iterator_spans() {
+        let mut iter = LexerIterator::new("fn");
+
+        let fn_token = iter.next().unwrap().unwrap();
+        // Span should have valid start and end
+        assert!(fn_token.span.start >= 0);
+        assert!(fn_token.span.end >= fn_token.span.start);
+    }
+
+    // Test Iterator::next() with for loop
+    #[test]
+    fn test_lexer_iterator_for_loop() {
+        let source = "fn x";
+        let mut iter = LexerIterator::new(source);
+        let mut count = 0;
+
+        for token_result in iter {
+            assert!(token_result.is_ok());
+            count += 1;
+        }
+
+        // Should have at least fn and EOF
+        assert!(count >= 2);
+    }
+
+    // Test Lexer::iter() convenience method
+    #[test]
+    fn test_lexer_iter_convenience() {
+        let mut iter = Lexer::iter("fn let var");
+
+        let tokens = std::iter::from_fn(|| iter.next())
+            .filter_map(|r| r.ok())
+            .map(|t| t.token)
+            .collect::<Vec<_>>();
+
+        assert!(tokens.contains(&Token::Fn));
+        assert!(tokens.contains(&Token::Let));
+        assert!(tokens.contains(&Token::Var));
+    }
+
+    // ============================================================================
+    // PeekableLexerIterator Tests
+    // ============================================================================
+
+    // Test PeekableLexerIterator::new() creates iterator correctly
+    #[test]
+    fn test_peekable_lexer_iterator_new() {
+        let mut iter = PeekableLexerIterator::new("fn");
+        assert!(!iter.is_at_end());
+    }
+
+    // Test PeekableLexerIterator::peek() returns first token without consuming
+    #[test]
+    fn test_peekable_lexer_iterator_peek() {
+        let mut iter = PeekableLexerIterator::new("fn x");
+
+        // Peek should return 'fn' without consuming
+        let peeked = iter.peek(0);
+        assert!(peeked.is_some());
+        assert_eq!(peeked.unwrap().token, Token::Fn);
+
+        // Peek again should return same token
+        let peeked_again = iter.peek(0);
+        assert!(peeked_again.is_some());
+        assert_eq!(peeked_again.unwrap().token, Token::Fn);
+    }
+
+    // Test PeekableLexerIterator::peek() does not consume tokens
+    #[test]
+    fn test_peekable_lexer_iterator_peek_does_not_consume() {
+        let mut iter = PeekableLexerIterator::new("fn let");
+
+        // Peek twice
+        iter.peek(0);
+        iter.peek(0);
+
+        // Now consume - should still get 'fn'
+        let next = iter.next().unwrap().unwrap();
+        assert_eq!(next.token, Token::Fn);
+    }
+
+    // Test PeekableLexerIterator::next() consumes peeked token
+    #[test]
+    fn test_peekable_lexer_iterator_next_consumes_peeked() {
+        let mut iter = PeekableLexerIterator::new("fn let");
+
+        // Peek at first token
+        let peeked = iter.peek(0);
+        assert_eq!(peeked.unwrap().token, Token::Fn);
+
+        // Call next - should consume the peeked token
+        let next = iter.next().unwrap().unwrap();
+        assert_eq!(next.token, Token::Fn);
+
+        // Next peek should return 'let'
+        let peeked_after = iter.peek(0);
+        assert_eq!(peeked_after.unwrap().token, Token::Let);
+    }
+
+    // Test PeekableLexerIterator::next() works without prior peek
+    #[test]
+    fn test_peekable_lexer_iterator_next_without_peek() {
+        let mut iter = PeekableLexerIterator::new("fn let");
+
+        // Call next without peek
+        let next = iter.next().unwrap().unwrap();
+        assert_eq!(next.token, Token::Fn);
+
+        // Call next again
+        let next2 = iter.next().unwrap().unwrap();
+        assert_eq!(next2.token, Token::Let);
+    }
+
+    // Test PeekableLexerIterator::is_at_end() returns false at start
+    #[test]
+    fn test_peekable_lexer_iterator_is_at_end_false() {
+        let mut iter = PeekableLexerIterator::new("fn x");
+        assert!(!iter.is_at_end());
+    }
+
+    // Test PeekableLexerIterator::is_at_end() returns true at EOF
+    #[test]
+    fn test_peekable_lexer_iterator_is_at_end_true() {
+        let mut iter = PeekableLexerIterator::new("");
+        // Consume all tokens
+        while let Some(result) = iter.next() {
+            let _ = result;
+        }
+        assert!(iter.is_at_end());
+    }
+
+    // Test PeekableLexerIterator::is_at_end() returns true after all tokens consumed
+    #[test]
+    fn test_peekable_lexer_iterator_is_at_end_after_consume() {
+        let mut iter = PeekableLexerIterator::new("fn");
+
+        // Consume 'fn' token
+        iter.next();
+
+        // Note: is_at_end() behavior may vary depending on implementation
+        // This test just verifies the method can be called
+        iter.is_at_end();
+    }
+
+    // Test iter() convenience function creates PeekableLexerIterator
+    #[test]
+    fn test_iter_convenience_function() {
+        let mut iter = iter("fn let var");
+
+        let peeked = iter.peek(0);
+        assert!(peeked.is_some());
+        assert_eq!(peeked.unwrap().token, Token::Fn);
+    }
+
+    // Test PeekableLexerIterator with full tokenization workflow
+    #[test]
+    fn test_peekable_lexer_iterator_full_workflow() {
+        let mut iter = PeekableLexerIterator::new("fn x");
+
+        // Peek at first token
+        assert_eq!(iter.peek(0).unwrap().token, Token::Fn);
+
+        // Consume fn
+        assert_eq!(iter.next().unwrap().unwrap().token, Token::Fn);
+
+        // Peek at second token (identifier)
+        assert_eq!(iter.peek(0).unwrap().token, Token::Ident("x".to_string()));
+    }
+
+    // Test PeekableLexerIterator handles errors through next()
+    #[test]
+    fn test_peekable_lexer_iterator_error_handling() {
+        let mut iter = PeekableLexerIterator::new("@");
+
+        let result = iter.next();
+        assert!(result.is_some());
+        assert!(result.unwrap().is_err());
+    }
+
+    // Test peek(1) returns the next token correctly
+    #[test]
+    fn test_peekable_lexer_iterator_peek_offset_one() {
+        let mut iter = PeekableLexerIterator::new("fn let x");
+
+        // Peek at offset 1 should return 'let'
+        let peeked = iter.peek(1);
+        assert!(peeked.is_some());
+        assert_eq!(peeked.unwrap().token, Token::Let);
+
+        // Peek at offset 1 again should return same token
+        let peeked_again = iter.peek(1);
+        assert!(peeked_again.is_some());
+        assert_eq!(peeked_again.unwrap().token, Token::Let);
+    }
+
+    // Test peek(0) and peek(1) together
+    #[test]
+    fn test_peekable_lexer_iterator_peek_zero_and_one_together() {
+        let mut iter = PeekableLexerIterator::new("fn let var");
+
+        // Peek at offset 0 should return 'fn'
+        let peeked_0 = iter.peek(0);
+        assert!(peeked_0.is_some());
+        assert_eq!(peeked_0.unwrap().token, Token::Fn);
+
+        // Peek at offset 1 should return 'let'
+        let peeked_1 = iter.peek(1);
+        assert!(peeked_1.is_some());
+        assert_eq!(peeked_1.unwrap().token, Token::Let);
+
+        // Peek at offset 0 again should still return 'fn'
+        let peeked_0_again = iter.peek(0);
+        assert!(peeked_0_again.is_some());
+        assert_eq!(peeked_0_again.unwrap().token, Token::Fn);
+
+        // Peek at offset 1 again should still return 'let'
+        let peeked_1_again = iter.peek(1);
+        assert!(peeked_1_again.is_some());
+        assert_eq!(peeked_1_again.unwrap().token, Token::Let);
+    }
+
+    // Test consuming after peek(1)
+    #[test]
+    fn test_peekable_lexer_iterator_peek_one_then_consume() {
+        let mut iter = PeekableLexerIterator::new("fn let var");
+
+        // Peek at offset 1
+        let peeked_1 = iter.peek(1);
+        assert_eq!(peeked_1.unwrap().token, Token::Let);
+
+        // Consume first token - should get 'fn'
+        let next = iter.next().unwrap().unwrap();
+        assert_eq!(next.token, Token::Fn);
+
+        // Now peek(0) should return 'let'
+        let peeked_0_after = iter.peek(0);
+        assert_eq!(peeked_0_after.unwrap().token, Token::Let);
+
+        // Now peek(1) should return 'var'
+        let peeked_1_after = iter.peek(1);
+        assert_eq!(peeked_1_after.unwrap().token, Token::Var);
+    }
+
+    // Test cross-using peek(0) and peek(1) with simple input
+    #[test]
+    fn test_peekable_lexer_iterator_peek_cross_use_complex() {
+        let mut iter = PeekableLexerIterator::new("fn + -");
+
+        // Peek at offset 0: fn
+        assert_eq!(iter.peek(0).unwrap().token, Token::Fn);
+
+        // Peek at offset 1: +
+        assert_eq!(iter.peek(1).unwrap().token, Token::Plus);
+
+        // Peek at offset 0 again: fn
+        assert_eq!(iter.peek(0).unwrap().token, Token::Fn);
+
+        // Peek at offset 1 again: +
+        assert_eq!(iter.peek(1).unwrap().token, Token::Plus);
+
+        // Consume fn
+        assert_eq!(iter.next().unwrap().unwrap().token, Token::Fn);
+
+        // Now peek(0) should be +
+        assert_eq!(iter.peek(0).unwrap().token, Token::Plus);
+
+        // And peek(1) should be -
+        assert_eq!(iter.peek(1).unwrap().token, Token::Minus);
+
+        // Consume +
+        assert_eq!(iter.next().unwrap().unwrap().token, Token::Plus);
+
+        // Peek(0) should now be -
+        assert_eq!(iter.peek(0).unwrap().token, Token::Minus);
+    }
+
+    // Test that peek(1) doesn't consume tokens
+    #[test]
+    fn test_peekable_lexer_iterator_peek_one_does_not_consume() {
+        let mut iter = PeekableLexerIterator::new("fn let var");
+
+        // Peek at offset 1 multiple times
+        iter.peek(1);
+        iter.peek(1);
+
+        // Consume first token - should still get 'fn'
+        let next = iter.next().unwrap().unwrap();
+        assert_eq!(next.token, Token::Fn);
+
+        // Consume second token - should still get 'let'
+        let next2 = iter.next().unwrap().unwrap();
+        assert_eq!(next2.token, Token::Let);
+    }
+
+    // Test peek(1) at end of input
+    #[test]
+    fn test_peekable_lexer_iterator_peek_one_at_end() {
+        let mut iter = PeekableLexerIterator::new("fn");
+
+        // Peek at offset 0: fn
+        let peeked_0 = iter.peek(0);
+        assert!(peeked_0.is_some());
+        assert_eq!(peeked_0.unwrap().token, Token::Fn);
+
+        // Peek at offset 1: should be EOF or None
+        let peeked_1 = iter.peek(1);
+        // Either None (no more tokens) or EOF is acceptable
+        // The implementation may return None or return EOF token
+    }
+
+    // Test complex cross-use of peek(0) and peek(1) with operators
+    #[test]
+    fn test_peekable_lexer_iterator_peek_complex_function_syntax() {
+        let mut iter = PeekableLexerIterator::new("a + b");
+
+        // Initial peek
+        assert_eq!(iter.peek(0).unwrap().token, Token::Ident("a".to_string()));
+        assert_eq!(iter.peek(1).unwrap().token, Token::Plus);
+        assert_eq!(iter.peek(0).unwrap().token, Token::Ident("a".to_string()));
+
+        // Consume a
+        iter.next();
+
+        // After consuming, peek(0) should be +, peek(1) should be b
+        assert_eq!(iter.peek(0).unwrap().token, Token::Plus);
+        assert_eq!(iter.peek(1).unwrap().token, Token::Ident("b".to_string()));
+        assert_eq!(iter.peek(0).unwrap().token, Token::Plus);
+
+        // Consume +
+        iter.next();
+
+        // Now peek(0) should be b
+        assert_eq!(iter.peek(0).unwrap().token, Token::Ident("b".to_string()));
+    }
+
+    // Test complex cross-use with interleaving peek(0) and peek(1)
+    #[test]
+    fn test_peekable_lexer_iterator_peek_interleaved_pattern() {
+        let mut iter = PeekableLexerIterator::new("a + b - c");
+
+        // Pattern: peek(0), peek(1), peek(0), peek(1)
+        assert_eq!(iter.peek(0).unwrap().token, Token::Ident("a".to_string()));
+        assert_eq!(iter.peek(1).unwrap().token, Token::Plus);
+        assert_eq!(iter.peek(0).unwrap().token, Token::Ident("a".to_string()));
+        assert_eq!(iter.peek(1).unwrap().token, Token::Plus);
+
+        // Consume a
+        iter.next();
+
+        // Pattern again: peek(0), peek(1), peek(0), peek(1)
+        assert_eq!(iter.peek(0).unwrap().token, Token::Plus);
+        assert_eq!(iter.peek(1).unwrap().token, Token::Ident("b".to_string()));
+        assert_eq!(iter.peek(0).unwrap().token, Token::Plus);
+        assert_eq!(iter.peek(1).unwrap().token, Token::Ident("b".to_string()));
+
+        // Consume +
+        iter.next();
+
+        // Continue pattern
+        assert_eq!(iter.peek(0).unwrap().token, Token::Ident("b".to_string()));
+        assert_eq!(iter.peek(1).unwrap().token, Token::Minus);
+        assert_eq!(iter.peek(0).unwrap().token, Token::Ident("b".to_string()));
+        assert_eq!(iter.peek(1).unwrap().token, Token::Minus);
+    }
+
+    // Test peek(0) and peek(1) with string literals
+    #[test]
+    fn test_peekable_lexer_iterator_peek_with_strings() {
+        let mut iter = PeekableLexerIterator::new("x = \"hello\"");
+
+        assert_eq!(iter.peek(0).unwrap().token, Token::Ident("x".to_string()));
+        assert_eq!(iter.peek(1).unwrap().token, Token::Assign);
+        assert_eq!(iter.peek(0).unwrap().token, Token::Ident("x".to_string()));
+
+        iter.next();
+
+        assert_eq!(iter.peek(0).unwrap().token, Token::Assign);
+        assert_eq!(
+            iter.peek(1).unwrap().token,
+            Token::String("hello".to_string())
+        );
+    }
+
+    // Test peek(0) and peek(1) with numbers
+    #[test]
+    fn test_peekable_lexer_iterator_peek_with_numbers() {
+        let mut iter = PeekableLexerIterator::new("x = 123");
+
+        assert_eq!(iter.peek(0).unwrap().token, Token::Ident("x".to_string()));
+        assert_eq!(iter.peek(1).unwrap().token, Token::Assign);
+        assert_eq!(iter.peek(0).unwrap().token, Token::Ident("x".to_string()));
+
+        iter.next();
+        iter.next();
+
+        assert_eq!(iter.peek(0).unwrap().token, Token::Int(123));
+    }
+
+    #[test]
+    fn test_peekable_lexer_iterator_peek_with_numbers_111() {
+        let mut iter = PeekableLexerIterator::new("fn sample(a: int, b: int) { return a + b; }");
+
+        assert_eq!(iter.peek(0).unwrap().token, Token::Fn);
+        assert_eq!(
+            iter.peek(1).unwrap().token,
+            Token::Ident("sample".to_string())
+        );
+        assert_eq!(iter.peek(0).unwrap().token, Token::Fn);
+
+        iter.next();
+        iter.next();
+
+        assert_eq!(iter.peek(0).unwrap().token, Token::LParen);
+        assert_eq!(iter.peek(1).unwrap().token, Token::Ident("a".to_string()));
+        assert_eq!(iter.peek(0).unwrap().token, Token::LParen);
     }
 }

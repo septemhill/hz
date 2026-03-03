@@ -10,7 +10,7 @@ fn main() i64 {
 
     http.head();
 
-    m.max(123,343);
+    m.max(123, 343);
     
     return 0;
 }

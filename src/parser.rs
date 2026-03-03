@@ -104,12 +104,12 @@ impl Parser {
 
     /// Get current token without advancing (mutable version)
     fn current_token(&mut self) -> Option<&TokenWithSpan> {
-        self.tokens.peek()
+        self.tokens.peek(0)
     }
 
     /// Get current token value (for internal use with mutable reference)
     fn current(&mut self) -> Option<&Token> {
-        self.tokens.peek().map(|t| &t.token)
+        self.tokens.peek(0).map(|t| &t.token)
     }
 
     /// Advance to next token
@@ -147,7 +147,7 @@ impl Parser {
 
     /// Try to match and consume a token without error
     fn match_token(&mut self, token: Token) -> bool {
-        if let Some(current) = self.tokens.peek() {
+        if let Some(current) = self.tokens.peek(0) {
             if std::mem::discriminant(&current.token) == std::mem::discriminant(&token) {
                 self.advance();
                 return true;
@@ -156,14 +156,11 @@ impl Parser {
         false
     }
 
-    /// Peek at current token without consuming
-    fn peek(&mut self) -> Option<&TokenWithSpan> {
-        self.tokens.peek()
-    }
-
-    /// Peek at nth token ahead (0 = current, 1 = next)
-    fn peek_n(&mut self, n: usize) -> Option<&TokenWithSpan> {
-        self.tokens.peek_n(n)
+    /// Peek at token without consuming
+    ///
+    /// If `offset` is 0, returns the current token. If `offset` is 1, returns the next token.
+    fn peek(&mut self, offset: usize) -> Option<&TokenWithSpan> {
+        self.tokens.peek(offset)
     }
 
     /// Check if at end of input
@@ -704,7 +701,7 @@ impl Parser {
                 // Check for alias first (identifier followed by string)
                 let alias: Option<String> = if let Some(Token::Ident(id)) = self.current().cloned()
                 {
-                    if let Some(Token::String(_)) = self.peek_n(1).map(|t| &t.token) {
+                    if let Some(Token::String(_)) = self.peek(1).map(|t| &t.token) {
                         Some(id.clone())
                     } else {
                         None
@@ -740,7 +737,7 @@ impl Parser {
 
             // Check for alias (identifier followed by string)
             let alias: Option<String> = if let Some(Token::Ident(id)) = self.current().cloned() {
-                if let Some(Token::String(_)) = self.peek_n(1).map(|t| &t.token) {
+                if let Some(Token::String(_)) = self.peek(1).map(|t| &t.token) {
                     Some(id.clone())
                 } else {
                     None
@@ -1780,7 +1777,7 @@ impl Parser {
             if self.match_token(Token::Fn) || self.match_token(Token::Pub) {
                 // This is a method, go back
                 // Note: Previous token tracking changed - using current token instead
-                if let Some(prev) = self.peek() {
+                if let Some(prev) = self.peek(0) {
                     if let Token::Pub = prev.token {
                         // Already consumed pub, now consume fn
                         self.match_token(Token::Fn);
@@ -1882,7 +1879,7 @@ impl Parser {
             // Check for method
             if self.match_token(Token::Fn) || self.match_token(Token::Pub) {
                 // Note: Previous token tracking changed - using current token instead
-                if let Some(prev) = self.peek() {
+                if let Some(prev) = self.peek(0) {
                     if let Token::Pub = prev.token {
                         self.match_token(Token::Fn);
                     }
