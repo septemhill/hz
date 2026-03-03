@@ -109,6 +109,8 @@ pub enum BinaryOp {
     Ge,
     And,
     Or,
+    /// Range operator (..)
+    Range,
 }
 
 impl BinaryOp {
@@ -117,10 +119,11 @@ impl BinaryOp {
         match self {
             BinaryOp::Or => 1,
             BinaryOp::And => 2,
-            BinaryOp::Eq | BinaryOp::Ne => 3,
-            BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => 4,
-            BinaryOp::Add | BinaryOp::Sub => 5,
-            BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 6,
+            BinaryOp::Range => 3,
+            BinaryOp::Eq | BinaryOp::Ne => 4,
+            BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => 5,
+            BinaryOp::Add | BinaryOp::Sub => 6,
+            BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 7,
         }
     }
 }
@@ -219,6 +222,8 @@ pub enum Expr {
     Bool(bool, Span),
     /// String literal
     String(String, Span),
+    /// Character literal
+    Char(char, Span),
     /// Null literal
     Null(Span),
     /// Tuple literal (e.g., (1, 2, 3))
@@ -233,6 +238,8 @@ pub enum Expr {
     },
     /// Variable identifier
     Ident(String, Span),
+    /// Array literal (e.g., [1, 2, 3])
+    Array(Vec<Expr>, Span),
     /// Binary operation
     Binary {
         op: BinaryOp,
@@ -292,6 +299,8 @@ pub enum Stmt {
     /// If statement
     If {
         condition: Expr,
+        /// Optional capture variable (e.g., if (opt) |data| { ... })
+        capture: Option<String>,
         then_branch: Box<Stmt>,
         else_branch: Option<Box<Stmt>>,
         span: Span,
@@ -299,6 +308,18 @@ pub enum Stmt {
     /// While loop
     While {
         condition: Expr,
+        /// Optional capture variable (e.g., while (opt.next()) |e| { ... })
+        capture: Option<String>,
+        body: Box<Stmt>,
+        span: Span,
+    },
+    /// For loop
+    For {
+        /// Optional index or element variable (e.g., for i in range)
+        var_name: Option<String>,
+        iterable: Expr,
+        /// Optional capture variable for iterators
+        capture: Option<String>,
         body: Box<Stmt>,
         span: Span,
     },

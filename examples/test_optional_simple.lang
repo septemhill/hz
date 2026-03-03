@@ -1,4 +1,5 @@
 fn main() i64 {
     var x: ?i32 = null;
+
     return 0;
 }

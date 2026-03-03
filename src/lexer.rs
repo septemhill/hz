@@ -26,6 +26,8 @@ pub enum Token {
     True,
     False,
     Null,
+    For,
+    Range,
 
     // Identifiers
     Ident(String),
@@ -33,6 +35,7 @@ pub enum Token {
     // Literals
     Int(i64),
     String(String),
+    Char(char),
 
     // Symbols
     LParen,    // (
@@ -47,6 +50,7 @@ pub enum Token {
     Dot,       // .
     // Arrow,     // ->
     Question, // ?
+    DotDot,   // ..
 
     // Operators
     Assign,      // =
@@ -99,6 +103,7 @@ impl Token {
             Token::Ident(_) => "ident",
             Token::Int(_) => "int",
             Token::String(_) => "string",
+            Token::Char(_) => "char",
             Token::LParen => "(",
             Token::RParen => ")",
             Token::LBrace => "{",
@@ -111,6 +116,9 @@ impl Token {
             Token::Dot => ".",
             // Token::Arrow => "->",
             Token::Question => "?",
+            Token::DotDot => "..",
+            Token::For => "for",
+            Token::Range => "range",
             Token::Assign => "=",
             Token::Plus => "+",
             Token::Minus => "-",
@@ -255,6 +263,9 @@ impl Lexer {
         // Handle strings
         if c == '"' {
             return self.read_string();
+        }
+        if c == '\'' {
+            return self.read_char();
         }
 
         // Handle operators and symbols
@@ -448,6 +459,32 @@ impl Lexer {
 
         Ok(Token::String(value))
     }
+
+    /// Read a character literal
+    fn read_char(&mut self) -> Result<Token, LexerError> {
+        let start = self.pos;
+        self.pos += 1; // Consume '
+
+        if self.pos >= self.source.len() {
+            return Err(LexerError {
+                message: "Unterminated character literal".to_string(),
+                location: start,
+            });
+        }
+
+        let c = self.source[self.pos];
+        self.pos += 1;
+
+        if self.pos >= self.source.len() || self.source[self.pos] != '\'' {
+            return Err(LexerError {
+                message: "Expected closing quote for character literal".to_string(),
+                location: start,
+            });
+        }
+        self.pos += 1;
+
+        Ok(Token::Char(c))
+    }
 }
 
 /// Iterator that lazily produces tokens from source code
@@ -515,6 +552,9 @@ impl LexerIterator {
         if c == '"' {
             return self.read_string();
         }
+        if c == '\'' {
+            return self.read_char();
+        }
 
         // Handle operators and symbols
         self.pos += 1;
@@ -563,7 +603,14 @@ impl LexerIterator {
             ',' => Ok(Token::Comma),
             ';' => Ok(Token::Semicolon),
             ':' => Ok(Token::Colon),
-            '.' => Ok(Token::Dot),
+            '.' => {
+                if self.pos < self.source.len() && self.source[self.pos] == '.' {
+                    self.pos += 1;
+                    Ok(Token::DotDot)
+                } else {
+                    Ok(Token::Dot)
+                }
+            }
             '?' => Ok(Token::Question),
             '=' => Ok(Token::Assign),
             '+' => Ok(Token::Plus),
@@ -616,6 +663,8 @@ impl LexerIterator {
             "true" => Token::True,
             "false" => Token::False,
             "null" => Token::Null,
+            "for" => Token::For,
+            "range" => Token::Range,
             _ => Token::Ident(ident),
         }
     }
@@ -681,6 +730,27 @@ impl LexerIterator {
         }
 
         Ok(Token::String(value))
+    }
+
+    fn read_char(&mut self) -> Result<Token, LexerError> {
+        let start = self.pos;
+        self.pos += 1;
+        if self.pos >= self.source.len() {
+            return Err(LexerError {
+                message: "Unterminated character literal".to_string(),
+                location: start,
+            });
+        }
+        let c = self.source[self.pos];
+        self.pos += 1;
+        if self.pos >= self.source.len() || self.source[self.pos] != '\'' {
+            return Err(LexerError {
+                message: "Expected closing quote for character literal".to_string(),
+                location: start,
+            });
+        }
+        self.pos += 1;
+        Ok(Token::Char(c))
     }
 }
 

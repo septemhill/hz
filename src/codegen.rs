@@ -518,6 +518,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 condition, body, ..
             } => self.generate_while(condition, body),
             Stmt::Loop { body, .. } => self.generate_loop(body),
+            Stmt::For { .. } => todo!("Codegen for For loops not implemented"),
         }
     }
 
@@ -650,6 +651,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 args,
                 ..
             } => self.generate_call(name, namespace.as_deref(), args),
+            Expr::Array(_, _) => todo!("Codegen for Array literals not implemented"),
+            Expr::Char(_, _) => todo!("Codegen for character literals not implemented"),
         }
     }
 
@@ -772,6 +775,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .into()
                 }
             }
+            BinaryOp::Range => todo!("Codegen for Range operator not implemented"),
         };
 
         Ok(result)

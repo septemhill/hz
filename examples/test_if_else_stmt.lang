@@ -1,0 +1,43 @@
+import "io"
+
+fn main () {
+    {
+        var i: ?i32 = null;
+
+        if (i) |data| {
+            io.println(data);
+        } else {
+            io.println("null");
+        }
+    }
+
+    {
+        const f: i32 = 123;
+
+        if (f == 123) {
+            io.println("f is 123");
+        } else {
+            io.println("f is not 123");
+        }
+    }
+
+    {
+        const b: bool = false;
+
+        if (b) {
+            io.println("b is true");
+        } else {
+            io.println("b is false");
+        }
+    }
+
+    {
+        if (123 > 9) {
+            io.println("123 > 9");
+        } else if (123 < 9) {
+            io.println("123 < 9");
+        } else {
+            io.println("123 == 9");
+        }
+    }
+}

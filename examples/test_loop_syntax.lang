@@ -1,0 +1,33 @@
+import "io"
+
+fn main() {
+    for (i range 1..10) {
+        io.println(i);
+    }
+
+    for (i range [3]u8{'a', 'b', 'c'}) {
+        io.println(i);
+    }
+
+    const c = [3]u8{'a', 'b', 'c'};
+    for (i range c) {
+        io.println(i);
+    }
+
+    for (iter.next()) |e| {
+        io.println(e);
+    }
+}
+
+struct Iter {
+    i: u8,
+
+    pub fn next(self: &Self) ?u8 {
+        if (self.i < 10) {
+            const t = self.i;
+            self.i += 1;
+            return t;
+        }
+        return null;
+    }
+}
