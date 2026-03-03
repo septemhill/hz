@@ -455,6 +455,7 @@ fn main() i64 {
             ("examples/test_if_else_stmt.lang", true),
             ("examples/test_array.lang", true),
             ("examples/test_optional.lang", true),
+            ("examples/test_switch_stmt.lang", true),
             // // These require struct/interface parsing fix - parser fails
             // ("examples/test_features.lang", false),
             // // These require pub keyword - parser doesn't handle it properly
@@ -1025,6 +1026,7 @@ impl Parser {
             Token::For => self.parse_for_stmt(),
             Token::Loop => self.parse_loop_stmt(),
             Token::LBrace => self.parse_block_stmt(),
+            Token::Switch => self.parse_switch_stmt(),
             Token::Semicolon => {
                 self.advance();
                 self.skip_whitespace();
@@ -1586,6 +1588,81 @@ impl Parser {
         })
     }
 
+    /// Parse switch statement
+    fn parse_switch_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let start_location = self.current_token().map(|t| t.span.start).unwrap_or(0);
+        self.advance(); // consume 'switch'
+        self.skip_whitespace();
+
+        let has_paren = self.match_token(Token::LParen);
+        let condition = self.parse_expression()?;
+        if has_paren {
+            self.expect(Token::RParen)?;
+        }
+
+        self.skip_whitespace();
+        self.expect(Token::LBrace)?;
+
+        let mut cases = Vec::new();
+        while !self.match_token(Token::RBrace) && !self.is_at_end() {
+            self.skip_whitespace();
+
+            if matches!(self.current(), Some(Token::RBrace)) {
+                break;
+            }
+
+            // Parse patterns: expr, expr, ...
+            let mut patterns = Vec::new();
+            loop {
+                patterns.push(self.parse_expression()?);
+                self.skip_whitespace();
+                if !self.match_token(Token::Comma) {
+                    break;
+                }
+                self.skip_whitespace();
+            }
+
+            self.expect(Token::FatArrow)?;
+            self.skip_whitespace();
+
+            // Optional capture: |id|
+            let mut capture = None;
+            if self.match_token(Token::Pipe) {
+                if let Token::Ident(name) = self.current().cloned().ok_or_else(|| ParseError {
+                    message: "Expected capture variable name".to_string(),
+                    location: None,
+                })? {
+                    capture = Some(name);
+                    self.advance();
+                    self.expect(Token::Pipe)?;
+                } else {
+                    return Err(ParseError {
+                        message: "Expected capture variable name".to_string(),
+                        location: None,
+                    });
+                }
+            }
+
+            self.skip_whitespace();
+            let body = self.parse_statement()?;
+
+            cases.push(SwitchCase {
+                patterns,
+                capture,
+                body,
+                span: Span { start: 0, end: 0 },
+            });
+        }
+
+        let end_location = self.current_token().map(|t| t.span.end).unwrap_or(0);
+
+        Ok(Stmt::Switch {
+            condition,
+            cases,
+            span: Span { start: start_location, end: end_location },
+        })
+    }
+
     /// Parse expression statement
     fn parse_expr_stmt(&mut self) -> Result<Stmt, ParseError> {
         let expr = self.parse_expression()?;
@@ -1843,36 +1920,59 @@ impl Parser {
                     }
                 }
 
-                expr = Expr::Call {
-                    name: match &expr {
-                        Expr::Ident(n, _) => n.clone(),
-                        _ => {
-                            return Err(ParseError {
-                                message: "Expected function name".to_string(),
-                                location: None,
-                            });
+                let (name, namespace) = match &expr {
+                    Expr::Ident(n, _) => (n.clone(), None),
+                    Expr::MemberAccess { object, member, .. } => {
+                        if let Expr::Ident(ns, _) = &**object {
+                            (member.clone(), Some(ns.clone()))
+                        } else {
+                            (member.clone(), None)
                         }
-                    },
-                    namespace: None,
+                    }
+                    _ => (String::new(), None),
+                };
+
+                expr = Expr::Call {
+                    name,
+                    namespace,
                     args,
                     span: Span { start: 0, end: 0 },
                 };
                 continue;
             }
 
-            // Tuple index access
+            // Tuple index or Member access
             if self.match_token(Token::Dot) {
-                if let Token::Int(i) = self.current().cloned().ok_or_else(|| ParseError {
-                    message: "Expected index".to_string(),
+                let current = self.current().cloned().ok_or_else(|| ParseError {
+                    message: "Expected index or member name".to_string(),
                     location: None,
-                })? {
-                    self.advance();
-                    expr = Expr::TupleIndex {
-                        tuple: Box::new(expr),
-                        index: i as usize,
-                        span: Span { start: 0, end: 0 },
-                    };
-                    continue;
+                })?;
+
+                match current {
+                    Token::Int(i) => {
+                        self.advance();
+                        expr = Expr::TupleIndex {
+                            tuple: Box::new(expr),
+                            index: i as usize,
+                            span: Span { start: 0, end: 0 },
+                        };
+                        continue;
+                    }
+                    Token::Ident(id) => {
+                        self.advance();
+                        expr = Expr::MemberAccess {
+                            object: Box::new(expr),
+                            member: id,
+                            span: Span { start: 0, end: 0 },
+                        };
+                        continue;
+                    }
+                    _ => {
+                        return Err(ParseError {
+                            message: "Expected index or member name".to_string(),
+                            location: None,
+                        });
+                    }
                 }
             }
 

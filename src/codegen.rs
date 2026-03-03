@@ -523,6 +523,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             } => self.generate_while(condition, capture, body),
             Stmt::Loop { body, .. } => self.generate_loop(body),
             Stmt::For { .. } => todo!("Codegen for For loops not implemented"),
+            Stmt::Switch { .. } => todo!("Codegen for Switch statements not implemented"),
         }
     }
 
@@ -679,6 +680,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 Ok(last_val.unwrap_or_else(|| self.context.i64_type().const_int(0, false).into()))
             }
+            Expr::MemberAccess { .. } => todo!("Codegen for MemberAccess not implemented"),
         }
     }
 

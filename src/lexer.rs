@@ -28,6 +28,7 @@ pub enum Token {
     Null,
     For,
     Range,
+    Switch,
 
     // Identifiers
     Ident(String),
@@ -78,6 +79,7 @@ pub enum Token {
 
     // Error
     Error(String),
+    FatArrow, // =>
 }
 
 impl Token {
@@ -119,6 +121,8 @@ impl Token {
             Token::DotDot => "..",
             Token::For => "for",
             Token::Range => "range",
+            Token::Switch => "switch",
+            Token::FatArrow => "=>",
             Token::Assign => "=",
             Token::Plus => "+",
             Token::Minus => "-",
@@ -318,6 +322,10 @@ impl Lexer {
                     self.pos += 1;
                     return Ok(Token::Pipe);
                 }
+                "=>" => {
+                    self.pos += 1;
+                    return Ok(Token::FatArrow);
+                }
                 "//" => {
                     // This is a comment, skip it
                     while self.pos < self.source.len() && self.source[self.pos] != '\n' {
@@ -393,6 +401,7 @@ impl Lexer {
             "true" => Token::True,
             "false" => Token::False,
             "null" => Token::Null,
+            "switch" => Token::Switch,
             _ => Token::Ident(ident),
         }
     }
@@ -565,7 +574,7 @@ impl LexerIterator {
             let pair = format!("{}{}", c, next);
 
             match pair.as_str() {
-                "==" | "!=" | "<=" | ">=" | "+=" | "-=" | "*=" | "/=" | "&&" | "||" => {
+                "==" | "!=" | "<=" | ">=" | "+=" | "-=" | "*=" | "/=" | "&&" | "||" | "=>" => {
                     self.pos += 1; // Skip second character
                     return Ok(match pair.as_str() {
                         "==" => Token::Equal,
@@ -578,6 +587,7 @@ impl LexerIterator {
                         "/=" => Token::SlashAssign,
                         "&&" => Token::Ampersand,
                         "||" => Token::Pipe,
+                        "=>" => Token::FatArrow,
                         _ => unreachable!(),
                     });
                 }
@@ -665,6 +675,7 @@ impl LexerIterator {
             "null" => Token::Null,
             "for" => Token::For,
             "range" => Token::Range,
+            "switch" => Token::Switch,
             _ => Token::Ident(ident),
         }
     }

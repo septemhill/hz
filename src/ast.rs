@@ -217,6 +217,16 @@ pub struct EnumDef {
     pub span: Span,
 }
 
+/// Switch case definition
+#[derive(Debug, Clone)]
+pub struct SwitchCase {
+    pub patterns: Vec<Expr>,
+    /// Optional capture variable (e.g., case Enum.Variant => |payload| { ... })
+    pub capture: Option<String>,
+    pub body: Stmt,
+    pub span: Span,
+}
+
 /// Position in source code (line, column)
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Span {
@@ -285,6 +295,12 @@ pub enum Expr {
         stmts: Vec<Stmt>,
         span: Span,
     },
+    /// Member access (e.g., Status.Todo or object.field)
+    MemberAccess {
+        object: Box<Expr>,
+        member: String,
+        span: Span,
+    },
 }
 
 /// Statement AST node
@@ -350,6 +366,12 @@ pub enum Stmt {
     },
     /// Infinite loop
     Loop { body: Box<Stmt>, span: Span },
+    /// Switch statement
+    Switch {
+        condition: Expr,
+        cases: Vec<SwitchCase>,
+        span: Span,
+    },
 }
 
 /// Function definition AST node

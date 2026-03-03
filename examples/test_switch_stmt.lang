@@ -1,0 +1,145 @@
+import "io"
+
+enum Status {
+    Todo,
+    Wip,
+    Delay(i32),
+    Done
+};
+
+fn main() {
+    // Integer Case
+    {
+        const c = 123;
+
+        switch (c) {
+            123 => {
+                io.println("123");
+            }
+            _ => {
+                io.println("default");
+            }
+        }
+    }
+
+    // Multiple Integer Case
+    {
+        const c = 123;
+
+        switch (c) {
+            123, 234, 443 => {
+                io.println("123");
+            }
+            _ => {
+                io.println("default");
+            }
+        }
+    }
+
+    // Range Integer Case
+    {
+        const c = 123;
+
+        switch (c) {
+            123..500 => {
+                io.println("123");
+            }
+            _ => {
+                io.println("default");
+            }
+        }
+    }
+
+    // Char Case
+    {
+        const c = 'a';
+
+        switch (c) {
+            'a' => {
+                io.println("a");
+            }
+            _ => {
+                io.println("default");
+            }
+        }
+    }
+
+    // Multiple Char Case
+    {
+        const c = 'a';
+
+        switch (c) {
+            'a', 'b', 'c' => {
+                io.println("a");
+            }
+            _ => {
+                io.println("default");
+            }
+        }
+    }
+
+    // Range Char Case
+    {
+        const c = 'a';
+
+        switch (c) {
+            'a'..'z' => {
+                io.println("a");
+            }
+            _ => {
+                io.println("default");
+            }
+        }
+    }
+
+    // Range Char Case
+    {
+        const c = 'a';
+
+        switch (c) {
+            'a'..'z' => {
+                io.println("a");
+            }
+            _ => {
+                io.println("default");
+            }
+        }
+    }
+
+    // Exhaustive Enum Case With Underscore
+    {
+        const c = Status.Todo;
+
+        switch (c) {
+            Status.Todo => {
+                io.println("Todo");
+            }
+            Status.Wip => {
+                io.println("Wip");
+            }
+            _ => {
+                io.println("default");
+            }
+        }
+    }
+
+    // Exhaustive Enum Case Without Underscore
+    {
+        const c = Status.Todo;
+
+        switch (c) {
+            Status.Todo => {
+                io.println("Todo");
+            }
+            Status.Wip => {
+                io.println("Wip");
+            }
+            Status.Delay => |e| {
+                io.println("Delay");
+            }
+            Status.Done => {
+                io.println("Done");
+            }
+        }
+    }
+}
