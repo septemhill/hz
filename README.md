@@ -230,38 +230,79 @@ fn main() {
 ```
 lang/
 ├── src/
-│   ├── ast.rs          # Abstract Syntax Tree definitions
-│   ├── codegen.rs      # LLVM IR code generation
-│   ├── grammar.pest    # Parser grammar definition
-│   ├── lexer.rs        # Tokenization
-│   ├── main.rs         # Compiler entry point
-│   ├── parser.rs       # Parsing logic
-│   └── stdlib.rs       # Standard library loader
+│   ├── ast.rs         # Abstract Syntax Tree definitions
+│   ├── codegen.rs     # LLVM IR code generation
+│   ├── grammar.pest   # Parser grammar definition
+│   ├── hir.rs         # High-level IR (HIR) definitions
+│   ├── lexer.rs       # Tokenization
+│   ├── lower.rs       # AST to HIR lowering
+│   ├── main.rs        # Compiler entry point
+│   ├── opt.rs         # HIR optimizer
+│   ├── parser.rs      # Parsing logic
+│   ├── sema.rs        # Semantic analyzer
+│   └── stdlib.rs      # Standard library loader
 ├── std/
-│   ├── io.lang         # I/O standard library
-│   ├── math.lang       # Math standard library
-│   └── http.lang       # HTTP standard library
-├── examples/           # Example programs
-└── Cargo.toml          # Project manifest
+│   ├── io.lang        # I/O standard library
+│   ├── math.lang      # Math standard library
+│   └── http.lang      # HTTP standard library
+├── examples/          # Example programs
+└── Cargo.toml         # Project manifest
 ```
 
 ## Architecture
 
 ```
+Source Code (.lang)
+       │
+       ▼
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Lexer     │────▶│   Parser    │────▶│     AST     │
+│    Lexer    │────▶│   Parser    │────▶│     AST     │
 └─────────────┘     └─────────────┘     └─────────────┘
-                                              │
-                                              ▼
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Executable │◀────│    Clang    │◀────│   LLVM IR   │
-└─────────────┘     └─────────────┘     └─────────────┘
-                                              │
-                                              ▼
+                                               │
+                                               ▼
                                         ┌─────────────┐
-                                        │  Codegen    │
+                                        │    Sema     │
+                                        │  (Semantic  │
+                                        │  Analysis)  │
                                         └─────────────┘
+                                               │
+                                               ▼
+                                        ┌─────────────┐
+                                        │  Lowering   │
+                                        │    (HIR)    │
+                                        └─────────────┘
+                                               │
+                                               ▼
+                                        ┌─────────────┐
+                                        │  Optimizer  │
+                                        └─────────────┘
+                                               │
+                                               ▼
+                                        ┌─────────────┐
+                                        │   Codegen   │
+                                        │  (LLVM IR)  │
+                                        └─────────────┘
+                                               │
+                    ┌─────────────┐            │
+                    │    Clang    │◀───────────┘
+                    │   (Linker)  │
+                    └─────────────┘
+                          │
+                          ▼
+                    ┌─────────────┐
+                    │ Executable  │
+                    └─────────────┘
 ```
+
+### Compilation Pipeline
+
+1. **Lexer** (`src/lexer.rs`) - Tokenizes source code into tokens
+2. **Parser** (`src/parser.rs`) - Parses tokens into AST (Abstract Syntax Tree)
+3. **Semantic Analyzer** (`src/sema.rs`) - Type checking and symbol resolution
+4. **Lowering** (`src/lower.rs`) - Transforms AST to HIR (High-level IR)
+5. **Optimizer** (`src/opt.rs`) - Optimizes HIR
+6. **Code Generator** (`src/codegen.rs`) - Generates LLVM IR from HIR
+7. **Clang/LLVM** - Compiles LLVM IR to native executable
 
 ## Roadmap
 
