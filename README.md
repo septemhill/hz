@@ -122,15 +122,34 @@ fn main() {
 
 ```lang
 fn main() {
-    // Range-based
-    for (i range 1..10) {
-        io.println(i);
+    // Range-based (exclusive end)
+    for (1..10) |v| {
+        io.println(v);
     }
 
     // Array iteration
     const arr = [3]u8{1, 2, 3};
-    for (item range arr) {
+    for (arr) |item| {
         io.println(item);
+    }
+
+    // Iterator-based (with custom struct)
+    var f = Iter { i: 0 };
+    for (f.next()) |e| {
+        io.println(e);
+    }
+}
+
+struct Iter {
+    i: u8,
+
+    pub fn next(self: *Self) ?u8 {
+        if (self.i < 10) {
+            const t = self.i;
+            self.i += 1;
+            return t;
+        }
+        return null;
     }
 }
 ```
