@@ -82,8 +82,8 @@ fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
 
     // Step 2: Semantic Analysis
     println!("[2/8] Semantic Analysis...");
-    let _analyzer = sema::SemanticAnalyzer::new();
-    // analyzer.analyze(&program)?; // Add back as analyzer methods are implemented
+    let mut analyzer = sema::SemanticAnalyzer::new();
+    analyzer.analyze(&program)?;
 
     // Step 3: Lowering to HIR
     println!("[3/8] Lowering to HIR...");

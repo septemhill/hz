@@ -1301,14 +1301,32 @@ impl Parser {
             });
         };
 
+        // Expect ':' (optional for type inference)
+        self.skip_whitespace();
+        let ty = if self.match_token(Token::Colon) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+
+        // Expect '='
+        self.skip_whitespace();
+        if !self.match_token(Token::Assign) {
+            return Err(ParseError {
+                message: "Variable declaration requires initialization".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        let value = Some(self.parse_expression()?);
         self.match_token(Token::Semicolon);
 
         Ok(Stmt::Let {
             mutability: Mutability::Var,
             name,
             names: None,
-            ty: None,
-            value: None,
+            ty,
+            value,
             visibility,
             span: Span { start: 0, end: 0 },
         })

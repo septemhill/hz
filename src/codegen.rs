@@ -360,7 +360,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Return null pointer (i64* null)
                 let ptr_type = self
                     .context
-                    .i64_type()
                     .ptr_type(inkwell::AddressSpace::default());
                 Ok(ptr_type.const_null().into())
             }
@@ -697,7 +696,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         let printf_type = self.context.i64_type().fn_type(
             &[self
                 .context
-                .i8_type()
                 .ptr_type(inkwell::AddressSpace::default())
                 .into()],
             true,
@@ -1505,7 +1503,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         let printf_type = self.context.i64_type().fn_type(
             &[self
                 .context
-                .i8_type()
                 .ptr_type(inkwell::AddressSpace::default())
                 .into()],
             true,
