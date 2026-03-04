@@ -124,10 +124,16 @@ pub enum BinaryOp {
     Gt,
     Le,
     Ge,
-    And,
-    Or,
+    And, // Logical And (&&)
+    Or,  // Logical Or (||)
     /// Range operator (..)
     Range,
+    /// Bitwise operators
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
 }
 
 impl BinaryOp {
@@ -136,11 +142,15 @@ impl BinaryOp {
         match self {
             BinaryOp::Or => 1,
             BinaryOp::And => 2,
-            BinaryOp::Range => 3,
-            BinaryOp::Eq | BinaryOp::Ne => 4,
-            BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => 5,
-            BinaryOp::Add | BinaryOp::Sub => 6,
-            BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 7,
+            BinaryOp::BitOr => 3,
+            BinaryOp::BitXor => 4,
+            BinaryOp::BitAnd => 5,
+            BinaryOp::Eq | BinaryOp::Ne => 6,
+            BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => 7,
+            BinaryOp::Shl | BinaryOp::Shr => 8,
+            BinaryOp::Add | BinaryOp::Sub => 9,
+            BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 10,
+            BinaryOp::Range => 11,
         }
     }
 }

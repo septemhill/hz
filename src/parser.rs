@@ -150,10 +150,15 @@ impl Parser {
         self.skip_whitespace();
         if let Some(t) = self.current() {
             if *t == token {
+                eprintln!("DEBUG match_token: matched {:?}, advancing", token);
                 self.advance();
                 return true;
             }
         }
+        eprintln!(
+            "DEBUG match_token: {:?} did NOT match, returning false",
+            token
+        );
         false
     }
 
@@ -457,6 +462,7 @@ fn main() i64 {
             ("examples/test_switch_stmt.lang", true),
             ("examples/test_struct.lang", true),
             ("examples/test_for_stmt.lang", true),
+            ("examples/test_operators.lang", true),
             // // These require struct/interface parsing fix - parser fails
             // ("examples/test_features.lang", false),
             // // These require pub keyword - parser doesn't handle it properly
@@ -599,10 +605,10 @@ fn main() i64 {
 
 /// Parse a source string into an AST Program
 pub fn parse(source: &str) -> Result<Program, ParseError> {
-    // Step 1: Lexer - create token iterator
-    eprintln!("DEBUG: Starting lexer...");
+    // // Step 1: Lexer - create token iterator
+    // eprintln!("DEBUG: Starting lexer...");
     let tokens = lexer_iter(source);
-    eprintln!("DEBUG: Created token iterator");
+    // eprintln!("DEBUG: Created token iterator");
 
     // Step 2: Parser - parse tokens into AST
     let mut parser = Parser::new(tokens);
@@ -644,10 +650,10 @@ impl Parser {
                 break;
             }
 
-            eprintln!(
-                "DEBUG: Top-level parse loop, current token: {:?}",
-                self.current()
-            );
+            // eprintln!(
+            //     "DEBUG: Top-level parse loop, current token: {:?}",
+            //     self.current()
+            // );
 
             // Try to parse import statement
             if self.match_token(Token::Import) {
@@ -1022,6 +1028,8 @@ impl Parser {
             message: "Unexpected end of input".to_string(),
             location: None,
         })?;
+
+        eprintln!("DEBUG parse_statement: token = {:?}", token);
 
         match token {
             Token::Return => self.parse_return_stmt(),
@@ -1817,38 +1825,38 @@ impl Parser {
         self.set_state(ParserState::ParsingExpression);
 
         // Try to parse assignment first (lowest precedence)
-        self.parse_assignment_expr()
+        let result = self.parse_assignment_expr();
+        result
     }
 
     /// Parse assignment expression
     fn parse_assignment_expr(&mut self) -> Result<Expr, ParseError> {
-        let left = self.parse_or_expr()?;
-        Ok(left)
+        let result = self.parse_or_expr()?;
+        Ok(result)
     }
 
     /// Parse OR expression (||)
     fn parse_or_expr(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_and_expr()?;
+        let mut result = self.parse_and_expr()?;
 
-        while self.match_token(Token::Pipe) {
+        while self.match_token(Token::PipePipe) {
             let right = self.parse_and_expr()?;
-            left = Expr::Binary {
+            result = Expr::Binary {
                 op: BinaryOp::Or,
-                left: Box::new(left),
+                left: Box::new(result),
                 right: Box::new(right),
                 span: Span { start: 0, end: 0 },
             };
         }
-
-        Ok(left)
+        Ok(result)
     }
 
     /// Parse AND expression (&&)
     fn parse_and_expr(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_range_expr()?;
+        let mut left = self.parse_bitwise_or_expr()?;
 
-        while self.match_token(Token::Ampersand) {
-            let right = self.parse_range_expr()?;
+        while self.match_token(Token::AmpAmp) {
+            let right = self.parse_bitwise_or_expr()?;
             left = Expr::Binary {
                 op: BinaryOp::And,
                 left: Box::new(left),
@@ -1856,7 +1864,54 @@ impl Parser {
                 span: Span { start: 0, end: 0 },
             };
         }
+        Ok(left)
+    }
 
+    /// Parse bitwise OR expression (|)
+    fn parse_bitwise_or_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_bitwise_xor_expr()?;
+
+        while self.match_token(Token::Pipe) {
+            let right = self.parse_bitwise_xor_expr()?;
+            left = Expr::Binary {
+                op: BinaryOp::BitOr,
+                left: Box::new(left),
+                right: Box::new(right),
+                span: Span { start: 0, end: 0 },
+            };
+        }
+        Ok(left)
+    }
+
+    /// Parse bitwise XOR expression (^)
+    fn parse_bitwise_xor_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_bitwise_and_expr()?;
+
+        while self.match_token(Token::Caret) {
+            let right = self.parse_bitwise_and_expr()?;
+            left = Expr::Binary {
+                op: BinaryOp::BitXor,
+                left: Box::new(left),
+                right: Box::new(right),
+                span: Span { start: 0, end: 0 },
+            };
+        }
+        Ok(left)
+    }
+
+    /// Parse bitwise AND expression (&)
+    fn parse_bitwise_and_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_range_expr()?;
+
+        while self.match_token(Token::Ampersand) {
+            let right = self.parse_range_expr()?;
+            left = Expr::Binary {
+                op: BinaryOp::BitAnd,
+                left: Box::new(left),
+                right: Box::new(right),
+                span: Span { start: 0, end: 0 },
+            };
+        }
         Ok(left)
     }
 
@@ -1872,7 +1927,6 @@ impl Parser {
                 span: Span { start: 0, end: 0 },
             };
         }
-
         Ok(left)
     }
 
@@ -1895,35 +1949,52 @@ impl Parser {
                 span: Span { start: 0, end: 0 },
             };
         }
-
         Ok(left)
     }
 
     /// Parse comparison expression (<, >, <=, >=)
     fn parse_comparison_expr(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_additive_expr()?;
+        let mut left = self.parse_shift_expr()?;
 
         while let Token::Less | Token::Greater | Token::LessEq | Token::GreaterEq =
             self.current().cloned().unwrap_or(Token::Eof)
         {
-            let op = match self.current().unwrap() {
-                Token::Less => {
-                    self.advance();
-                    BinaryOp::Lt
-                }
-                Token::Greater => {
-                    self.advance();
-                    BinaryOp::Gt
-                }
-                Token::LessEq => {
-                    self.advance();
-                    BinaryOp::Le
-                }
-                Token::GreaterEq => {
-                    self.advance();
-                    BinaryOp::Ge
-                }
-                _ => break,
+            let op = if self.match_token(Token::Less) {
+                BinaryOp::Lt
+            } else if self.match_token(Token::Greater) {
+                BinaryOp::Gt
+            } else if self.match_token(Token::LessEq) {
+                BinaryOp::Le
+            } else if self.match_token(Token::GreaterEq) {
+                BinaryOp::Ge
+            } else {
+                break;
+            };
+
+            let right = self.parse_shift_expr()?;
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+                span: Span { start: 0, end: 0 },
+            };
+        }
+        Ok(left)
+    }
+
+    /// Parse bitwise shift expression (<<, >>)
+    fn parse_shift_expr(&mut self) -> Result<Expr, ParseError> {
+        let mut left = self.parse_additive_expr()?;
+
+        while let Token::LessLess | Token::GreaterGreater =
+            self.current().cloned().unwrap_or(Token::Eof)
+        {
+            let op = if self.match_token(Token::LessLess) {
+                BinaryOp::Shl
+            } else if self.match_token(Token::GreaterGreater) {
+                BinaryOp::Shr
+            } else {
+                break;
             };
 
             let right = self.parse_additive_expr()?;
@@ -1934,7 +2005,6 @@ impl Parser {
                 span: Span { start: 0, end: 0 },
             };
         }
-
         Ok(left)
     }
 
@@ -1942,20 +2012,31 @@ impl Parser {
     fn parse_additive_expr(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_multiplicative_expr()?;
 
-        while let Token::Plus | Token::Minus = self.current().cloned().unwrap_or(Token::Eof) {
-            let op = if self.match_token(Token::Plus) {
-                BinaryOp::Add
-            } else {
-                BinaryOp::Sub
-            };
-
-            let right = self.parse_multiplicative_expr()?;
-            left = Expr::Binary {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
-                span: Span { start: 0, end: 0 },
-            };
+        loop {
+            let current = self.current().cloned();
+            match current {
+                Some(Token::Plus) => {
+                    self.advance(); // consume +
+                    let right = self.parse_multiplicative_expr()?;
+                    left = Expr::Binary {
+                        op: BinaryOp::Add,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                        span: Span { start: 0, end: 0 },
+                    };
+                }
+                Some(Token::Minus) => {
+                    self.advance(); // consume -
+                    let right = self.parse_multiplicative_expr()?;
+                    left = Expr::Binary {
+                        op: BinaryOp::Sub,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                        span: Span { start: 0, end: 0 },
+                    };
+                }
+                _ => break,
+            }
         }
 
         Ok(left)
@@ -1992,7 +2073,6 @@ impl Parser {
                 span: Span { start: 0, end: 0 },
             };
         }
-
         Ok(left)
     }
 
@@ -2284,7 +2364,6 @@ impl Parser {
                 // Look ahead to see if we have a number followed by ] then a type
                 let token0 = self.peek(0).map(|t| t.token.clone());
                 let token1 = self.peek(1).map(|t| t.token.clone());
-                let token2 = self.peek(2).map(|t| t.token.clone());
 
                 if let Some(Token::Int(_)) = token0 {
                     // We have a number - check if next is RBracket (closing the size)

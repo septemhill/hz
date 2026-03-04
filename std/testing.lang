@@ -1,0 +1,80 @@
+// Testing library
+
+/// Assert that a condition is true, panic with message if false
+pub fn assert(condition: bool, msg: String) {
+    if !condition {
+        panic(msg);
+    }
+    return;
+}
+
+/// Assert that two i64 values are equal
+pub fn assert_eq_i64(actual: i64, expected: i64, msg: String) {
+    if actual != expected {
+        panic(msg);
+    }
+    return;
+}
+
+/// Assert that two i64 values are not equal
+pub fn assert_ne_i64(actual: i64, expected: i64, msg: String) {
+    if actual == expected {
+        panic(msg);
+    }
+    return;
+}
+
+/// Assert that two f64 values are equal
+pub fn assert_eq_f64(actual: f64, expected: f64, msg: String) {
+    if actual != expected {
+        panic(msg);
+    }
+    return;
+}
+
+/// Assert that two f64 values are not equal
+pub fn assert_ne_f64(actual: f64, expected: f64, msg: String) {
+    if actual == expected {
+        panic(msg);
+    }
+    return;
+}
+
+/// Assert that two boolean values are equal
+pub fn assert_eq_bool(actual: bool, expected: bool, msg: String) {
+    if actual != expected {
+        panic(msg);
+    }
+    return;
+}
+
+/// Assert that two boolean values are not equal
+pub fn assert_ne_bool(actual: bool, expected: bool, msg: String) {
+    if actual == expected {
+        panic(msg);
+    }
+    return;
+}
+
+/// Assert that two String values are equal
+pub fn assert_eq_string(actual: String, expected: String, msg: String) {
+    if actual != expected {
+        panic(msg);
+    }
+    return;
+}
+
+/// Assert that two String values are not equal
+pub fn assert_ne_string(actual: String, expected: String, msg: String) {
+    if actual == expected {
+        panic(msg);
+    }
+    return;
+}
+
+/// Panic with a message (halts execution)
+pub fn panic(msg: String) {
+    // This will cause a runtime error
+    // In the future, this could be linked to a proper panic handler
+    return;
+}

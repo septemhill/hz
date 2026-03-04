@@ -76,6 +76,11 @@ pub enum Token {
     Pipe,        // |
     Underscore,  // _
     Not,         // !
+    Caret,       // ^
+    AmpAmp,      // &&
+    PipePipe,    // ||
+    LessLess,    // <<
+    GreaterGreater, // >>
 
     // End of file
     Eof,
@@ -145,6 +150,11 @@ impl Token {
             Token::SlashAssign => "/=",
             Token::Ampersand => "&",
             Token::Pipe => "|",
+            Token::Caret => "^",
+            Token::AmpAmp => "&&",
+            Token::PipePipe => "||",
+            Token::LessLess => "<<",
+            Token::GreaterGreater => ">>",
             Token::Underscore => "_",
             Token::Not => "!",
             Token::Eof => "eof",
@@ -321,11 +331,19 @@ impl Lexer {
                 // "->" => return Ok(Token::Arrow),
                 "&&" => {
                     self.pos += 1;
-                    return Ok(Token::Ampersand);
+                    return Ok(Token::AmpAmp);
                 }
                 "||" => {
                     self.pos += 1;
-                    return Ok(Token::Pipe);
+                    return Ok(Token::PipePipe);
+                }
+                "<<" => {
+                    self.pos += 1;
+                    return Ok(Token::LessLess);
+                }
+                ">>" => {
+                    self.pos += 1;
+                    return Ok(Token::GreaterGreater);
                 }
                 "=>" => {
                     self.pos += 1;
@@ -581,7 +599,7 @@ impl LexerIterator {
             let pair = format!("{}{}", c, next);
 
             match pair.as_str() {
-                "==" | "!=" | "<=" | ">=" | "+=" | "-=" | "*=" | "/=" | "&&" | "||" | "=>" => {
+                "==" | "!=" | "<=" | ">=" | "+=" | "-=" | "*=" | "/=" | "&&" | "||" | "<<" | ">>" | "=>" => {
                     self.pos += 1; // Skip second character
                     return Ok(match pair.as_str() {
                         "==" => Token::Equal,
@@ -592,8 +610,10 @@ impl LexerIterator {
                         "-=" => Token::MinusAssign,
                         "*=" => Token::StarAssign,
                         "/=" => Token::SlashAssign,
-                        "&&" => Token::Ampersand,
-                        "||" => Token::Pipe,
+                        "&&" => Token::AmpAmp,
+                        "||" => Token::PipePipe,
+                        "<<" => Token::LessLess,
+                        ">>" => Token::GreaterGreater,
                         "=>" => Token::FatArrow,
                         _ => unreachable!(),
                     });
@@ -831,50 +851,23 @@ impl PeekableLexerIterator {
     /// If `offset` is 0, returns the current token. If `offset` is 1, returns the next token.
     /// Returns `None` if there is no token at that offset.
     pub fn peek(&mut self, offset: usize) -> Option<&TokenWithSpan> {
-        if offset > 1 {
-            return None;
-        }
-
-        // eprintln!(
-        //     "DEBUG peek START: offset={}, peeked.len={}, iter.pos={}, remaining='{}'",
-        //     offset,
-        //     self.peeked.len(),
-        //     self.iter.pos,
-        //     &self.iter.source[self.iter.pos..].iter().collect::<String>()
-        // );
-
         // Ensure we have enough tokens buffered
-        while self.peeked.len() < offset + 1 {
-            // eprintln!(
-            //     "DEBUG peek: fetching token, peeked.len={}",
-            //     self.peeked.len()
-            // );
+        while self.peeked.len() <= offset {
             match self.iter.next() {
                 Some(Ok(token)) => {
-                    // eprintln!(
-                    //     "DEBUG peek: got token {:?}, iter.pos now {}",
-                    //     token.token, self.iter.pos
-                    // );
                     self.peeked.push_back(Ok(token));
                 }
                 Some(Err(e)) => {
-                    // eprintln!("DEBUG peek: got error {:?}", e);
                     self.peeked.push_back(Err(e));
                 }
                 None => {
-                    // eprintln!("DEBUG peek: got None");
+                    // No more tokens available
                     break;
                 }
             }
         }
 
-        let result = self.peeked.get(offset).and_then(|r| r.as_ref().ok());
-        // eprintln!(
-        //     "DEBUG peek END: result={:?}, iter.pos={}",
-        //     result.map(|t| &t.token),
-        //     self.iter.pos
-        // );
-        result
+        self.peeked.get(offset).and_then(|r| r.as_ref().ok())
     }
 
     /// Consume the peeked token (if any) and return the next token

@@ -239,28 +239,51 @@ impl SemanticAnalyzer {
                 let r_ty = self.analyze_expr(right)?;
 
                 match op {
-                    crate::ast::BinaryOp::Add | crate::ast::BinaryOp::Sub | crate::ast::BinaryOp::Mul | crate::ast::BinaryOp::Div | crate::ast::BinaryOp::Mod => {
+                    crate::ast::BinaryOp::Add
+                    | crate::ast::BinaryOp::Sub
+                    | crate::ast::BinaryOp::Mul
+                    | crate::ast::BinaryOp::Div
+                    | crate::ast::BinaryOp::Mod
+                    | crate::ast::BinaryOp::BitAnd
+                    | crate::ast::BinaryOp::BitOr
+                    | crate::ast::BinaryOp::BitXor
+                    | crate::ast::BinaryOp::Shl
+                    | crate::ast::BinaryOp::Shr => {
                         if self.is_numeric(&l_ty) && self.is_numeric(&r_ty) {
                             Ok(l_ty) // Result is same as left operand for now
                         } else {
-                            Err(format!("Binary operation {:?} requires numeric operands, found {} and {}", op, l_ty, r_ty))
+                            Err(format!(
+                                "Binary operation {:?} requires numeric operands, found {} and {}",
+                                op, l_ty, r_ty
+                            ))
                         }
                     }
-                    crate::ast::BinaryOp::Eq | crate::ast::BinaryOp::Ne | crate::ast::BinaryOp::Lt | crate::ast::BinaryOp::Gt | crate::ast::BinaryOp::Le | crate::ast::BinaryOp::Ge => {
+                    crate::ast::BinaryOp::Eq
+                    | crate::ast::BinaryOp::Ne
+                    | crate::ast::BinaryOp::Lt
+                    | crate::ast::BinaryOp::Gt
+                    | crate::ast::BinaryOp::Le
+                    | crate::ast::BinaryOp::Ge => {
                         if self.types_compatible(&l_ty, &r_ty) {
                             Ok(Type::Bool)
                         } else {
-                            Err(format!("Comparison requires compatible types, found {} and {}", l_ty, r_ty))
+                            Err(format!(
+                                "Comparison requires compatible types, found {} and {}",
+                                l_ty, r_ty
+                            ))
                         }
                     }
                     crate::ast::BinaryOp::And | crate::ast::BinaryOp::Or => {
                         if l_ty == Type::Bool && r_ty == Type::Bool {
                             Ok(Type::Bool)
                         } else {
-                            Err(format!("Logical operation requires boolean operands, found {} and {}", l_ty, r_ty))
+                            Err(format!(
+                                "Logical operation requires boolean operands, found {} and {}",
+                                l_ty, r_ty
+                            ))
                         }
                     }
-                    _ => Ok(Type::I64),
+                    crate::ast::BinaryOp::Range => Ok(Type::I64),
                 }
             }
             crate::ast::Expr::Unary { op, expr, .. } => {

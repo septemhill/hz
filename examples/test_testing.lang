@@ -1,0 +1,11 @@
+import "testing"
+
+fn main() i64 {
+    testing.assert(true, "This should pass");
+    testing.assert_eq_i64(1, 1, "1 should equal 1");
+    testing.assert_ne_i64(1, 2, "1 should not equal 2");
+    testing.assert_eq_bool(true, true, "true should equal true");
+    testing.assert_eq_string("hello", "hello", "strings should match");
+    
+    return 0;
+}

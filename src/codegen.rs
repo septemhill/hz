@@ -542,6 +542,34 @@ impl<'ctx> CodeGenerator<'ctx> {
                         let or_val = self.builder.build_or(l_int, r_int, "or")?;
                         or_val.into()
                     }
+                    BinaryOp::BitAnd => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        self.builder.build_and(l_int, r_int, "bitand")?.into()
+                    }
+                    BinaryOp::BitOr => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        self.builder.build_or(l_int, r_int, "bitor")?.into()
+                    }
+                    BinaryOp::BitXor => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        self.builder.build_xor(l_int, r_int, "bitxor")?.into()
+                    }
+                    BinaryOp::Shl => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        self.builder.build_left_shift(l_int, r_int, "shl")?.into()
+                    }
+                    BinaryOp::Shr => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        // Use logical shift right (LSR) for now, as we use unsigned divisions
+                        self.builder
+                            .build_right_shift(l_int, r_int, false, "shr")?
+                            .into()
+                    }
                     BinaryOp::Range => {
                         // For range, we'll just return 0 for now
                         // A full implementation would create a range object
@@ -581,8 +609,25 @@ impl<'ctx> CodeGenerator<'ctx> {
                 args,
                 ..
             } => {
-                if namespace.as_deref() == Some("io") && name == "println" {
-                    return self.generate_hir_io_println(args);
+                // Handle namespaced function calls (e.g., io.println, testing.assert)
+                if let Some(ns) = namespace.as_deref() {
+                    // Resolve alias to actual package name
+                    let actual_package = self
+                        .imported_packages
+                        .get(ns)
+                        .map(|s| s.as_str())
+                        .unwrap_or(ns);
+
+                    // Only allow io.println if io was explicitly imported
+                    if actual_package == "io" && name == "println" {
+                        return self.generate_hir_io_println(args);
+                    }
+
+                    // Try to find the function in stdlib
+                    if let Some(_fn_def) = self.stdlib.get_function(actual_package, name) {
+                        // For now, just return a dummy value
+                        return Ok(self.context.i64_type().const_int(0, false).into());
+                    }
                 }
                 let function = self
                     .module
@@ -891,14 +936,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 for (alias, package_name) in packages {
                     let namespace = alias.as_deref().unwrap_or(package_name.as_str());
 
-                    eprintln!(
-                        "DEBUG: Processing import: namespace={}, package={}",
-                        namespace, package_name
-                    );
-                    eprintln!(
-                        "DEBUG: imported_packages before: {:?}",
-                        self.imported_packages.keys().collect::<Vec<_>>()
-                    );
+                    // eprintln!(
+                    //     "DEBUG: Processing import: namespace={}, package={}",
+                    //     namespace, package_name
+                    // );
+                    // eprintln!(
+                    //     "DEBUG: imported_packages before: {:?}",
+                    //     self.imported_packages.keys().collect::<Vec<_>>()
+                    // );
 
                     // Check for duplicate import
                     if self.imported_packages.contains_key(namespace) {
@@ -929,6 +974,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                     // Try to load the package
                     if let Err(e) = self.stdlib.load_package(package_name) {
                         return Err(format!("Import error: {}", e).into());
+                    }
+
+                    // Declare all functions from the loaded package
+                    if let Some(pkg) = self.stdlib.packages().get(package_name) {
+                        let fn_defs: Vec<FnDef> = pkg.functions.clone();
+                        for fn_def in fn_defs {
+                            if let Err(e) = self.declare_function(&fn_def) {
+                                return Err(format!(
+                                    "Failed to declare function from package '{}': {}",
+                                    package_name, e
+                                )
+                                .into());
+                            }
+                        }
                     }
                 }
                 Ok(())
@@ -1446,6 +1505,43 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .into()
                 }
             }
+            BinaryOp::BitAnd => self
+                .builder
+                .build_and(
+                    left_val.into_int_value(),
+                    right_val.into_int_value(),
+                    "bitand",
+                )?
+                .into(),
+            BinaryOp::BitOr => self
+                .builder
+                .build_or(
+                    left_val.into_int_value(),
+                    right_val.into_int_value(),
+                    "bitor",
+                )?
+                .into(),
+            BinaryOp::BitXor => self
+                .builder
+                .build_xor(
+                    left_val.into_int_value(),
+                    right_val.into_int_value(),
+                    "bitxor",
+                )?
+                .into(),
+            BinaryOp::Shl => self
+                .builder
+                .build_left_shift(left_val.into_int_value(), right_val.into_int_value(), "shl")?
+                .into(),
+            BinaryOp::Shr => self
+                .builder
+                .build_right_shift(
+                    left_val.into_int_value(),
+                    right_val.into_int_value(),
+                    false, // logical shift
+                    "shr",
+                )?
+                .into(),
             BinaryOp::Range => todo!("Codegen for Range operator not implemented"),
         };
 
@@ -1503,6 +1599,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map(|s| s.as_str())
                 .unwrap_or(ns);
 
+            eprintln!(
+                "DEBUG generate_call: namespace={}, actual_package={}, name={}",
+                ns, actual_package, name
+            );
+            eprintln!(
+                "DEBUG generate_call: imported_packages={:?}",
+                self.imported_packages.keys().collect::<Vec<_>>()
+            );
+
             // Only allow io.println if io was explicitly imported
             if actual_package == "io" && name == "println" {
                 // Check if io was imported
@@ -1517,8 +1622,14 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             // Try to find the function in stdlib
             if let Some(_fn_def) = self.stdlib.get_function(actual_package, name) {
+                eprintln!("DEBUG generate_call: found function in stdlib: {}", name);
                 // For now, just return a dummy value
                 return Ok(self.context.i64_type().const_int(0, false).into());
+            } else {
+                eprintln!(
+                    "DEBUG generate_call: function NOT found in stdlib: {}.{}, checking module",
+                    actual_package, name
+                );
             }
         }
 

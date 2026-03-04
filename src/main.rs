@@ -73,7 +73,7 @@ enum Commands {
 /// Compile source code to executable
 fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
     // Step 0: Initialize std library
-    println!("[0/5] Loading std library...");
+    println!("[0/8] Loading std library...");
     let mut stdlib = stdlib::StdLib::new();
     // Set std path to ./std relative to current directory
     stdlib.set_std_path("./std");
