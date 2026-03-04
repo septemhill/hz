@@ -74,6 +74,7 @@ pub enum Token {
     SlashAssign, // /=
     Ampersand,   // &
     Pipe,        // |
+    Underscore,  // _
     Not,         // !
 
     // End of file
@@ -144,6 +145,7 @@ impl Token {
             Token::SlashAssign => "/=",
             Token::Ampersand => "&",
             Token::Pipe => "|",
+            Token::Underscore => "_",
             Token::Not => "!",
             Token::Eof => "eof",
             Token::Error(_) => "error",
@@ -406,6 +408,7 @@ impl Lexer {
             "null" => Token::Null,
             "switch" => Token::Switch,
             "self" => Token::SelfType,
+            "_" => Token::Underscore,
             _ => Token::Ident(ident),
         }
     }

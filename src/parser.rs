@@ -1524,21 +1524,63 @@ impl Parser {
         self.match_token(Token::RParen);
 
         self.skip_whitespace();
-        // Check for capture: |e|
+        // Check for capture: |e| or |k, v|
         let mut capture = None;
+        let mut index_var = None;
         if self.match_token(Token::Pipe) {
-            if let Token::Ident(name) = self.current().cloned().ok_or_else(|| ParseError {
-                message: "Expected identifier after '|'".to_string(),
-                location: None,
-            })? {
-                capture = Some(name);
-                self.advance();
-                if !self.match_token(Token::Pipe) {
+            // Parse first variable (can be identifier or _)
+            let first_var = match self.current().cloned() {
+                Some(Token::Ident(name)) => {
+                    self.advance();
+                    Some(name)
+                }
+                Some(Token::Underscore) => {
+                    self.advance();
+                    None
+                }
+                _ => {
                     return Err(ParseError {
-                        message: "Expected closing '|'".to_string(),
+                        message: "Expected identifier or '_' after '|'".to_string(),
                         location: self.current_token().map(|t| t.span.start),
                     });
                 }
+            };
+
+            // Check if there's a second variable (index, value pattern)
+            if self.match_token(Token::Comma) {
+                // This is the |k, v| or |_, v| or |k, _| pattern
+                // First variable is the index/key
+                index_var = first_var;
+
+                // Parse second variable
+                capture = match self.current().cloned() {
+                    Some(Token::Ident(name)) => {
+                        self.advance();
+                        Some(name)
+                    }
+                    Some(Token::Underscore) => {
+                        self.advance();
+                        None
+                    }
+                    _ => {
+                        return Err(ParseError {
+                            message: "Expected identifier or '_' after ',' in for loop capture"
+                                .to_string(),
+                            location: self.current_token().map(|t| t.span.start),
+                        });
+                    }
+                };
+            } else {
+                // Single variable pattern |e|
+                capture = first_var;
+            }
+
+            // Expect closing pipe
+            if !self.match_token(Token::Pipe) {
+                return Err(ParseError {
+                    message: "Expected closing '|'".to_string(),
+                    location: self.current_token().map(|t| t.span.start),
+                });
             }
         }
 
@@ -1549,6 +1591,7 @@ impl Parser {
             var_name,
             iterable,
             capture,
+            index_var,
             body,
             span: Span { start: 0, end: 0 },
         })

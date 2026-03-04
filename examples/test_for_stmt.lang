@@ -6,8 +6,18 @@ fn main() {
     }
 
     const c = [3]u8{'a', 'b', 'c'};
-    for (c) |elem| {
-        io.println(elem);
+    for (c) |k, v| {
+        io.println(k, v);
+    }
+
+    // Ignore indexs
+    for (c) |_, v| {
+        io.println(v);
+    }
+
+    // Ignore values
+    for (c) |k, _| {
+        io.println(k);
     }
 
     var f = Iter { i: 0 };

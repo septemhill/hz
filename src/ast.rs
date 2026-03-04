@@ -370,6 +370,8 @@ pub enum Stmt {
         iterable: Expr,
         /// Optional capture variable for iterators
         capture: Option<String>,
+        /// Optional index variable for array iteration (e.g., |k, v|)
+        index_var: Option<String>,
         body: Box<Stmt>,
         span: Span,
     },
