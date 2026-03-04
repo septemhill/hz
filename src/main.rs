@@ -60,7 +60,7 @@ enum Commands {
 /// Compile source code to executable
 fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
     // Step 0: Initialize std library
-    println!("[0/4] Loading std library...");
+    println!("[0/5] Loading std library...");
     let mut stdlib = stdlib::StdLib::new();
     // Set std path to ./std relative to current directory
     stdlib.set_std_path("./std");
@@ -72,7 +72,7 @@ fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
     );
 
     // Step 1: Parse source code into AST
-    println!("[1/4] Parsing source code...");
+    println!("[1/5] Parsing source code...");
     let program = parser::parse(source)?;
     println!("    Found {} function(s)", program.functions.len());
     for func in &program.functions {
@@ -80,7 +80,7 @@ fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
     }
 
     // Step 2: Generate LLVM IR
-    println!("[2/4] Generating LLVM IR...");
+    println!("[2/5] Generating LLVM IR...");
     let context = inkwell::context::Context::create();
     let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;
     codegen.generate(&program)?;
@@ -94,13 +94,13 @@ fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
     }
 
     // Step 3: Write LLVM IR to file
-    println!("[3/4] Writing LLVM IR to file...");
+    println!("[3/5] Writing LLVM IR to file...");
     let ir_path = format!("{}.ll", output_path);
     fs::write(&ir_path, &ir)?;
     println!("    Written to {}", ir_path);
 
     // Step 4: Compile to object file
-    println!("[4/4] Compiling to object file...");
+    println!("[4/5] Compiling to object file...");
     let obj_path = format!("{}.o", output_path);
 
     // Use clang to compile the IR
@@ -114,13 +114,41 @@ fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
                 println!("    Compiled to {}", obj_path);
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                println!("    Warning: clang compilation failed: {}", stderr);
-                println!("    (This is expected if clang is not installed)");
+                return Err(format!("clang compilation failed: {}", stderr).into());
             }
         }
         Err(e) => {
-            println!("    Warning: Could not run clang: {}", e);
-            println!("    (LLVM IR saved to {})", ir_path);
+            return Err(format!("Could not run clang: {}", e).into());
+        }
+    }
+
+    // Step 5: Link to create executable
+    println!("[5/5] Linking to create executable...");
+    let exec_path = output_path.to_string();
+
+    // Check if main function exists
+    let has_main = program.functions.iter().any(|f| f.name == "main");
+    if !has_main {
+        println!("    Warning: No main function found, creating executable anyway");
+    }
+
+    // Use clang to link the object file
+    let link_result = std::process::Command::new("clang")
+        .args(&["-o", &exec_path, &obj_path])
+        .output();
+
+    match link_result {
+        Ok(output) => {
+            if output.status.success() {
+                println!("    Linked to {}", exec_path);
+                println!("    Executable ready: {}", exec_path);
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("clang linking failed: {}", stderr).into());
+            }
+        }
+        Err(e) => {
+            return Err(format!("Could not run clang for linking: {}", e).into());
         }
     }
 

@@ -83,11 +83,11 @@ impl Parser {
 
     /// Set the current state and record in history for debugging
     fn set_state(&mut self, new_state: ParserState) {
-        eprintln!(
-            "DEBUG: Parser state transition: {:?} -> {:?}",
-            self.state.name(),
-            new_state.name()
-        );
+        // eprintln!(
+        //     "DEBUG: Parser state transition: {:?} -> {:?}",
+        //     self.state.name(),
+        //     new_state.name()
+        // );
         self.state_history.push(self.state.clone());
         self.state = new_state;
     }

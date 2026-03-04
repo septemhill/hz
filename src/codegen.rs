@@ -174,7 +174,13 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Declare a function (create function signature)
     fn declare_function(&mut self, fn_def: &FnDef) -> CodegenResult<()> {
-        let return_type = self.llvm_type(fn_def.return_ty.as_ref().unwrap_or(&Type::I64));
+        // For main function, default to i64; for other functions, default to void
+        let default_return_type = if fn_def.name == "main" {
+            Type::I64
+        } else {
+            Type::Void
+        };
+        let return_type = self.llvm_type(fn_def.return_ty.as_ref().unwrap_or(&default_return_type));
         let param_types: Vec<BasicMetadataTypeEnum> = fn_def
             .params
             .iter()
@@ -226,9 +232,18 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.generate_stmt(stmt)?;
         }
 
-        // If the function doesn't have a return statement and returns void, add implicit return
-        if fn_def.return_ty == Some(Type::Void) || fn_def.return_ty.is_none() {
+        // If the function doesn't have a return statement, add implicit return
+        // For main function without return type, default to returning 0 (i64)
+        // For other functions without return type, default to void
+        if fn_def.return_ty == Some(Type::Void) {
             self.builder.build_return(None)?;
+        } else if fn_def.return_ty.is_none() {
+            if fn_def.name == "main" {
+                self.builder
+                    .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
+            } else {
+                self.builder.build_return(None)?;
+            }
         }
 
         self.current_function = None;

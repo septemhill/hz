@@ -835,74 +835,74 @@ impl PeekableLexerIterator {
             return None;
         }
 
-        eprintln!(
-            "DEBUG peek START: offset={}, peeked.len={}, iter.pos={}, remaining='{}'",
-            offset,
-            self.peeked.len(),
-            self.iter.pos,
-            &self.iter.source[self.iter.pos..].iter().collect::<String>()
-        );
+        // eprintln!(
+        //     "DEBUG peek START: offset={}, peeked.len={}, iter.pos={}, remaining='{}'",
+        //     offset,
+        //     self.peeked.len(),
+        //     self.iter.pos,
+        //     &self.iter.source[self.iter.pos..].iter().collect::<String>()
+        // );
 
         // Ensure we have enough tokens buffered
         while self.peeked.len() < offset + 1 {
-            eprintln!(
-                "DEBUG peek: fetching token, peeked.len={}",
-                self.peeked.len()
-            );
+            // eprintln!(
+            //     "DEBUG peek: fetching token, peeked.len={}",
+            //     self.peeked.len()
+            // );
             match self.iter.next() {
                 Some(Ok(token)) => {
-                    eprintln!(
-                        "DEBUG peek: got token {:?}, iter.pos now {}",
-                        token.token, self.iter.pos
-                    );
+                    // eprintln!(
+                    //     "DEBUG peek: got token {:?}, iter.pos now {}",
+                    //     token.token, self.iter.pos
+                    // );
                     self.peeked.push_back(Ok(token));
                 }
                 Some(Err(e)) => {
-                    eprintln!("DEBUG peek: got error {:?}", e);
+                    // eprintln!("DEBUG peek: got error {:?}", e);
                     self.peeked.push_back(Err(e));
                 }
                 None => {
-                    eprintln!("DEBUG peek: got None");
+                    // eprintln!("DEBUG peek: got None");
                     break;
                 }
             }
         }
 
         let result = self.peeked.get(offset).and_then(|r| r.as_ref().ok());
-        eprintln!(
-            "DEBUG peek END: result={:?}, iter.pos={}",
-            result.map(|t| &t.token),
-            self.iter.pos
-        );
+        // eprintln!(
+        //     "DEBUG peek END: result={:?}, iter.pos={}",
+        //     result.map(|t| &t.token),
+        //     self.iter.pos
+        // );
         result
     }
 
     /// Consume the peeked token (if any) and return the next token
     pub fn next(&mut self) -> Option<Result<TokenWithSpan, LexerError>> {
-        eprintln!(
-            "DEBUG next START: peeked.len={}, iter.pos={}",
-            self.peeked.len(),
-            self.iter.pos
-        );
+        // eprintln!(
+        //     "DEBUG next START: peeked.len={}, iter.pos={}",
+        //     self.peeked.len(),
+        //     self.iter.pos
+        // );
 
         // Return buffered token if available
         if !self.peeked.is_empty() {
             let result = self.peeked.pop_front();
-            eprintln!(
-                "DEBUG next: popped {:?}, iter.pos={}",
-                result.as_ref().map(|r| r.as_ref().map(|t| &t.token)),
-                self.iter.pos
-            );
+            // eprintln!(
+            //     "DEBUG next: popped {:?}, iter.pos={}",
+            //     result.as_ref().map(|r| r.as_ref().map(|t| &t.token)),
+            //     self.iter.pos
+            // );
             return result;
         }
 
         // Otherwise get next from iterator
         let result = self.iter.next();
-        eprintln!(
-            "DEBUG next: from iter {:?}, iter.pos now {}",
-            result.as_ref().map(|r| r.as_ref().map(|t| &t.token)),
-            self.iter.pos
-        );
+        // eprintln!(
+        //     "DEBUG next: from iter {:?}, iter.pos now {}",
+        //     result.as_ref().map(|r| r.as_ref().map(|t| &t.token)),
+        //     self.iter.pos
+        // );
         result
     }
 
