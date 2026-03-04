@@ -4,13 +4,58 @@
 
 use std::error::Error;
 use std::fs;
-use std::path::Path;
 
 mod ast;
 mod codegen;
 mod lexer;
 mod parser;
 mod stdlib;
+
+use clap::Parser;
+
+/// CLI arguments for the Lang compiler
+#[derive(clap::Parser, Debug)]
+#[command(name = "lang")]
+#[command(version = "0.1.0")]
+#[command(about = "Lang Programming Language Compiler", long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum Commands {
+    /// Run a Lang source file
+    Run {
+        /// Source file to run
+        #[arg(value_name = "FILE")]
+        source: std::path::PathBuf,
+    },
+    /// Build a Lang source file to executable
+    Build {
+        /// Source file to build
+        #[arg(value_name = "FILE")]
+        source: std::path::PathBuf,
+        /// Output file path
+        #[arg(short = 'o', long = "output", value_name = "OUTPUT")]
+        output: Option<std::path::PathBuf>,
+    },
+    /// Run via JIT compiler
+    Jit {
+        /// Source file to run
+        #[arg(value_name = "FILE")]
+        source: std::path::PathBuf,
+    },
+    /// Generate LLVM IR only
+    Ir {
+        /// Source file to generate IR from
+        #[arg(value_name = "FILE")]
+        source: std::path::PathBuf,
+        /// Output file for IR (optional)
+        #[arg(short = 'o', long = "output", value_name = "OUTPUT")]
+        output: Option<std::path::PathBuf>,
+    },
+}
 
 /// Compile source code to executable
 fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
@@ -119,92 +164,65 @@ fn run_jit(source: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Print usage information
-fn print_usage() {
-    println!("Lang Programming Language Compiler");
-    println!();
-    println!("Usage: lang <command> [options]");
-    println!();
-    println!("Commands:");
-    println!("  run <file>    Run a Lang source file");
-    println!("  build <file>  Build a Lang source file to executable");
-    println!("  jit <file>    Run via JIT compiler");
-    println!("  ir <file>     Generate LLVM IR only");
-    println!();
-    println!("Examples:");
-    println!("  lang run hello.lang");
-    println!("  lang build hello.lang -o hello");
+/// Generate LLVM IR only
+fn generate_ir(source: &str, output_path: Option<String>) -> Result<(), Box<dyn Error>> {
+    // Initialize std library
+    println!("Loading std library...");
+    let mut stdlib = stdlib::StdLib::new();
+    stdlib.set_std_path("./std");
+    println!(
+        "Loaded std packages: {:?}",
+        stdlib.packages().keys().collect::<Vec<_>>()
+    );
+
+    // Parse source code
+    println!("Parsing source code...");
+    let program = parser::parse(source)?;
+
+    // Generate LLVM IR
+    let context = inkwell::context::Context::create();
+    let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;
+    codegen.generate(&program)?;
+    let ir = codegen.print_ir();
+
+    // Output IR
+    if let Some(ref path) = output_path {
+        std::fs::write(path, &ir)?;
+        println!("LLVM IR written to {}", path);
+    } else {
+        println!("{}", ir);
+    }
+
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     // Initialize logging
     env_logger::init();
 
-    // Get command line arguments
-    let args: Vec<String> = std::env::args().collect();
+    // Parse CLI arguments
+    let cli = Cli::parse();
 
-    if args.len() < 2 {
-        print_usage();
-        return Ok(());
-    }
-
-    let command = &args[1];
-
-    match command.as_str() {
-        "run" => {
-            if args.len() < 3 {
-                println!("Error: Missing source file");
-                print_usage();
-                return Ok(());
-            }
-            let source_path = &args[2];
-            let source = fs::read_to_string(source_path)?;
-            run_jit(&source)?;
+    match cli.command {
+        Commands::Run { source } => {
+            let source_content = fs::read_to_string(&source)?;
+            run_jit(&source_content)?;
         }
-        "build" => {
-            if args.len() < 3 {
-                println!("Error: Missing source file");
-                print_usage();
-                return Ok(());
-            }
-            let source_path = &args[2];
-            let output_path = if args.len() >= 4 && args[3] == "-o" {
-                args.get(4).cloned().unwrap_or_else(|| "a".to_string())
-            } else {
-                "a".to_string()
-            };
-            let source = fs::read_to_string(source_path)?;
-            compile(&source, &output_path)?;
+        Commands::Build { source, output } => {
+            let source_content = fs::read_to_string(&source)?;
+            let output_path = output
+                .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "a".to_string());
+            compile(&source_content, &output_path)?;
         }
-        "jit" => {
-            if args.len() < 3 {
-                println!("Error: Missing source file");
-                print_usage();
-                return Ok(());
-            }
-            let source_path = &args[2];
-            let source = fs::read_to_string(source_path)?;
-            run_jit(&source)?;
+        Commands::Jit { source } => {
+            let source_content = fs::read_to_string(&source)?;
+            run_jit(&source_content)?;
         }
-        "ir" => {
-            if args.len() < 3 {
-                println!("Error: Missing source file");
-                print_usage();
-                return Ok(());
-            }
-            let source_path = &args[2];
-            let source = fs::read_to_string(source_path)?;
-            let program = parser::parse(&source)?;
-            let context = inkwell::context::Context::create();
-            let mut stdlib = stdlib::StdLib::new();
-            stdlib.set_std_path("./std");
-            let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;
-            codegen.generate(&program)?;
-            println!("{}", codegen.print_ir());
-        }
-        _ => {
-            println!("Unknown command: {}", command);
-            print_usage();
+        Commands::Ir { source, output } => {
+            let source_content = fs::read_to_string(&source)?;
+            let output_path = output.map(|p| p.to_string_lossy().to_string());
+            generate_ir(&source_content, output_path)?;
         }
     }
 
