@@ -6,6 +6,7 @@ use std::error::Error;
 use std::fs;
 
 mod ast;
+mod build;
 mod codegen;
 mod hir;
 mod lexer;
@@ -43,6 +44,9 @@ enum Commands {
         /// Output file path
         #[arg(short = 'o', long = "output", value_name = "OUTPUT")]
         output: Option<std::path::PathBuf>,
+        /// Include search paths
+        #[arg(short = 'I', long = "include", value_name = "PATH")]
+        include: Vec<std::path::PathBuf>,
     },
     /// Run via JIT compiler
     Jit {
@@ -70,126 +74,24 @@ enum Commands {
     },
 }
 
-/// Compile source code to executable
-fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
-    // Step 0: Initialize std library
-    println!("[0/8] Loading std library...");
-    let mut stdlib = stdlib::StdLib::new();
-    // Set std path to ./std relative to current directory
-    stdlib.set_std_path("./std");
-    // Don't preload packages - require explicit imports
-    // let _ = stdlib.preload_common();
-    println!(
-        "    Loaded std packages: {:?}",
-        stdlib.packages().keys().collect::<Vec<_>>()
-    );
-
-    // Step 1: Parse source code into AST
-    println!("[1/8] Parsing source code...");
-    let program = parser::parse(source)?;
-    println!("    Found {} function(s)", program.functions.len());
-
-    // Step 2: Semantic Analysis
-    println!("[2/8] Semantic Analysis...");
-    let mut analyzer = sema::SemanticAnalyzer::new();
-    analyzer.analyze(&program)?;
-
-    // Step 3: Lowering to HIR
-    println!("[3/8] Lowering to HIR...");
-    let mut lowering_ctx = lower::LoweringContext::new();
-    let mut hir_program = lowering_ctx.lower_program(&program);
-
-    // Step 4: Middle-end Optimization
-    println!("[4/8] Optimizing HIR...");
-    opt::optimize(&mut hir_program);
-
-    // Step 5: Generate LLVM IR
-    println!("[5/8] Generating LLVM IR...");
-    let context = inkwell::context::Context::create();
-    let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;
-
-    // Process declarations from AST first (structs, enums, fn signatures)
-    for s in &program.structs {
-        codegen.declare_struct(s)?;
-    }
-    for e in &program.enums {
-        codegen.declare_enum(e)?;
-    }
-    for f in &program.functions {
-        codegen.declare_function(f)?;
+/// Compile source code to executable (Multi-file enabled)
+fn compile(
+    source_path: &std::path::Path,
+    output_path: &str,
+    include_paths: &[std::path::PathBuf],
+) -> Result<(), Box<dyn Error>> {
+    let mut stdlib_path = std::path::PathBuf::from("./std");
+    if !stdlib_path.exists() {
+        // Fallback or handle error
+        stdlib_path = std::path::PathBuf::from("/usr/local/lib/lang/std");
     }
 
-    // Generate code from HIR
-    codegen.generate_hir(&hir_program)?;
-    let ir = codegen.print_ir();
-    println!("    Generated LLVM IR:");
-    for line in ir.lines().take(20) {
-        println!("    {}", line);
-    }
-    if ir.lines().count() > 20 {
-        println!("    ... ({} more lines)", ir.lines().count() - 20);
+    let mut build_system = build::BuildSystem::new(stdlib_path);
+    for path in include_paths {
+        build_system.add_search_path(path.clone());
     }
 
-    // Step 6: Write LLVM IR to file
-    println!("[6/8] Writing LLVM IR to file...");
-    let ir_path = format!("{}.ll", output_path);
-    fs::write(&ir_path, &ir)?;
-    println!("    Written to {}", ir_path);
-
-    // Step 7: Compile to object file
-    println!("[7/8] Compiling to object file...");
-    let obj_path = format!("{}.o", output_path);
-
-    // Use clang to compile the IR
-    let result = std::process::Command::new("clang")
-        .args(&["-c", "-o", &obj_path, &ir_path])
-        .output();
-
-    match result {
-        Ok(output) => {
-            if output.status.success() {
-                println!("    Compiled to {}", obj_path);
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!("clang compilation failed: {}", stderr).into());
-            }
-        }
-        Err(e) => {
-            return Err(format!("Could not run clang: {}", e).into());
-        }
-    }
-
-    // Step 8: Link to create executable
-    println!("[8/8] Linking to create executable...");
-    let exec_path = output_path.to_string();
-
-    // Check if main function exists
-    let has_main = program.functions.iter().any(|f| f.name == "main");
-    if !has_main {
-        println!("    Warning: No main function found, creating executable anyway");
-    }
-
-    // Use clang to link the object file
-    let link_result = std::process::Command::new("clang")
-        .args(&["-o", &exec_path, &obj_path])
-        .output();
-
-    match link_result {
-        Ok(output) => {
-            if output.status.success() {
-                println!("    Linked to {}", exec_path);
-                println!("    Executable ready: {}", exec_path);
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!("clang linking failed: {}", stderr).into());
-            }
-        }
-        Err(e) => {
-            return Err(format!("Could not run clang for linking: {}", e).into());
-        }
-    }
-
-    Ok(())
+    build_system.build(source_path, output_path)
 }
 
 /// Run the compiled program (JIT)
@@ -327,12 +229,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             let source_content = fs::read_to_string(&source)?;
             run_jit(&source_content)?;
         }
-        Commands::Build { source, output } => {
-            let source_content = fs::read_to_string(&source)?;
+        Commands::Build {
+            source,
+            output,
+            include,
+        } => {
             let output_path = output
-                .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
-                .unwrap_or_else(|| "a".to_string());
-            compile(&source_content, &output_path)?;
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| {
+                    // Use the source file stem as the output name
+                    source
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "a".to_string())
+                });
+            compile(&source, &output_path, &include)?;
         }
         Commands::Jit { source } => {
             let source_content = fs::read_to_string(&source)?;

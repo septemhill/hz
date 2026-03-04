@@ -18,56 +18,80 @@ pub struct Package {
     pub enums: Vec<EnumDef>,
 }
 
-/// Standard library package manager
+/// Package loader and manager
 pub struct StdLib {
     packages: HashMap<String, Package>,
     std_path: Option<String>,
+    search_paths: Vec<String>,
 }
 
 impl StdLib {
-    /// Create a new std library manager
+    /// Create a new package manager
     pub fn new() -> Self {
         StdLib {
             packages: HashMap::new(),
             std_path: None,
+            search_paths: Vec::new(),
         }
     }
 
     /// Set the std library path
     pub fn set_std_path(&mut self, path: &str) {
         self.std_path = Some(path.to_string());
+        // Also add it to search paths
+        self.add_search_path(path);
     }
 
-    /// Load a package from the std library
+    /// Add a search path for packages
+    pub fn add_search_path(&mut self, path: &str) {
+        if !self.search_paths.contains(&path.to_string()) {
+            self.search_paths.push(path.to_string());
+        }
+    }
+
+    /// Load a package by name, searching through search paths
     pub fn load_package(&mut self, name: &str) -> Result<Package, String> {
         // Check if already loaded
         if let Some(pkg) = self.packages.get(name) {
             return Ok(pkg.clone());
         }
 
-        // Find the package file
-        let std_path = self.std_path.as_ref().ok_or("Std path not set")?;
+        // Search through all search paths
+        for path in &self.search_paths {
+            let package_path = if path.ends_with(".lang") {
+                // If the path itself is a file, check if its name matches
+                let path_obj = Path::new(path);
+                if path_obj.file_stem().and_then(|s| s.to_str()) == Some(name) {
+                    path.to_string()
+                } else {
+                    continue;
+                }
+            } else {
+                format!("{}/{}.lang", path, name)
+            };
 
-        let package_path = format!("{}/{}.lang", std_path, name);
+            if Path::new(&package_path).exists() {
+                let source = fs::read_to_string(&package_path)
+                    .map_err(|e| format!("Failed to read package '{}' at {}: {}", name, package_path, e))?;
 
-        let source = fs::read_to_string(&package_path)
-            .map_err(|e| format!("Failed to load package '{}': {}", name, e))?;
+                // Parse the package
+                let program = parser::parse(&source)
+                    .map_err(|e| format!("Failed to parse package '{}' at {}: {}", name, package_path, e))?;
 
-        // Parse the package
-        let program = parser::parse(&source)
-            .map_err(|e| format!("Failed to parse package '{}': {}", name, e))?;
+                let package = Package {
+                    name: name.to_string(),
+                    functions: program.functions,
+                    structs: program.structs,
+                    enums: program.enums,
+                };
 
-        let package = Package {
-            name: name.to_string(),
-            functions: program.functions,
-            structs: program.structs,
-            enums: program.enums,
-        };
+                // Cache the package
+                self.packages.insert(name.to_string(), package.clone());
+                return Ok(package);
+            }
+        }
 
-        // Cache the package
-        self.packages.insert(name.to_string(), package.clone());
-
-        Ok(package)
+        Err(format!("Package '{}' not found in search paths: {:?}", name, self.search_paths))
     }
 
     /// Get a function from a package

@@ -48,6 +48,9 @@ pub struct CodeGenerator<'ctx> {
 
     // Track imported packages (for duplicate checking)
     imported_packages: HashMap<String, String>, // alias -> package_name
+
+    // Current module name for mangling
+    module_name: String,
 }
 
 /// Result of code generation
@@ -73,6 +76,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             return_type: None,
             stdlib,
             imported_packages: HashMap::new(),
+            module_name: module_name.to_string(),
         })
     }
 
@@ -88,10 +92,16 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Generate code for an HIR function
     fn generate_hir_function(&mut self, hir_fn: &hir::HirFn) -> CodegenResult<()> {
+        let mangled_name = if hir_fn.name == "main" {
+            "main".to_string()
+        } else {
+            format!("{}_{}", self.module_name, hir_fn.name)
+        };
+
         let function = self
             .module
-            .get_function(&hir_fn.name)
-            .ok_or(format!("Function not declared: {}", hir_fn.name))?;
+            .get_function(&mangled_name)
+            .ok_or(format!("Function not declared: {} (original: {})", mangled_name, hir_fn.name))?;
 
         self.current_function = Some(function);
         self.return_type = Some(hir_fn.return_ty.clone());
@@ -609,36 +619,41 @@ impl<'ctx> CodeGenerator<'ctx> {
                 args,
                 ..
             } => {
-                // Handle namespaced function calls (e.g., io.println, testing.assert)
-                if let Some(ns) = namespace.as_deref() {
-                    // Resolve alias to actual package name
+                let (mangled_name, _is_std) = if let Some(ns) = namespace.as_deref() {
                     let actual_package = self
                         .imported_packages
                         .get(ns)
                         .map(|s| s.as_str())
                         .unwrap_or(ns);
 
-                    // Only allow io.println if io was explicitly imported
                     if actual_package == "io" && name == "println" {
                         return self.generate_hir_io_println(args);
                     }
 
-                    // Try to find the function in stdlib
-                    if let Some(_fn_def) = self.stdlib.get_function(actual_package, name) {
-                        // For now, just return a dummy value
-                        return Ok(self.context.i64_type().const_int(0, false).into());
+                    (format!("{}_{}", actual_package, name), true)
+                } else {
+                    if name == "main" {
+                        ("main".to_string(), false)
+                    } else {
+                        (format!("{}_{}", self.module_name, name), false)
                     }
-                }
+                };
+
                 let function = self
                     .module
-                    .get_function(name)
-                    .ok_or(format!("Fn not found: {}", name))?;
-                let llvm_args: Vec<BasicMetadataValueEnum> = args
-                    .iter()
-                    .map(|a| self.generate_hir_expr(a).unwrap().into())
-                    .collect();
+                    .get_function(&mangled_name)
+                    .or_else(|| self.module.get_function(name)) // fallback demangled
+                    .ok_or(format!("Fn not found: {} (original: {})", mangled_name, name))?;
+
+                let mut llvm_args = Vec::new();
+                for arg in args {
+                    let val = self.generate_hir_expr(arg)?;
+                    llvm_args.push(BasicMetadataValueEnum::from(val));
+                }
+
                 let call_result = self.builder.build_call(function, &llvm_args, "call")?;
                 let result = match call_result.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(val) => val,
                     _ => self.context.i64_type().const_int(0, false).into(),
                 };
                 Ok(result)
@@ -845,8 +860,6 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Declare a function (create function signature)
     pub fn declare_function(&mut self, fn_def: &FnDef) -> CodegenResult<()> {
-        // For main function without return type, default to i64
-        // For other functions without return type, default to void
         let default_return_type = if fn_def.name == "main" && fn_def.return_ty.is_none() {
             Type::I64
         } else {
@@ -860,8 +873,51 @@ impl<'ctx> CodeGenerator<'ctx> {
             .collect();
 
         let fn_type = return_type.fn_type(&param_types, false);
-        self.module.add_function(&fn_def.name, fn_type, None);
 
+        // Mangle name if not main
+        let mangled_name = if fn_def.name == "main" {
+            "main".to_string()
+        } else {
+            format!("{}_{}", self.module_name, fn_def.name)
+        };
+
+        self.module.add_function(&mangled_name, fn_type, None);
+
+        Ok(())
+    }
+
+    /// Declare an external function
+    pub fn declare_external_function(&mut self, fn_def: &FnDef, target_module: &str) -> CodegenResult<()> {
+        let default_return_type = Type::Void;
+        let return_type = self.llvm_type(fn_def.return_ty.as_ref().unwrap_or(&default_return_type));
+        let param_types: Vec<BasicMetadataTypeEnum> = fn_def
+            .params
+            .iter()
+            .map(|p| self.llvm_type(&p.ty).into())
+            .collect();
+
+        let fn_type = return_type.fn_type(&param_types, false);
+        let mangled_name = format!("{}_{}", target_module, fn_def.name);
+
+        self.module.add_function(&mangled_name, fn_type, Some(inkwell::module::Linkage::External));
+
+        Ok(())
+    }
+
+    /// Process imports and declare imported functions
+    pub fn process_imports(&mut self, imports: &[(Option<String>, String)]) -> CodegenResult<()> {
+        for (alias, package_name) in imports {
+            let namespace = alias.as_deref().unwrap_or(package_name.as_str());
+            self.imported_packages.insert(namespace.to_string(), package_name.clone());
+
+            // If it's loaded in stdlib, declare its functions
+            if let Some(pkg) = self.stdlib.packages().get(package_name) {
+                let fn_defs = pkg.functions.clone();
+                for f in fn_defs {
+                    self.declare_external_function(&f, package_name)?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1590,8 +1646,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         namespace: Option<&str>,
         args: &[Expr],
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        // Handle std library function calls
-        if let Some(ns) = namespace {
+        // Handle std library and namespaced function calls
+        let (mangled_name, is_std) = if let Some(ns) = namespace {
             // Resolve alias to actual package name
             let actual_package = self
                 .imported_packages
@@ -1599,54 +1655,40 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .map(|s| s.as_str())
                 .unwrap_or(ns);
 
-            eprintln!(
-                "DEBUG generate_call: namespace={}, actual_package={}, name={}",
-                ns, actual_package, name
-            );
-            eprintln!(
-                "DEBUG generate_call: imported_packages={:?}",
-                self.imported_packages.keys().collect::<Vec<_>>()
-            );
-
-            // Only allow io.println if io was explicitly imported
+            // Special handling for io.println
             if actual_package == "io" && name == "println" {
-                // Check if io was imported
-                if !self.imported_packages.contains_key(ns) {
-                    return Err(format!(
-                        "Package 'io' not imported. Use 'import \"io\"' to import it."
-                    )
-                    .into());
-                }
                 return self.generate_io_println(args);
             }
 
-            // Try to find the function in stdlib
-            if let Some(_fn_def) = self.stdlib.get_function(actual_package, name) {
-                eprintln!("DEBUG generate_call: found function in stdlib: {}", name);
-                // For now, just return a dummy value
-                return Ok(self.context.i64_type().const_int(0, false).into());
+            (format!("{}_{}", actual_package, name), true)
+        } else {
+            // Internal call
+            if name == "main" {
+                ("main".to_string(), false)
             } else {
-                eprintln!(
-                    "DEBUG generate_call: function NOT found in stdlib: {}.{}, checking module",
-                    actual_package, name
-                );
+                (format!("{}_{}", self.module_name, name), false)
             }
+        };
+
+        let function = self.module.get_function(&mangled_name).or_else(|| {
+            // Fallback to demangled name if not found (e.g., for C-style symbols or main)
+            self.module.get_function(name)
+        }).ok_or(format!("Function not found: {} (original: {})", mangled_name, name))?;
+
+        // Generate arguments
+        let mut llvm_args = Vec::new();
+        for arg in args {
+            let val = self.generate_expr(arg)?;
+            llvm_args.push(BasicMetadataValueEnum::from(val));
         }
 
-        let _function = self
-            .module
-            .get_function(name)
-            .ok_or(format!("Function not found: {}", name))?;
-
-        // If no arguments, return a dummy value
-        if args.is_empty() {
-            return Ok(self.context.i64_type().const_int(0, false).into());
+        let call_site = self.builder.build_call(function, &llvm_args, "call_tmp")?;
+        
+        // Handle return value
+        match call_site.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(val) => Ok(val),
+            _ => Ok(self.context.i64_type().const_int(0, false).into()), // Default value for void or error
         }
-
-        // Just use the first argument as return value for now
-        // (proper return handling would require tracking function return types)
-        let result = self.generate_expr(&args[0])?;
-        Ok(result)
     }
 
     /// Generate io.println function call

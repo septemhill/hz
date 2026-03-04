@@ -1,0 +1,14 @@
+import "io";
+import "math_utils";
+
+fn main() i64 {
+    const a: i64 = 10;
+    const b: i64 = 5;
+    
+    const sum: i64 = math_utils.add(a, b);
+    const diff: i64 = math_utils.subtract(a, b);
+    
+    io.println("Multi-file build test:");
+    // For now symbols from math_utils should link correctly
+    return sum;
+}

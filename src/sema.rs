@@ -314,9 +314,13 @@ impl SemanticAnalyzer {
                     return Ok(Type::Void);
                 }
 
-                let symbol_ty = self.symbol_table.resolve(name)
-                    .map(|s| s.ty.clone())
-                    .ok_or_else(|| format!("Undefined function '{}'", name))?;
+                let symbol_ty = if namespace.is_some() {
+                    Type::I64 // Default return type for external functions
+                } else {
+                    self.symbol_table.resolve(name)
+                        .map(|s| s.ty.clone())
+                        .ok_or_else(|| format!("Undefined function '{}'", name))?
+                };
                 
                 for arg in args {
                     self.analyze_expr(arg)?;
