@@ -15,6 +15,7 @@ use inkwell::values::{
 };
 
 use crate::ast::*;
+use crate::hir;
 use crate::stdlib::StdLib;
 
 /// Code generator context
@@ -75,67 +76,653 @@ impl<'ctx> CodeGenerator<'ctx> {
         })
     }
 
-    /// Generate code for a program
-    pub fn generate(&mut self, program: &Program) -> CodegenResult<()> {
-        // First, process all import statements (for duplicate checking)
-        for (alias, package_name) in &program.imports {
-            let namespace = alias.as_deref().unwrap_or(package_name.as_str());
-
-            // Check for duplicate import
-            if self.imported_packages.contains_key(namespace) {
-                return Err(
-                    format!("Duplicate import: '{}' is already imported", namespace).into(),
-                );
-            }
-
-            // Also check if the same package is imported under a different name
-            for (existing_alias, existing_package) in &self.imported_packages {
-                if existing_package.as_str() == package_name.as_str()
-                    && Some(existing_alias.as_str()) != alias.as_deref()
-                {
-                    return Err(format!(
-                        "Package '{}' is already imported as '{}'",
-                        package_name, existing_alias
-                    )
-                    .into());
-                }
-            }
-
-            // Track this import
-            self.imported_packages
-                .insert(namespace.to_string(), package_name.clone());
-
-            // Try to load the package
-            if let Err(e) = self.stdlib.load_package(package_name) {
-                return Err(format!("Import error: {}", e).into());
-            }
-        }
-
-        // Then, declare all structs
-        for struct_def in &program.structs {
-            self.declare_struct(struct_def)?;
-        }
-
-        // Then, declare all enums
-        for enum_def in &program.enums {
-            self.declare_enum(enum_def)?;
-        }
-
-        // Then, declare all functions
-        for fn_def in &program.functions {
-            self.declare_function(fn_def)?;
-        }
-
-        // Generate code for each function
-        for fn_def in &program.functions {
-            self.generate_function(fn_def)?;
+    /// Generate code for an HIR program
+    pub fn generate_hir(&mut self, program: &hir::HirProgram) -> CodegenResult<()> {
+        // Generate code for each function in HIR
+        for hir_fn in &program.functions {
+            self.generate_hir_function(hir_fn)?;
         }
 
         Ok(())
     }
 
+    /// Generate code for an HIR function
+    fn generate_hir_function(&mut self, hir_fn: &hir::HirFn) -> CodegenResult<()> {
+        let function = self
+            .module
+            .get_function(&hir_fn.name)
+            .ok_or(format!("Function not declared: {}", hir_fn.name))?;
+
+        self.current_function = Some(function);
+        self.return_type = Some(hir_fn.return_ty.clone());
+
+        self.variables.clear();
+        self.variable_types.clear();
+
+        let entry_block = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry_block);
+        self.current_block = Some(entry_block);
+
+        for (i, (name, ty)) in hir_fn.params.iter().enumerate() {
+            let param_value = function
+                .get_nth_param(i as u32)
+                .ok_or("Failed to get param")?;
+            let llvm_type = self.llvm_type(ty);
+            let alloca = self.builder.build_alloca(llvm_type, name)?;
+            self.builder.build_store(alloca, param_value)?;
+            self.variables.insert(name.clone(), alloca);
+            self.variable_types.insert(name.clone(), ty.clone());
+        }
+
+        // For void functions, we need to handle implicit returns properly
+        // For main function, if return type is Void, treat it as i64 (return 0)
+        let is_void = hir_fn.return_ty == Type::Void && hir_fn.name != "main";
+
+        // Track statements
+        let stmt_count = hir_fn.body.len();
+        for (i, stmt) in hir_fn.body.iter().enumerate() {
+            // Check if this is the last statement in a void function
+            let is_last = i == stmt_count - 1;
+
+            match stmt {
+                hir::HirStmt::Return(_, _) => {
+                    // Explicit return - generate it and we're done
+                    self.generate_hir_stmt(stmt)?;
+                    return Ok(());
+                }
+                _ if is_last && is_void => {
+                    // Last statement in void function
+                    // For expression statements, call generate_hir_expr directly to avoid
+                    // generating a return statement from the Call expression
+                    match stmt {
+                        hir::HirStmt::Expr(expr) => {
+                            // Just evaluate for side effects, don't add a return
+                            let _ = self.generate_hir_expr(expr);
+                        }
+                        _ => {
+                            self.generate_hir_stmt(stmt)?;
+                        }
+                    }
+                    // Return void
+                    self.builder.build_return(None)?;
+                    return Ok(());
+                }
+                _ if is_last && !is_void => {
+                    // Last statement in non-void function - use value as return
+                    self.generate_hir_stmt(stmt)?;
+                    // For main, always return 0
+                    self.builder
+                        .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
+                    return Ok(());
+                }
+                _ => {
+                    self.generate_hir_stmt(stmt)?;
+                }
+            }
+        }
+
+        // If we get here, we didn't return in the loop
+        if is_void {
+            self.builder.build_return(None)?;
+        } else if hir_fn.name == "main" {
+            // main function without explicit return - return 0
+            self.builder
+                .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
+        } else {
+            // Non-void function without return - return 0
+            self.builder
+                .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
+        }
+
+        self.current_function = None;
+        self.current_block = None;
+        Ok(())
+    }
+
+    fn generate_hir_stmt(&mut self, stmt: &hir::HirStmt) -> CodegenResult<()> {
+        match stmt {
+            hir::HirStmt::Expr(expr) => {
+                self.generate_hir_expr(expr)?;
+                Ok(())
+            }
+            hir::HirStmt::Let {
+                name,
+                ty,
+                value,
+                mutability,
+                ..
+            } => {
+                let llvm_type = self.llvm_type(ty);
+                let alloca = self.builder.build_alloca(llvm_type, name)?;
+                if let Some(val) = value {
+                    let llvm_val = self.generate_hir_expr(val)?;
+                    self.builder.build_store(alloca, llvm_val)?;
+                }
+                self.variables.insert(name.clone(), alloca);
+                self.variable_types.insert(name.clone(), ty.clone());
+                if *mutability == Mutability::Const {
+                    self.const_variables.insert(name.clone(), alloca);
+                }
+                Ok(())
+            }
+            hir::HirStmt::Assign { target, value, .. } => {
+                let ptr = self.variables.get(target).ok_or("Var not found")?.clone();
+                let llvm_val = self.generate_hir_expr(value)?;
+                self.builder.build_store(ptr, llvm_val)?;
+                Ok(())
+            }
+            hir::HirStmt::Return(value, _) => {
+                if let Some(val) = value {
+                    let llvm_val = self.generate_hir_expr(val)?;
+                    self.builder.build_return(Some(&llvm_val))?;
+                } else {
+                    self.builder.build_return(None)?;
+                }
+                Ok(())
+            }
+            hir::HirStmt::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let cond_val = self.generate_hir_expr(condition)?;
+                let function = self.current_function.unwrap();
+                let then_block = self.context.append_basic_block(function, "then");
+                let else_block = self.context.append_basic_block(function, "else");
+                let merge_block = self.context.append_basic_block(function, "cont");
+
+                let zero = self.context.i64_type().const_int(0, false);
+                let is_true = self.builder.build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    cond_val.into_int_value(),
+                    zero,
+                    "is_true",
+                )?;
+                self.builder
+                    .build_conditional_branch(is_true, then_block, else_block)?;
+
+                self.builder.position_at_end(then_block);
+                self.generate_hir_stmt(then_branch)?;
+                self.builder.build_unconditional_branch(merge_block)?;
+
+                self.builder.position_at_end(else_block);
+                if let Some(eb) = else_branch {
+                    self.generate_hir_stmt(eb)?;
+                }
+                self.builder.build_unconditional_branch(merge_block)?;
+
+                self.builder.position_at_end(merge_block);
+                Ok(())
+            }
+            hir::HirStmt::While {
+                condition, body, ..
+            } => {
+                let function = self.current_function.unwrap();
+                let cond_block = self.context.append_basic_block(function, "while_cond");
+                let body_block = self.context.append_basic_block(function, "while_body");
+                let end_block = self.context.append_basic_block(function, "while_end");
+
+                // Jump to condition block
+                self.builder.build_unconditional_branch(cond_block)?;
+
+                // Condition block
+                self.builder.position_at_end(cond_block);
+                let cond_val = self.generate_hir_expr(condition)?;
+                let zero = self.context.i64_type().const_int(0, false);
+                let is_true = self.builder.build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    cond_val.into_int_value(),
+                    zero,
+                    "while_is_true",
+                )?;
+                self.builder
+                    .build_conditional_branch(is_true, body_block, end_block)?;
+
+                // Body block
+                self.builder.position_at_end(body_block);
+                self.generate_hir_stmt(body)?;
+                self.builder.build_unconditional_branch(cond_block)?;
+
+                // End block
+                self.builder.position_at_end(end_block);
+                Ok(())
+            }
+            hir::HirStmt::Switch {
+                condition, cases, ..
+            } => {
+                // For switch statements, generate a series of if-else branches
+                let function = self.current_function.unwrap();
+                let end_block = self.context.append_basic_block(function, "switch_end");
+
+                let cond_val = self.generate_hir_expr(condition)?;
+
+                // Generate conditions for each case
+                for case in cases {
+                    let case_block = self.context.append_basic_block(function, "case");
+
+                    // For each pattern in the case
+                    for pattern in &case.patterns {
+                        // Compare pattern with condition
+                        let pattern_val = self.generate_hir_expr(pattern)?;
+                        let is_eq = self.builder.build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            cond_val.into_int_value(),
+                            pattern_val.into_int_value(),
+                            "case_cmp",
+                        )?;
+
+                        // Create a block for this pattern
+                        let pattern_block = self.context.append_basic_block(function, "pattern");
+                        self.builder.build_conditional_branch(
+                            is_eq,
+                            pattern_block,
+                            pattern_block,
+                        )?;
+
+                        // Pattern block
+                        self.builder.position_at_end(pattern_block);
+                    }
+
+                    // Case block
+                    self.builder.position_at_end(case_block);
+                    self.generate_hir_stmt(&case.body)?;
+                    self.builder.build_unconditional_branch(end_block)?;
+                }
+
+                // End block
+                self.builder.position_at_end(end_block);
+                Ok(())
+            }
+        }
+    }
+
+    fn generate_hir_expr(&mut self, expr: &hir::HirExpr) -> CodegenResult<BasicValueEnum<'ctx>> {
+        match expr {
+            hir::HirExpr::Int(v, _, _) => {
+                Ok(self.context.i64_type().const_int(*v as u64, false).into())
+            }
+            hir::HirExpr::Bool(v, _, _) => Ok(self
+                .context
+                .bool_type()
+                .const_int(if *v { 1 } else { 0 }, false)
+                .into()),
+            hir::HirExpr::String(v, _, _) => {
+                // For string literals, create a global string and return its pointer
+                let str_val = unsafe { self.builder.build_global_string(v, "str") }?;
+                Ok(str_val.as_basic_value_enum())
+            }
+            hir::HirExpr::Char(v, _, _) => {
+                // Characters are stored as i64 in our implementation
+                Ok(self.context.i64_type().const_int(*v as u64, false).into())
+            }
+            hir::HirExpr::Null(_, _) => {
+                // Return null pointer (i64* null)
+                let ptr_type = self
+                    .context
+                    .i64_type()
+                    .ptr_type(inkwell::AddressSpace::default());
+                Ok(ptr_type.const_null().into())
+            }
+            hir::HirExpr::Tuple { vals, ty, .. } => {
+                // Create an LLVM struct from tuple values
+                let struct_type = self.llvm_type(ty);
+                let mut elements: Vec<BasicValueEnum> = Vec::new();
+                for v in vals {
+                    elements.push(self.generate_hir_expr(v)?);
+                }
+                // Build struct value
+                let struct_val = self.context.const_struct(&elements, false);
+                // We need to store it to memory to return as pointer
+                let alloca = self.builder.build_alloca(struct_type, "tuple")?;
+                self.builder.build_store(alloca, struct_val)?;
+                Ok(self
+                    .builder
+                    .build_load(struct_type, alloca, "tuple_load")?
+                    .into())
+            }
+            hir::HirExpr::TupleIndex {
+                tuple, index, ty, ..
+            } => {
+                // Get the tuple value
+                let tuple_val = self.generate_hir_expr(tuple)?;
+                // Extract the element at index
+                let llvm_type = self.llvm_type(ty);
+                let alloca = self
+                    .builder
+                    .build_alloca(tuple_val.get_type(), "tuple_idx_temp")?;
+                self.builder.build_store(alloca, tuple_val)?;
+                let extracted = self.builder.build_extract_value(
+                    self.builder
+                        .build_load(tuple_val.get_type(), alloca, "t")?
+                        .into_struct_value(),
+                    *index as u32,
+                    "tuple_elem",
+                )?;
+                Ok(extracted.into())
+            }
+            hir::HirExpr::Array { vals, ty, .. } => {
+                // For array literals, return 0 for now
+                // A full implementation would create a vector or heap-allocated array
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
+            hir::HirExpr::Ident(name, _, _) => {
+                let ptr = self.variables.get(name).ok_or("Var not found")?;
+                let ty = self.variable_types.get(name).unwrap();
+                let llvm_type = self.llvm_type(ty);
+                Ok(self.builder.build_load(llvm_type, *ptr, name)?.into())
+            }
+            hir::HirExpr::Binary {
+                op,
+                left,
+                right,
+                ty,
+                ..
+            } => {
+                let l = self.generate_hir_expr(left)?;
+                let r = self.generate_hir_expr(right)?;
+
+                // Handle different types
+                let val = match op {
+                    BinaryOp::Add => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        self.builder.build_int_add(l_int, r_int, "add")?.into()
+                    }
+                    BinaryOp::Sub => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        self.builder.build_int_sub(l_int, r_int, "sub")?.into()
+                    }
+                    BinaryOp::Mul => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        self.builder.build_int_mul(l_int, r_int, "mul")?.into()
+                    }
+                    BinaryOp::Div => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        self.builder
+                            .build_int_unsigned_div(l_int, r_int, "div")?
+                            .into()
+                    }
+                    BinaryOp::Mod => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        self.builder
+                            .build_int_unsigned_rem(l_int, r_int, "mod")?
+                            .into()
+                    }
+                    BinaryOp::Eq => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        let cmp = self.builder.build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            l_int,
+                            r_int,
+                            "eq",
+                        )?;
+                        cmp.into()
+                    }
+                    BinaryOp::Ne => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        let cmp = self.builder.build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            l_int,
+                            r_int,
+                            "ne",
+                        )?;
+                        cmp.into()
+                    }
+                    BinaryOp::Lt => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        let cmp = self.builder.build_int_compare(
+                            inkwell::IntPredicate::ULT,
+                            l_int,
+                            r_int,
+                            "lt",
+                        )?;
+                        cmp.into()
+                    }
+                    BinaryOp::Gt => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        let cmp = self.builder.build_int_compare(
+                            inkwell::IntPredicate::UGT,
+                            l_int,
+                            r_int,
+                            "gt",
+                        )?;
+                        cmp.into()
+                    }
+                    BinaryOp::Le => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        let cmp = self.builder.build_int_compare(
+                            inkwell::IntPredicate::ULE,
+                            l_int,
+                            r_int,
+                            "le",
+                        )?;
+                        cmp.into()
+                    }
+                    BinaryOp::Ge => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        let cmp = self.builder.build_int_compare(
+                            inkwell::IntPredicate::UGE,
+                            l_int,
+                            r_int,
+                            "ge",
+                        )?;
+                        cmp.into()
+                    }
+                    BinaryOp::And => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        let and_val = self.builder.build_and(l_int, r_int, "and")?;
+                        and_val.into()
+                    }
+                    BinaryOp::Or => {
+                        let l_int = l.into_int_value();
+                        let r_int = r.into_int_value();
+                        let or_val = self.builder.build_or(l_int, r_int, "or")?;
+                        or_val.into()
+                    }
+                    BinaryOp::Range => {
+                        // For range, we'll just return 0 for now
+                        // A full implementation would create a range object
+                        self.context.i64_type().const_int(0, false).into()
+                    }
+                };
+                Ok(val)
+            }
+            hir::HirExpr::Unary { op, expr, ty, .. } => {
+                let e = self.generate_hir_expr(expr)?;
+                let val = match op {
+                    UnaryOp::Neg => {
+                        let e_int = e.into_int_value();
+                        self.builder.build_int_neg(e_int, "neg")?.into()
+                    }
+                    UnaryOp::Pos => {
+                        // Positive is a no-op
+                        e
+                    }
+                    UnaryOp::Not => {
+                        let e_int = e.into_int_value();
+                        let zero = self.context.i64_type().const_int(0, false);
+                        let cmp = self.builder.build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            e_int,
+                            zero,
+                            "not",
+                        )?;
+                        cmp.into()
+                    }
+                };
+                Ok(val)
+            }
+            hir::HirExpr::Call {
+                name,
+                namespace,
+                args,
+                ..
+            } => {
+                if namespace.as_deref() == Some("io") && name == "println" {
+                    return self.generate_hir_io_println(args);
+                }
+                let function = self
+                    .module
+                    .get_function(name)
+                    .ok_or(format!("Fn not found: {}", name))?;
+                let llvm_args: Vec<BasicMetadataValueEnum> = args
+                    .iter()
+                    .map(|a| self.generate_hir_expr(a).unwrap().into())
+                    .collect();
+                let call_result = self.builder.build_call(function, &llvm_args, "call")?;
+                let result = match call_result.try_as_basic_value() {
+                    _ => self.context.i64_type().const_int(0, false).into(),
+                };
+                Ok(result)
+            }
+            hir::HirExpr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ty,
+                ..
+            } => {
+                // For if as expression, we need to handle phi nodes
+                // For simplicity, we'll evaluate both branches and select based on condition
+                let cond_val = self.generate_hir_expr(condition)?;
+                let function = self.current_function.unwrap();
+                let then_block = self.context.append_basic_block(function, "then");
+                let else_block = self.context.append_basic_block(function, "else");
+                let merge_block = self.context.append_basic_block(function, "cont");
+
+                let zero = self.context.i64_type().const_int(0, false);
+                let is_true = self.builder.build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    cond_val.into_int_value(),
+                    zero,
+                    "is_true",
+                )?;
+                self.builder
+                    .build_conditional_branch(is_true, then_block, else_block)?;
+
+                // Then branch
+                self.builder.position_at_end(then_block);
+                let then_val = self.generate_hir_expr(then_branch)?;
+                self.builder.build_unconditional_branch(merge_block)?;
+
+                // Else branch
+                self.builder.position_at_end(else_block);
+                let else_val = self.generate_hir_expr(else_branch)?;
+                self.builder.build_unconditional_branch(merge_block)?;
+
+                // Merge - create phi node for the result
+                self.builder.position_at_end(merge_block);
+                let result_type = self.llvm_type(ty);
+                let phi = self.builder.build_phi(result_type, "if_result")?;
+                phi.add_incoming(&[(&then_val, then_block), (&else_val, else_block)]);
+
+                Ok(phi.as_basic_value())
+            }
+            hir::HirExpr::Block { stmts, expr, .. } => {
+                // Evaluate all statements in the block
+                for stmt in stmts {
+                    self.generate_hir_stmt(stmt)?;
+                }
+                // If there's an expression, return its value
+                if let Some(e) = expr {
+                    self.generate_hir_expr(e)
+                } else {
+                    Ok(self.context.i64_type().const_int(0, false).into())
+                }
+            }
+            hir::HirExpr::MemberAccess {
+                object, member, ty, ..
+            } => {
+                // For member access, we need to get the struct and extract the field
+                let obj_val = self.generate_hir_expr(object)?;
+                let struct_type = obj_val.get_type();
+
+                // For now, we'll assume the member is a field index (0, 1, 2, ...)
+                // This is a simplification - a full implementation would look up the field name
+                let field_idx: u32 = member.parse().unwrap_or(0);
+
+                let alloca = self.builder.build_alloca(struct_type, "member_temp")?;
+                self.builder.build_store(alloca, obj_val)?;
+                let loaded = self
+                    .builder
+                    .build_load(struct_type, alloca, "member_load")?;
+                let extracted = self.builder.build_extract_value(
+                    loaded.into_struct_value(),
+                    field_idx,
+                    member,
+                )?;
+
+                Ok(extracted.into())
+            }
+            hir::HirExpr::Struct {
+                name, fields, ty, ..
+            } => {
+                // Create a struct instance
+                let struct_type = self.llvm_type(ty);
+
+                // Get field types
+                let mut field_values: Vec<BasicValueEnum> = Vec::new();
+                for (_, v) in fields {
+                    field_values.push(self.generate_hir_expr(v)?);
+                }
+
+                let struct_val = self.context.const_struct(&field_values, false);
+                let alloca = self.builder.build_alloca(struct_type, name)?;
+                self.builder.build_store(alloca, struct_val)?;
+
+                Ok(self
+                    .builder
+                    .build_load(struct_type, alloca, "struct_load")?
+                    .into())
+            }
+        }
+    }
+
+    fn generate_hir_io_println(
+        &mut self,
+        args: &[hir::HirExpr],
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        let printf_type = self.context.i64_type().fn_type(
+            &[self
+                .context
+                .i8_type()
+                .ptr_type(inkwell::AddressSpace::default())
+                .into()],
+            true,
+        );
+        let printf = self.module.get_function("printf").unwrap_or_else(|| {
+            self.module.add_function(
+                "printf",
+                printf_type,
+                Some(inkwell::module::Linkage::External),
+            )
+        });
+
+        if args.is_empty() {
+            let empty_str = unsafe { self.builder.build_global_string("\n", "empty") }?;
+            self.builder
+                .build_call(printf, &[empty_str.as_basic_value_enum().into()], "")?;
+        } else {
+            let arg = self.generate_hir_expr(&args[0])?;
+            self.builder.build_call(printf, &[arg.into()], "")?;
+        }
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
     /// Declare a struct type in LLVM
-    fn declare_struct(&mut self, struct_def: &StructDef) -> CodegenResult<()> {
+    pub fn declare_struct(&mut self, struct_def: &StructDef) -> CodegenResult<()> {
         // Only generate code for exported (public) structs
         if !struct_def.visibility.is_public() {
             return Ok(());
@@ -157,7 +744,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Declare an enum type in LLVM
-    fn declare_enum(&mut self, enum_def: &EnumDef) -> CodegenResult<()> {
+    pub fn declare_enum(&mut self, enum_def: &EnumDef) -> CodegenResult<()> {
         // Only generate code for exported (public) enums
         if !enum_def.visibility.is_public() {
             return Ok(());
@@ -173,9 +760,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Declare a function (create function signature)
-    fn declare_function(&mut self, fn_def: &FnDef) -> CodegenResult<()> {
-        // For main function, default to i64; for other functions, default to void
-        let default_return_type = if fn_def.name == "main" {
+    pub fn declare_function(&mut self, fn_def: &FnDef) -> CodegenResult<()> {
+        // For main function without return type, default to i64
+        // For other functions without return type, default to void
+        let default_return_type = if fn_def.name == "main" && fn_def.return_ty.is_none() {
             Type::I64
         } else {
             Type::Void

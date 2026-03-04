@@ -7,8 +7,12 @@ use std::fs;
 
 mod ast;
 mod codegen;
+mod hir;
 mod lexer;
+mod lower;
+mod opt;
 mod parser;
+mod sema;
 mod stdlib;
 
 use clap::Parser;
@@ -72,18 +76,42 @@ fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
     );
 
     // Step 1: Parse source code into AST
-    println!("[1/5] Parsing source code...");
+    println!("[1/8] Parsing source code...");
     let program = parser::parse(source)?;
     println!("    Found {} function(s)", program.functions.len());
-    for func in &program.functions {
-        println!("    - {}", func.name);
-    }
 
-    // Step 2: Generate LLVM IR
-    println!("[2/5] Generating LLVM IR...");
+    // Step 2: Semantic Analysis
+    println!("[2/8] Semantic Analysis...");
+    let _analyzer = sema::SemanticAnalyzer::new();
+    // analyzer.analyze(&program)?; // Add back as analyzer methods are implemented
+
+    // Step 3: Lowering to HIR
+    println!("[3/8] Lowering to HIR...");
+    let mut lowering_ctx = lower::LoweringContext::new();
+    let mut hir_program = lowering_ctx.lower_program(&program);
+
+    // Step 4: Middle-end Optimization
+    println!("[4/8] Optimizing HIR...");
+    opt::optimize(&mut hir_program);
+
+    // Step 5: Generate LLVM IR
+    println!("[5/8] Generating LLVM IR...");
     let context = inkwell::context::Context::create();
     let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;
-    codegen.generate(&program)?;
+
+    // Process declarations from AST first (structs, enums, fn signatures)
+    for s in &program.structs {
+        codegen.declare_struct(s)?;
+    }
+    for e in &program.enums {
+        codegen.declare_enum(e)?;
+    }
+    for f in &program.functions {
+        codegen.declare_function(f)?;
+    }
+
+    // Generate code from HIR
+    codegen.generate_hir(&hir_program)?;
     let ir = codegen.print_ir();
     println!("    Generated LLVM IR:");
     for line in ir.lines().take(20) {
@@ -93,14 +121,14 @@ fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
         println!("    ... ({} more lines)", ir.lines().count() - 20);
     }
 
-    // Step 3: Write LLVM IR to file
-    println!("[3/5] Writing LLVM IR to file...");
+    // Step 6: Write LLVM IR to file
+    println!("[6/8] Writing LLVM IR to file...");
     let ir_path = format!("{}.ll", output_path);
     fs::write(&ir_path, &ir)?;
     println!("    Written to {}", ir_path);
 
-    // Step 4: Compile to object file
-    println!("[4/5] Compiling to object file...");
+    // Step 7: Compile to object file
+    println!("[7/8] Compiling to object file...");
     let obj_path = format!("{}.o", output_path);
 
     // Use clang to compile the IR
@@ -122,8 +150,8 @@ fn compile(source: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Step 5: Link to create executable
-    println!("[5/5] Linking to create executable...");
+    // Step 8: Link to create executable
+    println!("[8/8] Linking to create executable...");
     let exec_path = output_path.to_string();
 
     // Check if main function exists
@@ -176,7 +204,14 @@ fn run_jit(source: &str) -> Result<(), Box<dyn Error>> {
     // Generate LLVM IR
     let context = inkwell::context::Context::create();
     let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;
-    codegen.generate(&program)?;
+
+    let mut lowering_ctx = lower::LoweringContext::new();
+    let hir_program = lowering_ctx.lower_program(&program);
+
+    for f in &program.functions {
+        codegen.declare_function(f)?;
+    }
+    codegen.generate_hir(&hir_program)?;
 
     // Print the generated IR
     println!("\nGenerated LLVM IR:");
@@ -210,7 +245,14 @@ fn generate_ir(source: &str, output_path: Option<String>) -> Result<(), Box<dyn 
     // Generate LLVM IR
     let context = inkwell::context::Context::create();
     let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;
-    codegen.generate(&program)?;
+
+    let mut lowering_ctx = lower::LoweringContext::new();
+    let hir_program = lowering_ctx.lower_program(&program);
+
+    for f in &program.functions {
+        codegen.declare_function(f)?;
+    }
+    codegen.generate_hir(&hir_program)?;
     let ir = codegen.print_ir();
 
     // Output IR
