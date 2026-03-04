@@ -29,6 +29,8 @@ pub enum Token {
     For,
     Range,
     Switch,
+    #[allow(non_camel_case_types)]
+    SelfType,
 
     // Identifiers
     Ident(String),
@@ -122,6 +124,7 @@ impl Token {
             Token::For => "for",
             Token::Range => "range",
             Token::Switch => "switch",
+            Token::SelfType => "self",
             Token::FatArrow => "=>",
             Token::Assign => "=",
             Token::Plus => "+",
@@ -402,6 +405,7 @@ impl Lexer {
             "false" => Token::False,
             "null" => Token::Null,
             "switch" => Token::Switch,
+            "self" => Token::SelfType,
             _ => Token::Ident(ident),
         }
     }
@@ -676,6 +680,7 @@ impl LexerIterator {
             "for" => Token::For,
             "range" => Token::Range,
             "switch" => Token::Switch,
+            "self" => Token::SelfType,
             _ => Token::Ident(ident),
         }
     }

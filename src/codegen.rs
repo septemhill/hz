@@ -1225,6 +1225,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::U32 => self.context.i32_type().into(),
             Type::U64 => self.context.i64_type().into(),
             Type::Bool => self.context.bool_type().into(),
+            Type::SelfType => self.context.i64_type().into(), // TODO: Resolve to actual struct type
+            Type::Pointer(_) => self.context.i64_type().into(), // TODO: Implement pointer types
             Type::Option(inner) => {
                 // Optional type: represented as a struct { value, is_valid }
                 // where is_valid is a boolean indicating whether the value is present

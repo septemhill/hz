@@ -18,6 +18,10 @@ pub enum Type {
     U64,
     Bool,
     Void,
+    /// Self type (for struct methods)
+    SelfType,
+    /// Pointer type (e.g., *i32)
+    Pointer(Box<Type>),
     /// Optional type (e.g., ?i32)
     Option(Box<Type>),
     /// Tuple type (e.g., (i32, i64))
@@ -80,6 +84,8 @@ impl fmt::Display for Type {
             Type::U64 => write!(f, "u64"),
             Type::Bool => write!(f, "bool"),
             Type::Void => write!(f, "void"),
+            Type::SelfType => write!(f, "Self"),
+            Type::Pointer(inner) => write!(f, "*{}", inner),
             Type::Option(inner) => write!(f, "?{}", inner),
             Type::Tuple(types) => {
                 let type_strs: Vec<String> = types.iter().map(|t| t.to_string()).collect();

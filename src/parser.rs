@@ -456,7 +456,7 @@ fn main() i64 {
             ("examples/test_optional.lang", true),
             ("examples/test_switch_stmt.lang", true),
             ("examples/test_struct.lang", true),
-            // ("examples/test_for_stmt.lang", true),
+            ("examples/test_for_stmt.lang", true),
             // // These require struct/interface parsing fix - parser fails
             // ("examples/test_features.lang", false),
             // // These require pub keyword - parser doesn't handle it properly
@@ -902,19 +902,23 @@ impl Parser {
             }
 
             // Parse parameter name
-            let param_name = if let Token::Ident(name) =
-                self.current().cloned().ok_or_else(|| ParseError {
-                    message: "Expected parameter name".to_string(),
-                    location: None,
-                })? {
-                let name = name.clone();
-                self.advance();
-                name
-            } else {
-                return Err(ParseError {
-                    message: "Expected parameter name".to_string(),
-                    location: self.current_token().map(|t| t.span.start),
-                });
+            let param_name = match self.current().cloned() {
+                Some(Token::Ident(name)) => {
+                    let name = name.clone();
+                    self.advance();
+                    name
+                }
+                Some(Token::SelfType) => {
+                    // Handle 'self' as parameter name
+                    self.advance();
+                    "self".to_string()
+                }
+                _ => {
+                    return Err(ParseError {
+                        message: "Expected parameter name".to_string(),
+                        location: self.current_token().map(|t| t.span.start),
+                    });
+                }
             };
 
             // Expect ':'
@@ -960,7 +964,13 @@ impl Parser {
             }
         }
 
-        // Try to parse a type
+        // Check for SelfType return
+        if let Some(Token::SelfType) = self.current().cloned() {
+            self.advance();
+            return Ok(Some(Type::SelfType));
+        }
+
+        // Try to parse a type (including optional types)
         if let Ok(ty) = self.parse_type() {
             return Ok(Some(ty));
         }
@@ -1671,19 +1681,52 @@ impl Parser {
         self.skip_whitespace();
 
         // Check for assignment: target op value;
-        if let Expr::Ident(name, _) = &expr {
-            if let Some(op) = self.match_assign_op() {
-                let value = self.parse_expression()?;
-                self.skip_whitespace();
-                self.match_token(Token::Semicolon);
+        match &expr {
+            Expr::Ident(name, _) => {
+                if let Some(op) = self.match_assign_op() {
+                    let value = self.parse_expression()?;
+                    self.skip_whitespace();
+                    self.match_token(Token::Semicolon);
 
-                return Ok(Stmt::Assign {
-                    target: name.clone(),
-                    op,
-                    value,
-                    span: Span { start: 0, end: 0 },
-                });
+                    return Ok(Stmt::Assign {
+                        target: name.clone(),
+                        op,
+                        value,
+                        span: Span { start: 0, end: 0 },
+                    });
+                }
             }
+            Expr::MemberAccess {
+                object: member_expr,
+                member,
+                ..
+            } => {
+                // Handle member assignment like self.i += 1
+                if let Some(op) = self.match_assign_op() {
+                    let value = self.parse_expression()?;
+                    self.skip_whitespace();
+                    self.match_token(Token::Semicolon);
+
+                    // Convert to a setter expression - format the target string
+                    fn format_target(expr: &Expr) -> String {
+                        match expr {
+                            Expr::Ident(name, _) => name.clone(),
+                            Expr::MemberAccess { object, member, .. } => {
+                                format!("{}.{}", format_target(object.as_ref()), member)
+                            }
+                            _ => "".to_string(),
+                        }
+                    }
+                    let target = format!("{}.{}", format_target(member_expr.as_ref()), member);
+                    return Ok(Stmt::Assign {
+                        target,
+                        op,
+                        value,
+                        span: Span { start: 0, end: 0 },
+                    });
+                }
+            }
+            _ => {}
         }
 
         self.match_token(Token::Semicolon);
@@ -1692,6 +1735,21 @@ impl Parser {
             expr,
             span: Span { start: 0, end: 0 },
         })
+    }
+
+    /// Helper to format an expression as string for assignment target
+    fn format_target_for_expr(self: Self, expr: &Expr) -> String {
+        match expr {
+            Expr::Ident(name, _) => name.clone(),
+            Expr::MemberAccess { object, member, .. } => {
+                format!(
+                    "{}.{}",
+                    self.format_target_for_expr(object.as_ref()),
+                    member
+                )
+            }
+            _ => "".to_string(),
+        }
     }
 
     /// Parse an expression
@@ -2108,6 +2166,11 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Null(Span { start: 0, end: 0 }))
             }
+            // Handle 'self' keyword as identifier in expression context
+            Token::SelfType => {
+                self.advance();
+                Ok(Expr::Ident("self".to_string(), Span { start: 0, end: 0 }))
+            }
             Token::LParen => {
                 self.advance();
                 self.skip_whitespace();
@@ -2286,6 +2349,12 @@ impl Parser {
             return Ok(Type::Option(Box::new(inner)));
         }
 
+        // Check for pointer type: *Type
+        if self.match_token(Token::Star) {
+            let inner = self.parse_type()?;
+            return Ok(Type::Pointer(Box::new(inner)));
+        }
+
         // Check for array type: [size]Type or []Type
         if self.match_token(Token::LBracket) {
             self.skip_whitespace();
@@ -2364,19 +2433,22 @@ impl Parser {
         }
 
         // Parse basic types or custom type
-        let type_name = if let Token::Ident(name) =
-            self.current().cloned().ok_or_else(|| ParseError {
-                message: "Expected type".to_string(),
-                location: None,
-            })? {
-            let name = name.clone();
-            self.advance();
-            name
-        } else {
-            return Err(ParseError {
-                message: "Expected type".to_string(),
-                location: self.current_token().map(|t| t.span.start),
-            });
+        let type_name = match self.current().cloned() {
+            Some(Token::Ident(name)) => {
+                let name = name.clone();
+                self.advance();
+                name
+            }
+            Some(Token::SelfType) => {
+                self.advance();
+                "self".to_string()
+            }
+            _ => {
+                return Err(ParseError {
+                    message: "Expected type".to_string(),
+                    location: self.current_token().map(|t| t.span.start),
+                });
+            }
         };
 
         // Check for basic types
@@ -2391,6 +2463,7 @@ impl Parser {
             "u64" => Type::U64,
             "bool" => Type::Bool,
             "void" => Type::Void,
+            "self" => Type::SelfType,
             _ => Type::Custom {
                 name: type_name,
                 generic_args: Vec::new(),
