@@ -6,7 +6,7 @@ pub fn optimize(program: &mut hir::HirProgram) {
     }
 }
 
-fn optimize_fn(f: &mut hir::HirFn) {
+fn optimize_fn(_f: &mut hir::HirFn) {
     // Basic constant folding or dead code elimination could go here
     // For now, it's a pass-through
 }

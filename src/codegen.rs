@@ -232,13 +232,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let else_block = self.context.append_basic_block(function, "else");
                 let merge_block = self.context.append_basic_block(function, "cont");
 
-                let zero = self.context.i64_type().const_int(0, false);
-                let is_true = self.builder.build_int_compare(
-                    inkwell::IntPredicate::NE,
-                    cond_val.into_int_value(),
-                    zero,
-                    "is_true",
-                )?;
+                // If condition is already i1 (from comparison), use it directly
+                // Otherwise convert i64 to i1
+                let is_true = match cond_val {
+                    BasicValueEnum::IntValue(iv) if iv.get_type().get_bit_width() == 1 => iv,
+                    _ => {
+                        let zero = self.context.i64_type().const_int(0, false);
+                        self.builder.build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            cond_val.into_int_value(),
+                            zero,
+                            "is_true",
+                        )?
+                    }
+                };
                 self.builder
                     .build_conditional_branch(is_true, then_block, else_block)?;
 
@@ -269,13 +276,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Condition block
                 self.builder.position_at_end(cond_block);
                 let cond_val = self.generate_hir_expr(condition)?;
-                let zero = self.context.i64_type().const_int(0, false);
-                let is_true = self.builder.build_int_compare(
-                    inkwell::IntPredicate::NE,
-                    cond_val.into_int_value(),
-                    zero,
-                    "while_is_true",
-                )?;
+                // If condition is already i1 (from comparison), use it directly
+                // Otherwise convert i64 to i1
+                let is_true = match cond_val {
+                    BasicValueEnum::IntValue(iv) if iv.get_type().get_bit_width() == 1 => iv,
+                    _ => {
+                        let zero = self.context.i64_type().const_int(0, false);
+                        self.builder.build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            cond_val.into_int_value(),
+                            zero,
+                            "while_is_true",
+                        )?
+                    }
+                };
                 self.builder
                     .build_conditional_branch(is_true, body_block, end_block)?;
 
@@ -358,9 +372,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             hir::HirExpr::Null(_, _) => {
                 // Return null pointer (i64* null)
-                let ptr_type = self
-                    .context
-                    .ptr_type(inkwell::AddressSpace::default());
+                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
                 Ok(ptr_type.const_null().into())
             }
             hir::HirExpr::Tuple { vals, ty, .. } => {
@@ -601,13 +613,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let else_block = self.context.append_basic_block(function, "else");
                 let merge_block = self.context.append_basic_block(function, "cont");
 
-                let zero = self.context.i64_type().const_int(0, false);
-                let is_true = self.builder.build_int_compare(
-                    inkwell::IntPredicate::NE,
-                    cond_val.into_int_value(),
-                    zero,
-                    "is_true",
-                )?;
+                // If condition is already i1 (from comparison), use it directly
+                // Otherwise convert i64 to i1
+                let is_true = match cond_val {
+                    BasicValueEnum::IntValue(iv) if iv.get_type().get_bit_width() == 1 => iv,
+                    _ => {
+                        let zero = self.context.i64_type().const_int(0, false);
+                        self.builder.build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            cond_val.into_int_value(),
+                            zero,
+                            "is_true",
+                        )?
+                    }
+                };
                 self.builder
                     .build_conditional_branch(is_true, then_block, else_block)?;
 
@@ -713,8 +732,30 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder
                 .build_call(printf, &[empty_str.as_basic_value_enum().into()], "")?;
         } else {
+            // Generate the format string and argument based on the argument type
             let arg = self.generate_hir_expr(&args[0])?;
-            self.builder.build_call(printf, &[arg.into()], "")?;
+
+            // Determine the format specifier based on the type
+            let (format_str, arg_val) = match arg {
+                BasicValueEnum::IntValue(int_val) => {
+                    let bit_width = int_val.get_type().get_bit_width();
+                    if bit_width == 1 || bit_width == 32 {
+                        ("%d\n", arg)
+                    } else {
+                        ("%lld\n", arg)
+                    }
+                }
+                _ => ("%lld\n", arg),
+            };
+
+            let format_ptr = unsafe { self.builder.build_global_string(format_str, "fmt") }?;
+
+            // Convert to metadata value for function call
+            let format_arg = format_ptr.as_basic_value_enum();
+            let arg_meta = arg_val;
+
+            self.builder
+                .build_call(printf, &[format_arg.into(), arg_meta.into()], "")?;
         }
         Ok(self.context.i64_type().const_int(0, false).into())
     }
@@ -1475,13 +1516,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
 
             // Try to find the function in stdlib
-            if let Some(fn_def) = self.stdlib.get_function(actual_package, name) {
+            if let Some(_fn_def) = self.stdlib.get_function(actual_package, name) {
                 // For now, just return a dummy value
                 return Ok(self.context.i64_type().const_int(0, false).into());
             }
         }
 
-        let function = self
+        let _function = self
             .module
             .get_function(name)
             .ok_or(format!("Function not found: {}", name))?;

@@ -59,6 +59,15 @@ enum Commands {
         #[arg(short = 'o', long = "output", value_name = "OUTPUT")]
         output: Option<std::path::PathBuf>,
     },
+    /// Dump HIR (High-level Intermediate Representation)
+    Hir {
+        /// Source file to dump HIR from
+        #[arg(value_name = "FILE")]
+        source: std::path::PathBuf,
+        /// Output file for HIR (optional)
+        #[arg(short = 'o', long = "output", value_name = "OUTPUT")]
+        output: Option<std::path::PathBuf>,
+    },
 }
 
 /// Compile source code to executable
@@ -266,6 +275,46 @@ fn generate_ir(source: &str, output_path: Option<String>) -> Result<(), Box<dyn 
     Ok(())
 }
 
+/// Dump HIR (High-level Intermediate Representation)
+fn dump_hir(source: &str, output_path: Option<String>) -> Result<(), Box<dyn Error>> {
+    // Initialize std library
+    println!("Loading std library...");
+    let mut stdlib = stdlib::StdLib::new();
+    stdlib.set_std_path("./std");
+    println!(
+        "Loaded std packages: {:?}",
+        stdlib.packages().keys().collect::<Vec<_>>()
+    );
+
+    // Parse source code
+    println!("Parsing source code...");
+    let program = parser::parse(source)?;
+    println!("    Found {} function(s)", program.functions.len());
+
+    // Semantic Analysis
+    println!("Semantic Analysis...");
+    let mut analyzer = sema::SemanticAnalyzer::new();
+    analyzer.analyze(&program)?;
+
+    // Lower to HIR
+    println!("Lowering to HIR...");
+    let mut lowering_ctx = lower::LoweringContext::new();
+    let hir_program = lowering_ctx.lower_program(&program);
+
+    // Format HIR using Debug
+    let hir_debug = format!("{:?}", hir_program);
+
+    // Output HIR
+    if let Some(ref path) = output_path {
+        std::fs::write(path, &hir_debug)?;
+        println!("HIR written to {}", path);
+    } else {
+        println!("{}", hir_debug);
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     // Initialize logging
     env_logger::init();
@@ -293,6 +342,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             let source_content = fs::read_to_string(&source)?;
             let output_path = output.map(|p| p.to_string_lossy().to_string());
             generate_ir(&source_content, output_path)?;
+        }
+        Commands::Hir { source, output } => {
+            let source_content = fs::read_to_string(&source)?;
+            let output_path = output.map(|p| p.to_string_lossy().to_string());
+            dump_hir(&source_content, output_path)?;
         }
     }
 

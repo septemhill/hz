@@ -731,60 +731,59 @@ impl Parser {
         let mut packages = Vec::new();
 
         // Helper to parse a single package with optional alias
-        let mut parse_package_item =
-            |p: &mut Parser| -> Result<(Option<String>, String), ParseError> {
-                p.skip_whitespace();
+        let parse_package_item = |p: &mut Parser| -> Result<(Option<String>, String), ParseError> {
+            p.skip_whitespace();
 
-                let first_token =
-                    p.tokens
-                        .next()
-                        .and_then(|r| r.ok())
-                        .ok_or_else(|| ParseError {
-                            message: "Expected package name or alias".to_string(),
-                            location: p.current_token().map(|t| t.span.start),
-                        })?;
+            let first_token = p
+                .tokens
+                .next()
+                .and_then(|r| r.ok())
+                .ok_or_else(|| ParseError {
+                    message: "Expected package name or alias".to_string(),
+                    location: p.current_token().map(|t| t.span.start),
+                })?;
 
-                match first_token.token {
-                    Token::String(name) => {
-                        // import "pkg"
-                        Ok((None, name))
-                    }
-                    Token::Ident(id) => {
-                        // Could be:
-                        // 1. import pkg
-                        // 2. import alias "pkg"
-                        // 3. import alias pkg
-                        p.skip_whitespace();
-                        if let Some(token_with_span) = p.tokens.peek(0) {
-                            match &token_with_span.token {
-                                Token::String(pkg_name) => {
-                                    // import alias "pkg"
-                                    let pkg_name = pkg_name.clone();
-                                    p.tokens.next(); // consume pkg_name
-                                    Ok((Some(id), pkg_name))
-                                }
-                                Token::Ident(pkg_name) => {
-                                    // import alias pkg
-                                    let pkg_name = pkg_name.clone();
-                                    p.tokens.next(); // consume pkg_name
-                                    Ok((Some(id), pkg_name))
-                                }
-                                _ => {
-                                    // import pkg
-                                    Ok((None, id))
-                                }
-                            }
-                        } else {
-                            // import pkg (EOF follows)
-                            Ok((None, id))
-                        }
-                    }
-                    _ => Err(ParseError {
-                        message: format!("Unexpected token in import: {:?}", first_token.token),
-                        location: Some(first_token.span.start),
-                    }),
+            match first_token.token {
+                Token::String(name) => {
+                    // import "pkg"
+                    Ok((None, name))
                 }
-            };
+                Token::Ident(id) => {
+                    // Could be:
+                    // 1. import pkg
+                    // 2. import alias "pkg"
+                    // 3. import alias pkg
+                    p.skip_whitespace();
+                    if let Some(token_with_span) = p.tokens.peek(0) {
+                        match &token_with_span.token {
+                            Token::String(pkg_name) => {
+                                // import alias "pkg"
+                                let pkg_name = pkg_name.clone();
+                                p.tokens.next(); // consume pkg_name
+                                Ok((Some(id), pkg_name))
+                            }
+                            Token::Ident(pkg_name) => {
+                                // import alias pkg
+                                let pkg_name = pkg_name.clone();
+                                p.tokens.next(); // consume pkg_name
+                                Ok((Some(id), pkg_name))
+                            }
+                            _ => {
+                                // import pkg
+                                Ok((None, id))
+                            }
+                        }
+                    } else {
+                        // import pkg (EOF follows)
+                        Ok((None, id))
+                    }
+                }
+                _ => Err(ParseError {
+                    message: format!("Unexpected token in import: {:?}", first_token.token),
+                    location: Some(first_token.span.start),
+                }),
+            }
+        };
 
         // Check for grouped imports with parentheses
         if self.match_token(Token::LParen) {
