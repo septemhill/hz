@@ -31,6 +31,8 @@ pub enum Token {
     Switch,
     #[allow(non_camel_case_types)]
     SelfType,
+    External,
+    Cdecl,
 
     // Identifiers
     Ident(String),
@@ -56,30 +58,30 @@ pub enum Token {
     DotDot,   // ..
 
     // Operators
-    Assign,      // =
-    Plus,        // +
-    Minus,       // -
-    Star,        // *
-    Slash,       // /
-    Percent,     // %
-    Equal,       // ==
-    NotEqual,    // !=
-    Less,        // <
-    Greater,     // >
-    LessEq,      // <=
-    GreaterEq,   // >=
-    PlusAssign,  // +=
-    MinusAssign, // -=
-    StarAssign,  // *=
-    SlashAssign, // /=
-    Ampersand,   // &
-    Pipe,        // |
-    Underscore,  // _
-    Not,         // !
-    Caret,       // ^
-    AmpAmp,      // &&
-    PipePipe,    // ||
-    LessLess,    // <<
+    Assign,         // =
+    Plus,           // +
+    Minus,          // -
+    Star,           // *
+    Slash,          // /
+    Percent,        // %
+    Equal,          // ==
+    NotEqual,       // !=
+    Less,           // <
+    Greater,        // >
+    LessEq,         // <=
+    GreaterEq,      // >=
+    PlusAssign,     // +=
+    MinusAssign,    // -=
+    StarAssign,     // *=
+    SlashAssign,    // /=
+    Ampersand,      // &
+    Pipe,           // |
+    Underscore,     // _
+    Not,            // !
+    Caret,          // ^
+    AmpAmp,         // &&
+    PipePipe,       // ||
+    LessLess,       // <<
     GreaterGreater, // >>
 
     // End of file
@@ -131,6 +133,8 @@ impl Token {
             Token::Range => "range",
             Token::Switch => "switch",
             Token::SelfType => "self",
+            Token::External => "external",
+            Token::Cdecl => "cdecl",
             Token::FatArrow => "=>",
             Token::Assign => "=",
             Token::Plus => "+",
@@ -426,6 +430,8 @@ impl Lexer {
             "null" => Token::Null,
             "switch" => Token::Switch,
             "self" => Token::SelfType,
+            "external" => Token::External,
+            "cdecl" => Token::Cdecl,
             "_" => Token::Underscore,
             _ => Token::Ident(ident),
         }
@@ -599,7 +605,8 @@ impl LexerIterator {
             let pair = format!("{}{}", c, next);
 
             match pair.as_str() {
-                "==" | "!=" | "<=" | ">=" | "+=" | "-=" | "*=" | "/=" | "&&" | "||" | "<<" | ">>" | "=>" => {
+                "==" | "!=" | "<=" | ">=" | "+=" | "-=" | "*=" | "/=" | "&&" | "||" | "<<"
+                | ">>" | "=>" => {
                     self.pos += 1; // Skip second character
                     return Ok(match pair.as_str() {
                         "==" => Token::Equal,
@@ -704,6 +711,8 @@ impl LexerIterator {
             "range" => Token::Range,
             "switch" => Token::Switch,
             "self" => Token::SelfType,
+            "external" => Token::External,
+            "cdecl" => Token::Cdecl,
             _ => Token::Ident(ident),
         }
     }

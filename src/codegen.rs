@@ -98,10 +98,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             format!("{}_{}", self.module_name, hir_fn.name)
         };
 
-        let function = self
-            .module
-            .get_function(&mangled_name)
-            .ok_or(format!("Function not declared: {} (original: {})", mangled_name, hir_fn.name))?;
+        let function = self.module.get_function(&mangled_name).ok_or(format!(
+            "Function not declared: {} (original: {})",
+            mangled_name, hir_fn.name
+        ))?;
 
         self.current_function = Some(function);
         self.return_type = Some(hir_fn.return_ty.clone());
@@ -643,7 +643,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .module
                     .get_function(&mangled_name)
                     .or_else(|| self.module.get_function(name)) // fallback demangled
-                    .ok_or(format!("Fn not found: {} (original: {})", mangled_name, name))?;
+                    .ok_or(format!(
+                        "Fn not found: {} (original: {})",
+                        mangled_name, name
+                    ))?;
 
                 let mut llvm_args = Vec::new();
                 for arg in args {
@@ -887,7 +890,11 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Declare an external function
-    pub fn declare_external_function(&mut self, fn_def: &FnDef, target_module: &str) -> CodegenResult<()> {
+    pub fn declare_external_function(
+        &mut self,
+        fn_def: &FnDef,
+        target_module: &str,
+    ) -> CodegenResult<()> {
         let default_return_type = Type::Void;
         let return_type = self.llvm_type(fn_def.return_ty.as_ref().unwrap_or(&default_return_type));
         let param_types: Vec<BasicMetadataTypeEnum> = fn_def
@@ -899,7 +906,33 @@ impl<'ctx> CodeGenerator<'ctx> {
         let fn_type = return_type.fn_type(&param_types, false);
         let mangled_name = format!("{}_{}", target_module, fn_def.name);
 
-        self.module.add_function(&mangled_name, fn_type, Some(inkwell::module::Linkage::External));
+        self.module.add_function(
+            &mangled_name,
+            fn_type,
+            Some(inkwell::module::Linkage::External),
+        );
+
+        Ok(())
+    }
+
+    /// Declare a C library external function (FFI)
+    pub fn declare_c_function(&mut self, ext_fn: &ExternalFnDef) -> CodegenResult<()> {
+        let default_return_type = Type::Void;
+        let return_type = self.llvm_type(ext_fn.return_ty.as_ref().unwrap_or(&default_return_type));
+        let param_types: Vec<BasicMetadataTypeEnum> = ext_fn
+            .params
+            .iter()
+            .map(|p| self.llvm_type(&p.ty).into())
+            .collect();
+
+        let fn_type = return_type.fn_type(&param_types, false);
+
+        // Use the function name directly for C functions (no mangling)
+        self.module.add_function(
+            &ext_fn.name,
+            fn_type,
+            Some(inkwell::module::Linkage::External),
+        );
 
         Ok(())
     }
@@ -908,13 +941,22 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub fn process_imports(&mut self, imports: &[(Option<String>, String)]) -> CodegenResult<()> {
         for (alias, package_name) in imports {
             let namespace = alias.as_deref().unwrap_or(package_name.as_str());
-            self.imported_packages.insert(namespace.to_string(), package_name.clone());
+            self.imported_packages
+                .insert(namespace.to_string(), package_name.clone());
 
             // If it's loaded in stdlib, declare its functions
             if let Some(pkg) = self.stdlib.packages().get(package_name) {
+                // Clone to avoid borrow issues
                 let fn_defs = pkg.functions.clone();
+                let ext_fns = pkg.external_functions.clone();
+
+                // Declare regular functions
                 for f in fn_defs {
                     self.declare_external_function(&f, package_name)?;
+                }
+                // Declare external C functions (FFI)
+                for ext_fn in ext_fns {
+                    self.declare_c_function(&ext_fn)?;
                 }
             }
         }
@@ -1670,10 +1712,20 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         };
 
-        let function = self.module.get_function(&mangled_name).or_else(|| {
-            // Fallback to demangled name if not found (e.g., for C-style symbols or main)
-            self.module.get_function(name)
-        }).ok_or(format!("Function not found: {} (original: {})", mangled_name, name))?;
+        // Try to get the function - first try mangled name, then try original name
+        // This supports both Lang functions (mangled) and C functions (original name)
+        let function = self
+            .module
+            .get_function(&mangled_name)
+            .or_else(|| {
+                // Fallback to demangled/original name if not found
+                // This is needed for C library calls (like exit, open, etc.)
+                self.module.get_function(name)
+            })
+            .ok_or(format!(
+                "Function not found: {} (original: {})",
+                mangled_name, name
+            ))?;
 
         // Generate arguments
         let mut llvm_args = Vec::new();
@@ -1683,7 +1735,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         let call_site = self.builder.build_call(function, &llvm_args, "call_tmp")?;
-        
+
         // Handle return value
         match call_site.try_as_basic_value() {
             inkwell::values::ValueKind::Basic(val) => Ok(val),

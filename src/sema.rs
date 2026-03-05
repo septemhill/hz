@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::ast::{Type, Visibility};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct Symbol {
@@ -100,7 +100,29 @@ impl SemanticAnalyzer {
                 return Err(format!("Duplicate declaration of function '{}'", f.name));
             }
             // For now, simplify function representation in symbol table
-            self.symbol_table.define(f.name.clone(), f.return_ty.clone().unwrap_or(Type::Void), f.visibility, true);
+            self.symbol_table.define(
+                f.name.clone(),
+                f.return_ty.clone().unwrap_or(Type::Void),
+                f.visibility,
+                true,
+            );
+        }
+
+        // Add external C functions (FFI)
+        for ext_fn in &program.external_functions {
+            // Check for duplicates in global scope
+            if self.symbol_table.resolve(&ext_fn.name).is_some() {
+                return Err(format!(
+                    "Duplicate declaration of external function '{}'",
+                    ext_fn.name
+                ));
+            }
+            self.symbol_table.define(
+                ext_fn.name.clone(),
+                ext_fn.return_ty.clone().unwrap_or(Type::Void),
+                ext_fn.visibility,
+                true,
+            );
         }
 
         // Add structs
@@ -108,11 +130,16 @@ impl SemanticAnalyzer {
             if self.symbol_table.resolve(&s.name).is_some() {
                 return Err(format!("Duplicate declaration of type '{}'", s.name));
             }
-            self.symbol_table.define(s.name.clone(), Type::Custom {
-                name: s.name.clone(),
-                generic_args: vec![],
-                is_exported: s.visibility.is_public(),
-            }, s.visibility, true);
+            self.symbol_table.define(
+                s.name.clone(),
+                Type::Custom {
+                    name: s.name.clone(),
+                    generic_args: vec![],
+                    is_exported: s.visibility.is_public(),
+                },
+                s.visibility,
+                true,
+            );
         }
 
         // Add enums
@@ -120,11 +147,16 @@ impl SemanticAnalyzer {
             if self.symbol_table.resolve(&e.name).is_some() {
                 return Err(format!("Duplicate declaration of type '{}'", e.name));
             }
-            self.symbol_table.define(e.name.clone(), Type::Custom {
-                name: e.name.clone(),
-                generic_args: vec![],
-                is_exported: e.visibility.is_public(),
-            }, e.visibility, true);
+            self.symbol_table.define(
+                e.name.clone(),
+                Type::Custom {
+                    name: e.name.clone(),
+                    generic_args: vec![],
+                    is_exported: e.visibility.is_public(),
+                },
+                e.visibility,
+                true,
+            );
         }
 
         Ok(())
@@ -135,7 +167,12 @@ impl SemanticAnalyzer {
 
         // Define parameters
         for param in &f.params {
-            self.symbol_table.define(param.name.clone(), param.ty.clone(), Visibility::Private, false);
+            self.symbol_table.define(
+                param.name.clone(),
+                param.ty.clone(),
+                Visibility::Private,
+                false,
+            );
         }
 
         // Analyze function body
@@ -152,37 +189,59 @@ impl SemanticAnalyzer {
             crate::ast::Stmt::Expr { expr, .. } => {
                 self.analyze_expr(expr)?;
             }
-            crate::ast::Stmt::Let { name, ty, value, mutability, .. } => {
+            crate::ast::Stmt::Let {
+                name,
+                ty,
+                value,
+                mutability,
+                ..
+            } => {
                 let inferred_ty = if let Some(val_expr) = value {
                     let v_ty = self.analyze_expr(val_expr)?;
                     if let Some(explicit_ty) = ty {
                         if !self.types_compatible(explicit_ty, &v_ty) {
-                            return Err(format!("Type mismatch in variable '{}' declaration: expected {}, found {}", name, explicit_ty, v_ty));
+                            return Err(format!(
+                                "Type mismatch in variable '{}' declaration: expected {}, found {}",
+                                name, explicit_ty, v_ty
+                            ));
                         }
                     }
                     v_ty
                 } else if let Some(explicit_ty) = ty {
                     explicit_ty.clone()
                 } else {
-                    return Err(format!("Variable '{}' must have either a type or an initial value", name));
+                    return Err(format!(
+                        "Variable '{}' must have either a type or an initial value",
+                        name
+                    ));
                 };
 
-                self.symbol_table.define(name.clone(), inferred_ty, Visibility::Private, matches!(mutability, crate::ast::Mutability::Const));
+                self.symbol_table.define(
+                    name.clone(),
+                    inferred_ty,
+                    Visibility::Private,
+                    matches!(mutability, crate::ast::Mutability::Const),
+                );
             }
             crate::ast::Stmt::Assign { target, value, .. } => {
                 let (symbol_ty, is_const) = {
-                    let symbol = self.symbol_table.resolve(target)
+                    let symbol = self
+                        .symbol_table
+                        .resolve(target)
                         .ok_or_else(|| format!("Undefined variable '{}'", target))?;
                     (symbol.ty.clone(), symbol.is_const)
                 };
-                
+
                 if is_const {
                     return Err(format!("Cannot reassign constant variable '{}'", target));
                 }
 
                 let expr_ty = self.analyze_expr(value)?;
                 if !self.types_compatible(&symbol_ty, &expr_ty) {
-                    return Err(format!("Type mismatch in assignment to '{}': expected {}, found {}", target, symbol_ty, expr_ty));
+                    return Err(format!(
+                        "Type mismatch in assignment to '{}': expected {}, found {}",
+                        target, symbol_ty, expr_ty
+                    ));
                 }
             }
             crate::ast::Stmt::Return { value, .. } => {
@@ -191,10 +250,15 @@ impl SemanticAnalyzer {
                     // TODO: Check against function return type
                 }
             }
-            crate::ast::Stmt::If { condition, then_branch, else_branch, .. } => {
+            crate::ast::Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 let cond_ty = self.analyze_expr(condition)?;
                 if cond_ty != Type::Bool && cond_ty != Type::I64 { // Allow i64 for simplicity if needed
-                     // return Err(format!("'if' condition must be boolean or integer, found {}", cond_ty));
+                    // return Err(format!("'if' condition must be boolean or integer, found {}", cond_ty));
                 }
                 self.analyze_stmt(then_branch)?;
                 if let Some(eb) = else_branch {
@@ -208,7 +272,9 @@ impl SemanticAnalyzer {
                 }
                 self.symbol_table.exit_scope();
             }
-            crate::ast::Stmt::While { condition, body, .. } => {
+            crate::ast::Stmt::While {
+                condition, body, ..
+            } => {
                 self.analyze_expr(condition)?;
                 self.analyze_stmt(body)?;
             }
@@ -223,18 +289,20 @@ impl SemanticAnalyzer {
         match expr {
             crate::ast::Expr::Int(_, _) => Ok(Type::I64),
             crate::ast::Expr::Bool(_, _) => Ok(Type::Bool),
-            crate::ast::Expr::String(_, _) => Ok(Type::Custom { 
-                name: "String".to_string(), 
-                generic_args: vec![], 
-                is_exported: false 
+            crate::ast::Expr::String(_, _) => Ok(Type::Custom {
+                name: "String".to_string(),
+                generic_args: vec![],
+                is_exported: false,
             }),
             crate::ast::Expr::Char(_, _) => Ok(Type::I8),
-            crate::ast::Expr::Ident(name, _) => {
-                self.symbol_table.resolve(name)
-                    .map(|s| s.ty.clone())
-                    .ok_or_else(|| format!("Undefined variable '{}'", name))
-            }
-            crate::ast::Expr::Binary { op, left, right, .. } => {
+            crate::ast::Expr::Ident(name, _) => self
+                .symbol_table
+                .resolve(name)
+                .map(|s| s.ty.clone())
+                .ok_or_else(|| format!("Undefined variable '{}'", name)),
+            crate::ast::Expr::Binary {
+                op, left, right, ..
+            } => {
                 let l_ty = self.analyze_expr(left)?;
                 let r_ty = self.analyze_expr(right)?;
 
@@ -293,19 +361,30 @@ impl SemanticAnalyzer {
                         if self.is_numeric(&e_ty) {
                             Ok(e_ty)
                         } else {
-                            Err(format!("Unary {:?} requires numeric operand, found {}", op, e_ty))
+                            Err(format!(
+                                "Unary {:?} requires numeric operand, found {}",
+                                op, e_ty
+                            ))
                         }
                     }
                     crate::ast::UnaryOp::Not => {
                         if e_ty == Type::Bool {
                             Ok(Type::Bool)
                         } else {
-                            Err(format!("Logical NOT requires boolean operand, found {}", e_ty))
+                            Err(format!(
+                                "Logical NOT requires boolean operand, found {}",
+                                e_ty
+                            ))
                         }
                     }
                 }
             }
-            crate::ast::Expr::Call { name, namespace, args, .. } => {
+            crate::ast::Expr::Call {
+                name,
+                namespace,
+                args,
+                ..
+            } => {
                 // If namespace is IO, skip for now or resolve from stdlib
                 if namespace.as_deref() == Some("io") && name == "println" {
                     for arg in args {
@@ -317,15 +396,16 @@ impl SemanticAnalyzer {
                 let symbol_ty = if namespace.is_some() {
                     Type::I64 // Default return type for external functions
                 } else {
-                    self.symbol_table.resolve(name)
+                    self.symbol_table
+                        .resolve(name)
                         .map(|s| s.ty.clone())
                         .ok_or_else(|| format!("Undefined function '{}'", name))?
                 };
-                
+
                 for arg in args {
                     self.analyze_expr(arg)?;
                 }
-                
+
                 Ok(symbol_ty)
             }
             _ => Ok(Type::I64), // Placeholder for other expressions
@@ -333,7 +413,17 @@ impl SemanticAnalyzer {
     }
 
     fn is_numeric(&self, ty: &Type) -> bool {
-        matches!(ty, Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::U8 | Type::U16 | Type::U32 | Type::U64)
+        matches!(
+            ty,
+            Type::I8
+                | Type::I16
+                | Type::I32
+                | Type::I64
+                | Type::U8
+                | Type::U16
+                | Type::U32
+                | Type::U64
+        )
     }
 
     fn types_compatible(&self, left: &Type, right: &Type) -> bool {

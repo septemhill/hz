@@ -413,10 +413,21 @@ pub struct FnParam {
     pub ty: Type,
 }
 
+/// External C function declaration (FFI)
+#[derive(Debug, Clone)]
+pub struct ExternalFnDef {
+    pub name: String,
+    pub visibility: Visibility,
+    pub params: Vec<FnParam>,
+    pub return_ty: Option<Type>,
+    pub span: Span,
+}
+
 /// Program AST node (root of the tree)
 #[derive(Debug, Clone)]
 pub struct Program {
     pub functions: Vec<FnDef>,
+    pub external_functions: Vec<ExternalFnDef>,
     pub structs: Vec<StructDef>,
     pub enums: Vec<EnumDef>,
     pub imports: Vec<(Option<String>, String)>, // (alias, package_name)

@@ -14,6 +14,7 @@ use crate::parser;
 pub struct Package {
     pub name: String,
     pub functions: Vec<FnDef>,
+    pub external_functions: Vec<ExternalFnDef>,
     pub structs: Vec<StructDef>,
     pub enums: Vec<EnumDef>,
 }
@@ -71,16 +72,25 @@ impl StdLib {
             };
 
             if Path::new(&package_path).exists() {
-                let source = fs::read_to_string(&package_path)
-                    .map_err(|e| format!("Failed to read package '{}' at {}: {}", name, package_path, e))?;
+                let source = fs::read_to_string(&package_path).map_err(|e| {
+                    format!(
+                        "Failed to read package '{}' at {}: {}",
+                        name, package_path, e
+                    )
+                })?;
 
                 // Parse the package
-                let program = parser::parse(&source)
-                    .map_err(|e| format!("Failed to parse package '{}' at {}: {}", name, package_path, e))?;
+                let program = parser::parse(&source).map_err(|e| {
+                    format!(
+                        "Failed to parse package '{}' at {}: {}",
+                        name, package_path, e
+                    )
+                })?;
 
                 let package = Package {
                     name: name.to_string(),
                     functions: program.functions,
+                    external_functions: program.external_functions,
                     structs: program.structs,
                     enums: program.enums,
                 };
@@ -91,7 +101,10 @@ impl StdLib {
             }
         }
 
-        Err(format!("Package '{}' not found in search paths: {:?}", name, self.search_paths))
+        Err(format!(
+            "Package '{}' not found in search paths: {:?}",
+            name, self.search_paths
+        ))
     }
 
     /// Get a function from a package

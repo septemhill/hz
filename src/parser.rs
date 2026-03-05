@@ -621,6 +621,7 @@ impl Parser {
         self.set_state(ParserState::Initial);
 
         let mut functions = Vec::new();
+        let mut external_functions = Vec::new();
         let mut structs = Vec::new();
         let mut enums = Vec::new();
         let mut imports = Vec::new();
@@ -660,6 +661,17 @@ impl Parser {
                 self.set_state(ParserState::ParsingImport);
                 match self.parse_import_statement() {
                     Ok(import_items) => imports.extend(import_items),
+                    Err(e) => return Err(e),
+                }
+                self.set_state(ParserState::Initial);
+                continue;
+            }
+
+            // Try to parse external function declaration (FFI)
+            if self.match_token(Token::External) {
+                self.set_state(ParserState::ParsingFunction);
+                match self.parse_external_function() {
+                    Ok(f) => external_functions.push(f),
                     Err(e) => return Err(e),
                 }
                 self.set_state(ParserState::Initial);
@@ -726,6 +738,7 @@ impl Parser {
 
         Ok(Program {
             functions,
+            external_functions,
             structs,
             enums,
             imports,
@@ -878,6 +891,66 @@ impl Parser {
             params,
             return_ty,
             body,
+            span,
+        })
+    }
+
+    /// Parse an external C function declaration
+    fn parse_external_function(&mut self) -> Result<ExternalFnDef, ParseError> {
+        // Check for "pub" keyword
+        let visibility = if self
+            .current()
+            .map(|t| matches!(t, Token::Pub))
+            .unwrap_or(false)
+        {
+            self.advance();
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        // Consume "cdecl" (we already consumed "external")
+        if !self.match_token(Token::Cdecl) {
+            return Err(ParseError {
+                message: "Expected 'cdecl' keyword after 'external'".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        // Parse function name
+        let name = if let Token::Ident(name) =
+            self.current().cloned().ok_or_else(|| ParseError {
+                message: "Expected function name".to_string(),
+                location: None,
+            })? {
+            let name = name.clone();
+            self.advance();
+            name
+        } else {
+            return Err(ParseError {
+                message: "Expected function name".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        };
+
+        // Parse parameters
+        self.set_state(ParserState::ParsingFunctionParams);
+        let params = self.parse_function_params()?;
+
+        // Parse return type
+        self.set_state(ParserState::ParsingFunctionReturnType);
+        let return_ty = self.parse_return_type()?;
+
+        let span = Span {
+            start: 0,
+            end: self.current_token().map(|t| t.span.end).unwrap_or(0),
+        };
+
+        Ok(ExternalFnDef {
+            name,
+            visibility,
+            params,
+            return_ty,
             span,
         })
     }

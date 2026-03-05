@@ -1,0 +1,28 @@
+// OS Layer - System Call Interface
+// Provides FFI bindings to libc for system calls
+
+// File operations
+external cdecl open(path: *i8, flags: i32) i32
+external cdecl close(fd: i32) i32
+external cdecl read(fd: i32, buf: *i8, count: i32) i32
+external cdecl write(fd: i32, buf: *i8, count: i32) i32
+
+// Process management
+external cdecl exit(status: i32) void
+external cdecl getpid() i32
+external cdecl fork() i32
+external cdecl wait(status: *i32) i32
+
+// Memory
+external cdecl malloc(size: u64) *i8
+external cdecl free(ptr: *i8) void
+
+// Time
+external cdecl time(timer: *i64) i64
+
+// Environment
+external cdecl getenv(name: *i8) *i8
+external cdecl setenv(name: *i8, value: *i8, overwrite: i32) i32
+
+// System info
+external cdecl uname(buf: *i8) i32

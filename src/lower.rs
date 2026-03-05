@@ -426,6 +426,7 @@ mod tests {
                 }],
                 span: dummy_span(),
             }],
+            external_functions: vec![],
             structs: vec![],
             enums: vec![],
             imports: vec![],

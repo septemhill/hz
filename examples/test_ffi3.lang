@@ -1,0 +1,7 @@
+// Test FFI - Direct external C function calls
+
+external cdecl exit(status: i32)
+
+fn main() {
+    exit(0)
+}

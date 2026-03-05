@@ -192,6 +192,10 @@ impl BuildSystem {
         for f in &program.functions {
             codegen.declare_function(f)?;
         }
+        // Declare external C functions (FFI)
+        for ext_fn in &program.external_functions {
+            codegen.declare_c_function(ext_fn)?;
+        }
 
         // Generate
         codegen.generate_hir(&hir_program)?;
@@ -227,6 +231,9 @@ impl BuildSystem {
         for obj in object_files {
             args.push(obj.to_str().unwrap().to_string());
         }
+
+        // Link with libc (required for FFI external functions)
+        args.push("-lc".to_string());
 
         let result = std::process::Command::new("clang").args(&args).output()?;
 

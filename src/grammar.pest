@@ -18,6 +18,7 @@ ident = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
 
 int_literal = @{ (ASCII_NONZERO_DIGIT ~ ASCII_DIGIT* | "0") }
 bool_literal = @{ "true" | "false" }
+string_literal = @ { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
 // ============================================================
 // KEYWORDS (using silent rules)
@@ -46,6 +47,9 @@ _kw_u64 = { "u64" }
 _kw_bool = { "bool" }
 _kw_void = { "void" }
 _kw_null = { "null" }
+_kw_external = { "external" }
+_kw_cdecl = { "cdecl" }
+_kw_import = { "import" }
 
 // ============================================================
 // TYPES
@@ -211,4 +215,4 @@ fn_def = { fn_signature ~ fn_body }
 // PROGRAM
 // ============================================================
 
-program = { SOI ~ fn_def* ~ EOI }
+program = { SOI ~ (import_stmt | fn_def | external_fn_def)* ~ EOI }
