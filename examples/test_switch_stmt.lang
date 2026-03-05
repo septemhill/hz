@@ -7,7 +7,7 @@ enum Status {
     Done
 };
 
-fn main() {
+fn main() void {
     // Integer Case
     {
         const c = 123;

@@ -419,7 +419,7 @@ mod tests {
                 name: "main".to_string(),
                 visibility: Visibility::Public,
                 params: vec![],
-                return_ty: Some(Type::I64),
+                return_ty: Type::I64,
                 body: vec![Stmt::Return {
                     value: Some(Expr::Int(0, dummy_span())),
                     span: dummy_span(),
@@ -462,7 +462,7 @@ impl LoweringContext {
                 .iter()
                 .map(|p| (p.name.clone(), p.ty.clone()))
                 .collect(),
-            return_ty: f.return_ty.clone().unwrap_or(ast::Type::Void),
+            return_ty: f.return_ty.clone(),
             body: f.body.iter().map(|s| self.lower_stmt(s)).collect(),
             visibility: f.visibility,
             span: f.span,

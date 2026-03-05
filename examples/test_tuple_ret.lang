@@ -5,7 +5,7 @@ fn test() i64 {
     return t.0;
 }
 
-fn main() {
+fn main() void {
     const x = test();
     io.println(x);
 }

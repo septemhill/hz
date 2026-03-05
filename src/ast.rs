@@ -401,7 +401,7 @@ pub struct FnDef {
     pub name: String,
     pub visibility: Visibility,
     pub params: Vec<FnParam>,
-    pub return_ty: Option<Type>,
+    pub return_ty: Type,
     pub body: Vec<Stmt>,
     pub span: Span,
 }
@@ -419,7 +419,7 @@ pub struct ExternalFnDef {
     pub name: String,
     pub visibility: Visibility,
     pub params: Vec<FnParam>,
-    pub return_ty: Option<Type>,
+    pub return_ty: Type,
     pub span: Span,
 }
 

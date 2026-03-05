@@ -207,7 +207,7 @@ type_with_optional = { "?" ~ ty | ty }
 
 fn_param = { ident ~ ":" ~ type_with_optional }
 fn_params = { fn_param ~ ("," ~ fn_param)* }
-fn_signature = { "fn" ~ ident ~ "(" ~ fn_params? ~ ")" ~ type_with_optional? }
+fn_signature = { "fn" ~ ident ~ "(" ~ fn_params? ~ ")" ~ type_with_optional }
 fn_body = { "{" ~ stmt* ~ "}" }
 fn_def = { fn_signature ~ fn_body }
 

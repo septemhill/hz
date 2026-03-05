@@ -863,19 +863,22 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Declare a function (create function signature)
     pub fn declare_function(&mut self, fn_def: &FnDef) -> CodegenResult<()> {
-        let default_return_type = if fn_def.name == "main" && fn_def.return_ty.is_none() {
-            Type::I64
-        } else {
-            Type::Void
-        };
-        let return_type = self.llvm_type(fn_def.return_ty.as_ref().unwrap_or(&default_return_type));
+        // Handle void return type specially
+        let is_void_return = fn_def.return_ty == Type::Void;
+
         let param_types: Vec<BasicMetadataTypeEnum> = fn_def
             .params
             .iter()
             .map(|p| self.llvm_type(&p.ty).into())
             .collect();
 
-        let fn_type = return_type.fn_type(&param_types, false);
+        // Use void_type for void returns, otherwise use the regular llvm type
+        let fn_type = if is_void_return {
+            self.context.void_type().fn_type(&param_types, false)
+        } else {
+            let return_type = self.llvm_type(&fn_def.return_ty);
+            return_type.fn_type(&param_types, false)
+        };
 
         // Mangle name if not main
         let mangled_name = if fn_def.name == "main" {
@@ -895,15 +898,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         fn_def: &FnDef,
         target_module: &str,
     ) -> CodegenResult<()> {
-        let default_return_type = Type::Void;
-        let return_type = self.llvm_type(fn_def.return_ty.as_ref().unwrap_or(&default_return_type));
+        // Handle void return type specially
+        let is_void_return = fn_def.return_ty == Type::Void;
+
         let param_types: Vec<BasicMetadataTypeEnum> = fn_def
             .params
             .iter()
             .map(|p| self.llvm_type(&p.ty).into())
             .collect();
 
-        let fn_type = return_type.fn_type(&param_types, false);
+        let fn_type = if is_void_return {
+            self.context.void_type().fn_type(&param_types, false)
+        } else {
+            let return_type = self.llvm_type(&fn_def.return_ty);
+            return_type.fn_type(&param_types, false)
+        };
+
         let mangled_name = format!("{}_{}", target_module, fn_def.name);
 
         self.module.add_function(
@@ -917,15 +927,21 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Declare a C library external function (FFI)
     pub fn declare_c_function(&mut self, ext_fn: &ExternalFnDef) -> CodegenResult<()> {
-        let default_return_type = Type::Void;
-        let return_type = self.llvm_type(ext_fn.return_ty.as_ref().unwrap_or(&default_return_type));
+        // Handle void return type specially
+        let is_void_return = ext_fn.return_ty == Type::Void;
+
         let param_types: Vec<BasicMetadataTypeEnum> = ext_fn
             .params
             .iter()
             .map(|p| self.llvm_type(&p.ty).into())
             .collect();
 
-        let fn_type = return_type.fn_type(&param_types, false);
+        let fn_type = if is_void_return {
+            self.context.void_type().fn_type(&param_types, false)
+        } else {
+            let return_type = self.llvm_type(&ext_fn.return_ty);
+            return_type.fn_type(&param_types, false)
+        };
 
         // Use the function name directly for C functions (no mangling)
         self.module.add_function(
@@ -972,7 +988,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             .ok_or(format!("Function not declared: {}", fn_def.name))?;
 
         self.current_function = Some(function);
-        self.return_type = fn_def.return_ty.clone();
+        self.return_type = Some(fn_def.return_ty.clone());
 
         // Clear variable scope for this function
         self.variables.clear();
@@ -1005,15 +1021,16 @@ impl<'ctx> CodeGenerator<'ctx> {
         // If the function doesn't have a return statement, add implicit return
         // For main function without return type, default to returning 0 (i64)
         // For other functions without return type, default to void
-        if fn_def.return_ty == Some(Type::Void) {
+        if fn_def.return_ty == Type::Void {
             self.builder.build_return(None)?;
-        } else if fn_def.return_ty.is_none() {
-            if fn_def.name == "main" {
-                self.builder
-                    .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
-            } else {
-                self.builder.build_return(None)?;
-            }
+        } else if fn_def.name == "main" {
+            // main function returns i64
+            self.builder
+                .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
+        } else {
+            // Other non-void functions without explicit return - return 0
+            self.builder
+                .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
         }
 
         self.current_function = None;

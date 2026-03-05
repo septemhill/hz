@@ -28,7 +28,7 @@ pub fn validate(srv: Template) {
     io.println(f);
 }
 
-fn main() {
+fn main() void {
     const service: Service = Service {
         name: "Service",
         age: 10,

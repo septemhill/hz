@@ -1030,30 +1030,34 @@ impl Parser {
         Ok(params)
     }
 
-    /// Parse return type
-    fn parse_return_type(&mut self) -> Result<Option<Type>, ParseError> {
+    /// Parse return type (required)
+    fn parse_return_type(&mut self) -> Result<Type, ParseError> {
         self.skip_whitespace();
 
         // Check for void return type
         if let Some(Token::Ident(id)) = self.current().cloned() {
             if id == "void" {
                 self.advance();
-                return Ok(Some(Type::Void));
+                return Ok(Type::Void);
             }
         }
 
         // Check for SelfType return
         if let Some(Token::SelfType) = self.current().cloned() {
             self.advance();
-            return Ok(Some(Type::SelfType));
+            return Ok(Type::SelfType);
         }
 
         // Try to parse a type (including optional types)
         if let Ok(ty) = self.parse_type() {
-            return Ok(Some(ty));
+            return Ok(ty);
         }
 
-        Ok(None)
+        // Return type is required
+        Err(ParseError {
+            message: "Expected return type (e.g., 'void', 'i64', etc.)".to_string(),
+            location: self.current_token().map(|t| t.span.start),
+        })
     }
 
     /// Parse function body

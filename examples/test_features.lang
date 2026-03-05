@@ -11,7 +11,7 @@ pub struct Base {
     pub age: i32,
 }
 
-fn main() {
+fn main() void {
     io.println("Features work!");
     return 0;
 }

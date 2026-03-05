@@ -1,6 +1,6 @@
 import "io"
 
-fn main() {
+fn main() void {
     for (1..10) |v| {
         io.println(v);
     }

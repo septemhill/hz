@@ -17,7 +17,7 @@ struct Base {
     }
 }
 
-fn main() {
+fn main() void {
     {
         const a: Base = Base.new("Septem", 123, true);
 

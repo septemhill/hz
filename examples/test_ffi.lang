@@ -2,7 +2,7 @@
 
 import "os"
 
-fn main() {
+fn main() void {
     // Test calling libc functions through FFI
     // This should call the exit function from libc
     os.exit(100)

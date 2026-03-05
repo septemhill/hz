@@ -99,13 +99,10 @@ impl SemanticAnalyzer {
             if self.symbol_table.resolve(&f.name).is_some() {
                 return Err(format!("Duplicate declaration of function '{}'", f.name));
             }
+
             // For now, simplify function representation in symbol table
-            self.symbol_table.define(
-                f.name.clone(),
-                f.return_ty.clone().unwrap_or(Type::Void),
-                f.visibility,
-                true,
-            );
+            self.symbol_table
+                .define(f.name.clone(), f.return_ty.clone(), f.visibility, true);
         }
 
         // Add external C functions (FFI)
@@ -117,9 +114,10 @@ impl SemanticAnalyzer {
                     ext_fn.name
                 ));
             }
+
             self.symbol_table.define(
                 ext_fn.name.clone(),
-                ext_fn.return_ty.clone().unwrap_or(Type::Void),
+                ext_fn.return_ty.clone(),
                 ext_fn.visibility,
                 true,
             );

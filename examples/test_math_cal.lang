@@ -5,7 +5,7 @@ fn max(a: i32, b: i32) i32 {
     return b;
 }
 
-fn main() {
+fn main() void {
     const c = max(3, 1);
     io.println(c);
 }

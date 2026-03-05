@@ -1,4 +1,4 @@
-fn main() {
+fn main() void {
     io.println("Hi, Septem");
 
     return 42;

@@ -1,4 +1,4 @@
-pub fn main() {
+pub fn main() void {
     let x: i64 = 5;
     let y: i64 = 10;
     let result = math.max(x, y);

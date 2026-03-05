@@ -2,6 +2,6 @@
 
 external cdecl exit(status: i32)
 
-fn main() {
+fn main() void {
     exit(0)
 }
