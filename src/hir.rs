@@ -106,6 +106,11 @@ pub enum HirStmt {
         cases: Vec<HirCase>,
         span: Span,
     },
+    /// Defer statement (executes on scope exit)
+    Defer {
+        stmt: Box<HirStmt>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]

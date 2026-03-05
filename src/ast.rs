@@ -393,6 +393,8 @@ pub enum Stmt {
         cases: Vec<SwitchCase>,
         span: Span,
     },
+    /// Defer statement (executes on scope exit)
+    Defer { stmt: Box<Stmt>, span: Span },
 }
 
 /// Function definition AST node

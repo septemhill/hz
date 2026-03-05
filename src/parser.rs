@@ -1120,6 +1120,7 @@ impl Parser {
             Token::Loop => self.parse_loop_stmt(),
             Token::LBrace => self.parse_block_stmt(),
             Token::Switch => self.parse_switch_stmt(),
+            Token::Defer => self.parse_defer_stmt(),
             Token::Semicolon => {
                 self.advance();
                 self.skip_whitespace();
@@ -1149,6 +1150,21 @@ impl Parser {
 
         Ok(Stmt::Return {
             value: Some(value),
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse defer statement
+    fn parse_defer_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'defer'
+
+        self.skip_whitespace();
+
+        // Parse the statement to defer (usually a function call)
+        let stmt = self.parse_statement()?;
+
+        Ok(Stmt::Defer {
+            stmt: Box::new(stmt),
             span: Span { start: 0, end: 0 },
         })
     }

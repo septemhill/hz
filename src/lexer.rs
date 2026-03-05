@@ -33,6 +33,7 @@ pub enum Token {
     SelfType,
     External,
     Cdecl,
+    Defer,
 
     // Identifiers
     Ident(String),
@@ -135,6 +136,7 @@ impl Token {
             Token::SelfType => "self",
             Token::External => "external",
             Token::Cdecl => "cdecl",
+            Token::Defer => "defer",
             Token::FatArrow => "=>",
             Token::Assign => "=",
             Token::Plus => "+",
@@ -432,6 +434,7 @@ impl Lexer {
             "self" => Token::SelfType,
             "external" => Token::External,
             "cdecl" => Token::Cdecl,
+            "defer" => Token::Defer,
             "_" => Token::Underscore,
             _ => Token::Ident(ident),
         }
@@ -713,6 +716,7 @@ impl LexerIterator {
             "self" => Token::SelfType,
             "external" => Token::External,
             "cdecl" => Token::Cdecl,
+            "defer" => Token::Defer,
             _ => Token::Ident(ident),
         }
     }

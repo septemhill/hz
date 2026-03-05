@@ -513,6 +513,13 @@ impl LoweringContext {
                 else_branch: else_branch.as_ref().map(|e| Box::new(self.lower_stmt(e))),
                 span: *span,
             },
+            ast::Stmt::Defer { stmt, span } => {
+                // Lower the deferred statement
+                hir::HirStmt::Defer {
+                    stmt: Box::new(self.lower_stmt(stmt)),
+                    span: *span,
+                }
+            }
             // Add other statement types
             _ => todo!("Lowering for other statements not implemented"),
         }

@@ -358,6 +358,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.position_at_end(end_block);
                 Ok(())
             }
+            hir::HirStmt::Defer { stmt, .. } => {
+                // Defer is handled at function level - generate the deferred statement
+                self.generate_hir_stmt(stmt)?;
+                Ok(())
+            }
         }
     }
 
@@ -1340,6 +1345,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             Stmt::Loop { body, .. } => self.generate_loop(body),
             Stmt::For { .. } => todo!("Codegen for For loops not implemented"),
             Stmt::Switch { .. } => todo!("Codegen for Switch statements not implemented"),
+            Stmt::Defer { stmt, .. } => {
+                // Defer is handled at function level - collect and execute in reverse order
+                // For now, just generate the deferred statement immediately
+                // A proper implementation would collect defers and execute them on scope exit
+                self.generate_stmt(stmt)?;
+                Ok(())
+            }
         }
     }
 
@@ -2090,6 +2102,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::Bool => self.context.bool_type().into(),
             Type::SelfType => self.context.i64_type().into(), // TODO: Resolve to actual struct type
             Type::Pointer(_) => self.context.i64_type().into(), // TODO: Implement pointer types
+            Type::Void => self.context.i64_type().into(),     // Fallback to i64 for void
             Type::Option(inner) => {
                 // Optional type: represented as a struct { value, is_valid }
                 // where is_valid is a boolean indicating whether the value is present
@@ -2121,7 +2134,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 self.context.struct_type(&element_types, false).into()
             }
-            Type::Void | Type::Custom { .. } | Type::GenericParam(_) | Type::Array { .. } => {
+            Type::Custom { .. } | Type::GenericParam(_) | Type::Array { .. } => {
                 // For void, custom types, generics, and arrays, we'll just use i64 to avoid the conversion issue
                 self.context.i64_type().into()
             }
