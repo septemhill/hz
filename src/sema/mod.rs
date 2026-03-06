@@ -1,0 +1,75 @@
+// Semantic analysis module
+// Provides symbol table management and various analysis passes
+
+pub mod error;
+pub mod global;
+pub mod mutability;
+pub mod resolver;
+pub mod symbol;
+pub mod types;
+
+#[cfg(test)]
+mod tests;
+
+// Re-export for convenience
+pub use error::{AnalysisError, AnalysisResult};
+pub use global::GlobalDefinitionsAnalyzer;
+pub use mutability::MutabilityAnalyzer;
+pub use resolver::SymbolResolver;
+pub use symbol::{Scope, Symbol, SymbolTable};
+pub use types::TypeAnalyzer;
+
+// ============================================================================
+// Main Semantic Analyzer
+// Orchestrates all analysis passes
+// ============================================================================
+
+pub struct SemanticAnalyzer {
+    pub symbol_table: SymbolTable,
+}
+
+impl SemanticAnalyzer {
+    pub fn new() -> Self {
+        SemanticAnalyzer {
+            symbol_table: SymbolTable::new(),
+        }
+    }
+
+    pub fn analyze(&mut self, program: &crate::ast::Program) -> Result<(), String> {
+        // Pass 1: Collect and validate global definitions
+        let mut global_analyzer = GlobalDefinitionsAnalyzer::new();
+        global_analyzer.analyze(program).map_err(|e| e.message)?;
+
+        // Pass 2: Type analysis
+        let symbol_table = global_analyzer.get_symbol_table().clone();
+        let mut type_analyzer = TypeAnalyzer::new(symbol_table);
+        type_analyzer.analyze(program).map_err(|e| e.message)?;
+
+        // Pass 3: Symbol resolution
+        let symbol_table = type_analyzer.get_symbol_table().clone();
+        let mut symbol_resolver = SymbolResolver::new(symbol_table);
+        symbol_resolver.analyze(program).map_err(|e| e.message)?;
+
+        // Pass 4: Mutability analysis
+        let symbol_table = symbol_resolver.get_symbol_table().clone();
+        let mut mutability_analyzer = MutabilityAnalyzer::new(symbol_table);
+        mutability_analyzer
+            .analyze(program)
+            .map_err(|e| e.message)?;
+
+        // Store final symbol table
+        self.symbol_table = mutability_analyzer.get_symbol_table().clone();
+
+        Ok(())
+    }
+
+    pub fn get_symbol_table(&self) -> &SymbolTable {
+        &self.symbol_table
+    }
+}
+
+impl Default for SemanticAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
