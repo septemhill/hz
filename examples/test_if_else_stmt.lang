@@ -1,6 +1,6 @@
 import "io"
 
-fn main () {
+fn main () void {
     {
         var i: ?i32 = null;
 

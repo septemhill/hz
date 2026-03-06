@@ -467,6 +467,8 @@ fn main() i64 {
             ("examples/test_struct.lang", true),
             ("examples/test_for_stmt.lang", true),
             ("examples/test_operators.lang", true),
+            ("examples/test_error.lang", true),
+            ("examples/test_defer.lang", true),
             // // These require struct/interface parsing fix - parser fails
             // ("examples/test_features.lang", false),
             // // These require pub keyword - parser doesn't handle it properly
@@ -2390,6 +2392,71 @@ impl Parser {
                 }
             }
 
+            // Catch expression: expr catch |error_var| { body }
+            if self.match_token(Token::Catch) {
+                self.skip_whitespace();
+                // Parse error variable in pipes: |error_var|
+                let error_var = if self.current() == Some(&Token::Pipe) {
+                    // First pipe
+                    self.advance();
+                    self.skip_whitespace();
+
+                    // Error variable name
+                    let var = match self.current().cloned() {
+                        Some(Token::Ident(n)) => Some(n),
+                        Some(Token::Underscore) => None,
+                        _ => {
+                            return Err(ParseError {
+                                message: "Expected error variable name or '_' in catch".to_string(),
+                                location: self.current_token().map(|t| t.span.start),
+                            });
+                        }
+                    };
+                    self.advance();
+                    self.skip_whitespace();
+
+                    // Second pipe
+                    if self.current() != Some(&Token::Pipe) {
+                        return Err(ParseError {
+                            message: "Expected '|' after error variable in catch".to_string(),
+                            location: self.current_token().map(|t| t.span.start),
+                        });
+                    };
+                    self.advance();
+                    var
+                } else {
+                    None
+                };
+
+                self.skip_whitespace();
+
+                // Can have either a block { ... } or an expression
+                let body = if self.current() == Some(&Token::LBrace) {
+                    // Block form: catch |err| { ... }
+                    self.expect(Token::LBrace)?;
+                    let block = self.parse_block_stmt()?;
+                    if let Stmt::Block { stmts, span } = block {
+                        Expr::Block { stmts, span }
+                    } else {
+                        return Err(ParseError {
+                            message: "Expected block after catch".to_string(),
+                            location: self.current_token().map(|t| t.span.start),
+                        });
+                    }
+                } else {
+                    // Expression form: catch |err| expr
+                    self.parse_expression()?
+                };
+
+                expr = Expr::Catch {
+                    expr: Box::new(expr),
+                    error_var,
+                    body: Box::new(body),
+                    span: Span { start: 0, end: 0 },
+                };
+                continue;
+            }
+
             break;
         }
 
@@ -2436,6 +2503,12 @@ impl Parser {
                     expr: Box::new(expr),
                     span: Span { start: 0, end: 0 },
                 })
+            }
+            // Handle catch expression (postfix operator)
+            Token::Catch => {
+                // This shouldn't happen at the start of an expression
+                // Catch is a postfix operator that follows another expression
+                return self.parse_primary_expr();
             }
             // Handle 'self' keyword as identifier in expression context
             Token::SelfType => {

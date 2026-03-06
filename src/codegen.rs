@@ -792,6 +792,25 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // In a full implementation, this would handle error propagation
                 self.generate_hir_expr(expr)
             }
+            hir::HirExpr::Catch {
+                expr,
+                error_var,
+                body,
+                span: _,
+            } => {
+                // Catch expression: evaluate expr, if error execute body, otherwise return value
+                // For now, we just evaluate the expression and ignore the catch
+                // In a full implementation, this would:
+                // 1. Evaluate expr
+                // 2. Check if it's an error
+                // 3. If error, bind to error_var and execute body
+                // 4. If success, return the value
+                let expr_value = self.generate_hir_expr(expr)?;
+
+                // For now, just return the expression value
+                // A full implementation would handle the error case
+                Ok(expr_value)
+            }
         }
     }
 
@@ -1531,6 +1550,25 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expr::Try { expr, .. } => {
                 // For now, just evaluate the expression and return its value
                 self.generate_expr(expr)
+            }
+            Expr::Catch {
+                expr,
+                error_var,
+                body,
+                ..
+            } => {
+                // Catch expression: evaluate expr, if error execute body, otherwise return value
+                // For now, we just evaluate the expression and ignore the catch
+                // A full implementation would handle the error case
+                let expr_value = self.generate_expr(expr)?;
+
+                // For now, just return the expression value
+                // A full implementation would:
+                // 1. Evaluate expr
+                // 2. Check if it's an error
+                // 3. If error, bind to error_var and execute body
+                // 4. If success, return the value
+                Ok(expr_value)
             }
             Expr::Struct { .. } => todo!("Codegen for Struct not implemented"),
         }

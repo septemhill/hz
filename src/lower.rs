@@ -621,6 +621,17 @@ impl LoweringContext {
                 expr: Box::new(self.lower_expr(expr)),
                 span: *span,
             },
+            ast::Expr::Catch {
+                expr,
+                error_var,
+                body,
+                span,
+            } => hir::HirExpr::Catch {
+                expr: Box::new(self.lower_expr(expr)),
+                error_var: error_var.clone(),
+                body: Box::new(self.lower_expr(body)),
+                span: *span,
+            },
             ast::Expr::Tuple(vals, span) => hir::HirExpr::Tuple {
                 vals: vals.iter().map(|v| self.lower_expr(v)).collect(),
                 ty: ast::Type::Tuple(vals.iter().map(|_| ast::Type::I64).collect()), // Placeholder

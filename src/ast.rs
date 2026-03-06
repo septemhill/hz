@@ -344,6 +344,14 @@ pub enum Expr {
     },
     /// Try expression (e.g., try some_function())
     Try { expr: Box<Expr>, span: Span },
+    /// Catch expression (e.g., expr catch |e| { ... })
+    Catch {
+        expr: Box<Expr>,
+        /// Optional capture variable for the error
+        error_var: Option<String>,
+        body: Box<Expr>,
+        span: Span,
+    },
 }
 
 /// Statement AST node

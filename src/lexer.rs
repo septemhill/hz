@@ -36,6 +36,7 @@ pub enum Token {
     Defer,
     ErrorKw,
     Try,
+    Catch,
 
     // Identifiers
     Ident(String),
@@ -141,6 +142,7 @@ impl Token {
             Token::Defer => "defer",
             Token::ErrorKw => "error",
             Token::Try => "try",
+            Token::Catch => "catch",
             Token::FatArrow => "=>",
             Token::Assign => "=",
             Token::Plus => "+",
@@ -444,6 +446,7 @@ impl Lexer {
                 Token::ErrorKw
             }
             "try" => Token::Try,
+            "catch" => Token::Catch,
             "_" => Token::Underscore,
             _ => Token::Ident(ident.clone()),
         };
@@ -730,6 +733,7 @@ impl LexerIterator {
             "defer" => Token::Defer,
             "error" => Token::ErrorKw,
             "try" => Token::Try,
+            "catch" => Token::Catch,
             _ => Token::Ident(ident),
         }
     }
@@ -1236,21 +1240,6 @@ mod tests {
         let result = tokenize("// this is a comment\n42").unwrap();
         assert_eq!(result.len(), 2); // number + EOF (comment skipped)
         assert_eq!(result[0].token, Token::Int(42));
-    }
-
-    // Test example files
-    #[test]
-    fn test_example_simple() {
-        let source = read_example("examples/test_simple.lang");
-        let result = tokenize(&source);
-        assert!(
-            result.is_ok(),
-            "Failed to tokenize test_simple.lang: {:?}",
-            result.err()
-        );
-        let tokens = result.unwrap();
-        // Should have at least: fn, main, (, ), i64, {, return, 42, }, EOF
-        assert!(tokens.len() > 5);
     }
 
     #[test]

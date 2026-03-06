@@ -1,4 +1,4 @@
-fn main () {
+fn main () void {
     {
         const g: ?i32 = 432;
         const z = if (g) |v| v else 10;

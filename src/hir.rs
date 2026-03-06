@@ -76,6 +76,13 @@ pub enum HirExpr {
         expr: Box<HirExpr>,
         span: Span,
     },
+    /// Catch expression
+    Catch {
+        expr: Box<HirExpr>,
+        error_var: Option<String>,
+        body: Box<HirExpr>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]

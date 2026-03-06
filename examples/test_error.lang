@@ -20,6 +20,20 @@ fn perm_denied() i64! {
 
 fn main() i64! {
     const f: i64 = try file_not_found_error();
+    
+    // Return error directly
     try perm_denied();
-    return f;
+
+    // Test 1: catch with error variable and block body
+    const g: i64 = perm_denied() catch |e| {
+        10
+    };
+
+    // Test 2: catch with error variable and expression body
+    const c: i64 = perm_denied() catch |e| 20;
+
+    // Test 3: catch ignore error variable
+    const d: i64 = perm_denied() catch |_| 30;
+
+    return f + g + c + d;
 }
