@@ -90,13 +90,57 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(())
     }
 
-    /// Generate code for an HIR function
-    fn generate_hir_function(&mut self, hir_fn: &hir::HirFn) -> CodegenResult<()> {
-        let mangled_name = if hir_fn.name == "main" {
+    /// Convert a condition value to i1 (boolean) for branching
+    /// If already i1, returns as-is; otherwise converts i64 to i1
+    fn condition_to_i1(
+        &mut self,
+        cond_val: BasicValueEnum<'ctx>,
+        name: &str,
+    ) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
+        match cond_val {
+            BasicValueEnum::IntValue(iv) if iv.get_type().get_bit_width() == 1 => Ok(iv),
+            _ => {
+                let zero = self.context.i64_type().const_int(0, false);
+                let result = self.builder.build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    cond_val.into_int_value(),
+                    zero,
+                    name,
+                );
+                result.map_err(|e| Box::new(e) as Box<dyn Error>)
+            }
+        }
+    }
+
+    /// Mangle a function name based on module context
+    fn mangle_name(&self, name: &str, is_main: bool) -> String {
+        if is_main || name == "main" {
             "main".to_string()
         } else {
-            format!("{}_{}", self.module_name, hir_fn.name)
-        };
+            format!("{}_{}", self.module_name, name)
+        }
+    }
+
+    /// Build function type from return type and parameter types
+    fn build_function_type(
+        &self,
+        return_ty: &Type,
+        param_tys: &[Type],
+    ) -> inkwell::types::FunctionType<'ctx> {
+        let param_types: Vec<BasicMetadataTypeEnum> =
+            param_tys.iter().map(|p| self.llvm_type(p).into()).collect();
+
+        if return_ty == &Type::Void {
+            self.context.void_type().fn_type(&param_types, false)
+        } else {
+            let return_type = self.llvm_type(return_ty);
+            return_type.fn_type(&param_types, false)
+        }
+    }
+
+    /// Generate code for an HIR function
+    fn generate_hir_function(&mut self, hir_fn: &hir::HirFn) -> CodegenResult<()> {
+        let mangled_name = self.mangle_name(&hir_fn.name, hir_fn.name == "main");
 
         let function = self.module.get_function(&mangled_name).ok_or(format!(
             "Function not declared: {} (original: {})",
@@ -248,20 +292,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let else_block = self.context.append_basic_block(function, "else");
                 let merge_block = self.context.append_basic_block(function, "cont");
 
-                // If condition is already i1 (from comparison), use it directly
-                // Otherwise convert i64 to i1
-                let is_true = match cond_val {
-                    BasicValueEnum::IntValue(iv) if iv.get_type().get_bit_width() == 1 => iv,
-                    _ => {
-                        let zero = self.context.i64_type().const_int(0, false);
-                        self.builder.build_int_compare(
-                            inkwell::IntPredicate::NE,
-                            cond_val.into_int_value(),
-                            zero,
-                            "is_true",
-                        )?
-                    }
-                };
+                // Convert condition to i1 for branching
+                let is_true = self.condition_to_i1(cond_val, "is_true")?;
                 self.builder
                     .build_conditional_branch(is_true, then_block, else_block)?;
 
@@ -292,20 +324,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Condition block
                 self.builder.position_at_end(cond_block);
                 let cond_val = self.generate_hir_expr(condition)?;
-                // If condition is already i1 (from comparison), use it directly
-                // Otherwise convert i64 to i1
-                let is_true = match cond_val {
-                    BasicValueEnum::IntValue(iv) if iv.get_type().get_bit_width() == 1 => iv,
-                    _ => {
-                        let zero = self.context.i64_type().const_int(0, false);
-                        self.builder.build_int_compare(
-                            inkwell::IntPredicate::NE,
-                            cond_val.into_int_value(),
-                            zero,
-                            "while_is_true",
-                        )?
-                    }
-                };
+                // Convert condition to i1 for branching
+                let is_true = self.condition_to_i1(cond_val, "while_is_true")?;
                 self.builder
                     .build_conditional_branch(is_true, body_block, end_block)?;
 
@@ -695,20 +715,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let else_block = self.context.append_basic_block(function, "else");
                 let merge_block = self.context.append_basic_block(function, "cont");
 
-                // If condition is already i1 (from comparison), use it directly
-                // Otherwise convert i64 to i1
-                let is_true = match cond_val {
-                    BasicValueEnum::IntValue(iv) if iv.get_type().get_bit_width() == 1 => iv,
-                    _ => {
-                        let zero = self.context.i64_type().const_int(0, false);
-                        self.builder.build_int_compare(
-                            inkwell::IntPredicate::NE,
-                            cond_val.into_int_value(),
-                            zero,
-                            "is_true",
-                        )?
-                    }
-                };
+                // Convert condition to i1 for branching
+                let is_true = self.condition_to_i1(cond_val, "is_true")?;
                 self.builder
                     .build_conditional_branch(is_true, then_block, else_block)?;
 
@@ -906,29 +914,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Declare a function (create function signature)
     pub fn declare_function(&mut self, fn_def: &FnDef) -> CodegenResult<()> {
-        // Handle void return type specially
-        let is_void_return = fn_def.return_ty == Type::Void;
-
-        let param_types: Vec<BasicMetadataTypeEnum> = fn_def
-            .params
-            .iter()
-            .map(|p| self.llvm_type(&p.ty).into())
-            .collect();
-
-        // Use void_type for void returns, otherwise use the regular llvm type
-        let fn_type = if is_void_return {
-            self.context.void_type().fn_type(&param_types, false)
-        } else {
-            let return_type = self.llvm_type(&fn_def.return_ty);
-            return_type.fn_type(&param_types, false)
-        };
-
-        // Mangle name if not main
-        let mangled_name = if fn_def.name == "main" {
-            "main".to_string()
-        } else {
-            format!("{}_{}", self.module_name, fn_def.name)
-        };
+        let param_types: Vec<Type> = fn_def.params.iter().map(|p| p.ty.clone()).collect();
+        let fn_type = self.build_function_type(&fn_def.return_ty, &param_types);
+        let mangled_name = self.mangle_name(&fn_def.name, fn_def.name == "main");
 
         self.module.add_function(&mangled_name, fn_type, None);
 
@@ -941,22 +929,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         fn_def: &FnDef,
         target_module: &str,
     ) -> CodegenResult<()> {
-        // Handle void return type specially
-        let is_void_return = fn_def.return_ty == Type::Void;
-
-        let param_types: Vec<BasicMetadataTypeEnum> = fn_def
-            .params
-            .iter()
-            .map(|p| self.llvm_type(&p.ty).into())
-            .collect();
-
-        let fn_type = if is_void_return {
-            self.context.void_type().fn_type(&param_types, false)
-        } else {
-            let return_type = self.llvm_type(&fn_def.return_ty);
-            return_type.fn_type(&param_types, false)
-        };
-
+        let param_types: Vec<Type> = fn_def.params.iter().map(|p| p.ty.clone()).collect();
+        let fn_type = self.build_function_type(&fn_def.return_ty, &param_types);
         let mangled_name = format!("{}_{}", target_module, fn_def.name);
 
         self.module.add_function(
@@ -970,21 +944,8 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Declare a C library external function (FFI)
     pub fn declare_c_function(&mut self, ext_fn: &ExternalFnDef) -> CodegenResult<()> {
-        // Handle void return type specially
-        let is_void_return = ext_fn.return_ty == Type::Void;
-
-        let param_types: Vec<BasicMetadataTypeEnum> = ext_fn
-            .params
-            .iter()
-            .map(|p| self.llvm_type(&p.ty).into())
-            .collect();
-
-        let fn_type = if is_void_return {
-            self.context.void_type().fn_type(&param_types, false)
-        } else {
-            let return_type = self.llvm_type(&ext_fn.return_ty);
-            return_type.fn_type(&param_types, false)
-        };
+        let param_types: Vec<Type> = ext_fn.params.iter().map(|p| p.ty.clone()).collect();
+        let fn_type = self.build_function_type(&ext_fn.return_ty, &param_types);
 
         // Use the function name directly for C functions (no mangling)
         self.module.add_function(
