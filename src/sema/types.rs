@@ -147,11 +147,31 @@ impl TypeAnalyzer {
             }
             crate::ast::Stmt::If {
                 condition,
+                capture,
                 then_branch,
                 else_branch,
-                ..
+                span,
             } => {
-                self.analyze_expression(condition)?;
+                let cond_ty = self.analyze_expression(condition)?;
+
+                // Handle capture variable if present
+                if let Some(cap) = capture {
+                    // If condition is an optional type, the capture gets the inner type
+                    if let crate::ast::Type::Option(inner_ty) = cond_ty {
+                        self.symbol_table.define(
+                            cap.clone(),
+                            *inner_ty,
+                            Visibility::Private,
+                            false,
+                        );
+                    } else {
+                        return Err(AnalysisError::new_with_span(
+                            "Capture variable requires an optional type",
+                            span,
+                        ));
+                    }
+                }
+
                 self.analyze_statement(then_branch)?;
                 if let Some(eb) = else_branch {
                     self.analyze_statement(eb)?;
@@ -236,7 +256,9 @@ impl TypeAnalyzer {
                 is_exported: false,
             }),
             crate::ast::Expr::Char(_, _) => Ok(crate::ast::Type::I8),
-            crate::ast::Expr::Null(_) => Ok(crate::ast::Type::I64),
+            crate::ast::Expr::Null(_) => {
+                Ok(crate::ast::Type::Option(Box::new(crate::ast::Type::I64)))
+            }
             crate::ast::Expr::Tuple(elements, _) => {
                 let mut types = vec![];
                 for elem in elements {
@@ -501,6 +523,18 @@ impl TypeAnalyzer {
     }
 
     fn types_compatible(&self, left: &crate::ast::Type, right: &crate::ast::Type) -> bool {
+        // Check if left is an Option and right is the inner type
+        if let crate::ast::Type::Option(inner) = left {
+            if **inner == *right {
+                return true;
+            }
+        }
+        // Check if right is an Option and left is the inner type
+        if let crate::ast::Type::Option(inner) = right {
+            if **inner == *left {
+                return true;
+            }
+        }
         left == right || (self.is_numeric(left) && self.is_numeric(right))
     }
 
