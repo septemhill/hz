@@ -2,7 +2,7 @@ import "io"
 
 fn main () void {
     {
-        var i: ?i32 = null;
+        var i: ?i64 = null;
 
         if (i) |data| {
             io.println(data);
@@ -12,7 +12,7 @@ fn main () void {
     }
 
     {
-        const f: i32 = 123;
+        const f: i64 = 123;
 
         if (f == 123) {
             io.println("f is 123");
