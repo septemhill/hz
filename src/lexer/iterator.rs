@@ -147,10 +147,12 @@ impl LexerIterator {
             '&' => Ok(Token::Ampersand),
             '|' => Ok(Token::Pipe),
             '!' => Ok(Token::Not),
-            _ => Err(LexerError {
-                message: format!("Unexpected character: '{}'", c),
-                location: self.pos - 1,
-            }),
+            _ => Err(LexerError::new(
+                &format!("Unexpected character: '{}'", c),
+                self.pos - 1,
+                file!(),
+                line!(),
+            )),
         }
     }
 
@@ -213,10 +215,12 @@ impl LexerIterator {
 
         match num_str.parse::<i64>() {
             Ok(value) => Ok(Token::Int(value)),
-            Err(_) => Err(LexerError {
-                message: format!("Invalid number: {}", num_str),
-                location: start,
-            }),
+            Err(_) => Err(LexerError::new(
+                &format!("Invalid number: {}", num_str),
+                start,
+                file!(),
+                line!(),
+            )),
         }
     }
 
@@ -255,10 +259,12 @@ impl LexerIterator {
         if self.pos < self.source.len() && self.source[self.pos] == '"' {
             self.pos += 1;
         } else {
-            return Err(LexerError {
-                message: "Unterminated string literal".to_string(),
-                location: start,
-            });
+            return Err(LexerError::new(
+                "Unterminated string literal",
+                start,
+                file!(),
+                line!(),
+            ));
         }
 
         Ok(Token::String(value))
@@ -268,18 +274,22 @@ impl LexerIterator {
         let start = self.pos;
         self.pos += 1;
         if self.pos >= self.source.len() {
-            return Err(LexerError {
-                message: "Unterminated character literal".to_string(),
-                location: start,
-            });
+            return Err(LexerError::new(
+                "Unterminated character literal",
+                start,
+                file!(),
+                line!(),
+            ));
         }
         let c = self.source[self.pos];
         self.pos += 1;
         if self.pos >= self.source.len() || self.source[self.pos] != '\'' {
-            return Err(LexerError {
-                message: "Expected closing quote for character literal".to_string(),
-                location: start,
-            });
+            return Err(LexerError::new(
+                "Expected closing quote for character literal",
+                start,
+                file!(),
+                line!(),
+            ));
         }
         self.pos += 1;
         Ok(Token::Char(c))

@@ -35,27 +35,25 @@ impl SemanticAnalyzer {
         }
     }
 
-    pub fn analyze(&mut self, program: &crate::ast::Program) -> Result<(), String> {
+    pub fn analyze(&mut self, program: &crate::ast::Program) -> AnalysisResult<()> {
         // Pass 1: Collect and validate global definitions
         let mut global_analyzer = GlobalDefinitionsAnalyzer::new();
-        global_analyzer.analyze(program).map_err(|e| e.message)?;
+        global_analyzer.analyze(program)?;
 
         // Pass 2: Type analysis
         let symbol_table = global_analyzer.get_symbol_table().clone();
         let mut type_analyzer = TypeAnalyzer::new(symbol_table);
-        type_analyzer.analyze(program).map_err(|e| e.message)?;
+        type_analyzer.analyze(program)?;
 
         // Pass 3: Symbol resolution
         let symbol_table = type_analyzer.get_symbol_table().clone();
         let mut symbol_resolver = SymbolResolver::new(symbol_table);
-        symbol_resolver.analyze(program).map_err(|e| e.message)?;
+        symbol_resolver.analyze(program)?;
 
         // Pass 4: Mutability analysis
         let symbol_table = symbol_resolver.get_symbol_table().clone();
         let mut mutability_analyzer = MutabilityAnalyzer::new(symbol_table);
-        mutability_analyzer
-            .analyze(program)
-            .map_err(|e| e.message)?;
+        mutability_analyzer.analyze(program)?;
 
         // Store final symbol table
         self.symbol_table = mutability_analyzer.get_symbol_table().clone();

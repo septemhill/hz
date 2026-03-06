@@ -1,4 +1,4 @@
-use crate::ast::{Type, Visibility};
+use crate::ast::{Span, Type, Visibility};
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::SymbolTable;
 
@@ -31,10 +31,10 @@ impl GlobalDefinitionsAnalyzer {
     fn collect_functions(&mut self, functions: &[crate::ast::FnDef]) -> AnalysisResult<()> {
         for f in functions {
             if self.symbol_table.resolve(&f.name).is_some() {
-                return Err(AnalysisError::new(&format!(
-                    "Duplicate declaration of function '{}'",
-                    f.name
-                )));
+                return Err(AnalysisError::new_with_span(
+                    &format!("Duplicate declaration of function '{}'", f.name),
+                    &f.span,
+                ));
             }
             self.symbol_table
                 .define(f.name.clone(), f.return_ty.clone(), f.visibility, true);
@@ -48,10 +48,13 @@ impl GlobalDefinitionsAnalyzer {
     ) -> AnalysisResult<()> {
         for ext_fn in ext_fns {
             if self.symbol_table.resolve(&ext_fn.name).is_some() {
-                return Err(AnalysisError::new(&format!(
-                    "Duplicate declaration of external function '{}'",
-                    ext_fn.name
-                )));
+                return Err(AnalysisError::new_with_span(
+                    &format!(
+                        "Duplicate declaration of external function '{}'",
+                        ext_fn.name
+                    ),
+                    &ext_fn.span,
+                ));
             }
             self.symbol_table.define(
                 ext_fn.name.clone(),
@@ -66,10 +69,10 @@ impl GlobalDefinitionsAnalyzer {
     fn collect_structs(&mut self, structs: &[crate::ast::StructDef]) -> AnalysisResult<()> {
         for s in structs {
             if self.symbol_table.resolve(&s.name).is_some() {
-                return Err(AnalysisError::new(&format!(
-                    "Duplicate declaration of type '{}'",
-                    s.name
-                )));
+                return Err(AnalysisError::new_with_span(
+                    &format!("Duplicate declaration of type '{}'", s.name),
+                    &s.span,
+                ));
             }
             self.symbol_table.define(
                 s.name.clone(),
@@ -88,10 +91,10 @@ impl GlobalDefinitionsAnalyzer {
     fn collect_enums(&mut self, enums: &[crate::ast::EnumDef]) -> AnalysisResult<()> {
         for e in enums {
             if self.symbol_table.resolve(&e.name).is_some() {
-                return Err(AnalysisError::new(&format!(
-                    "Duplicate declaration of type '{}'",
-                    e.name
-                )));
+                return Err(AnalysisError::new_with_span(
+                    &format!("Duplicate declaration of type '{}'", e.name),
+                    &e.span,
+                ));
             }
             self.symbol_table.define(
                 e.name.clone(),
@@ -110,10 +113,10 @@ impl GlobalDefinitionsAnalyzer {
     fn collect_errors(&mut self, errors: &[crate::ast::ErrorDef]) -> AnalysisResult<()> {
         for e in errors {
             if self.symbol_table.resolve(&e.name).is_some() {
-                return Err(AnalysisError::new(&format!(
-                    "Duplicate declaration of error type '{}'",
-                    e.name
-                )));
+                return Err(AnalysisError::new_with_span(
+                    &format!("Duplicate declaration of error type '{}'", e.name),
+                    &e.span,
+                ));
             }
             self.symbol_table
                 .define(e.name.clone(), Type::Error, e.visibility, true);

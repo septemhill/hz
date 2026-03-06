@@ -47,10 +47,7 @@ impl Lexer {
             // Don't add whitespace or comment tokens, but add error tokens
             match &token {
                 Token::Error(msg) => {
-                    return Err(LexerError {
-                        message: msg.clone(),
-                        location: start,
-                    });
+                    return Err(LexerError::new(&msg, start, file!(), line!()));
                 }
                 _ => {
                     // Skip whitespace and comments
@@ -221,10 +218,12 @@ impl Lexer {
             '&' => Ok(Token::Ampersand),
             '|' => Ok(Token::Pipe),
             '!' => Ok(Token::Not),
-            _ => Err(LexerError {
-                message: format!("Unexpected character: '{}'", c),
-                location: self.pos - 1,
-            }),
+            _ => Err(LexerError::new(
+                &format!("Unexpected character: '{}'", c),
+                self.pos - 1,
+                file!(),
+                line!(),
+            )),
         }
     }
 
@@ -291,10 +290,12 @@ impl Lexer {
 
         match num_str.parse::<i64>() {
             Ok(value) => Ok(Token::Int(value)),
-            Err(_) => Err(LexerError {
-                message: format!("Invalid number: {}", num_str),
-                location: start,
-            }),
+            Err(_) => Err(LexerError::new(
+                &format!("Invalid number: {}", num_str),
+                start,
+                file!(),
+                line!(),
+            )),
         }
     }
 
@@ -333,10 +334,12 @@ impl Lexer {
         if self.pos < self.source.len() && self.source[self.pos] == '"' {
             self.pos += 1;
         } else {
-            return Err(LexerError {
-                message: "Unterminated string literal".to_string(),
-                location: start,
-            });
+            return Err(LexerError::new(
+                "Unterminated string literal",
+                start,
+                file!(),
+                line!(),
+            ));
         }
 
         Ok(Token::String(value))
@@ -348,20 +351,24 @@ impl Lexer {
         self.pos += 1; // Consume '
 
         if self.pos >= self.source.len() {
-            return Err(LexerError {
-                message: "Unterminated character literal".to_string(),
-                location: start,
-            });
+            return Err(LexerError::new(
+                "Unterminated character literal",
+                start,
+                file!(),
+                line!(),
+            ));
         }
 
         let c = self.source[self.pos];
         self.pos += 1;
 
         if self.pos >= self.source.len() || self.source[self.pos] != '\'' {
-            return Err(LexerError {
-                message: "Expected closing quote for character literal".to_string(),
-                location: start,
-            });
+            return Err(LexerError::new(
+                "Expected closing quote for character literal",
+                start,
+                file!(),
+                line!(),
+            ));
         }
         self.pos += 1;
 

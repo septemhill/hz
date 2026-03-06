@@ -1,4 +1,4 @@
-use crate::ast::Visibility;
+use crate::ast::{Span, Visibility};
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::SymbolTable;
 
@@ -42,20 +42,28 @@ impl MutabilityAnalyzer {
 
     fn analyze_statement(&mut self, stmt: &crate::ast::Stmt) -> AnalysisResult<()> {
         match stmt {
-            crate::ast::Stmt::Assign { target, .. } => {
+            crate::ast::Stmt::Assign {
+                target,
+                value: _,
+                op: _,
+                span,
+            } => {
                 if target != "_" {
                     let is_const = self
                         .symbol_table
                         .resolve(target)
                         .map(|s| s.is_const)
                         .ok_or_else(|| {
-                            AnalysisError::new(&format!("Undefined variable '{}'", target))
+                            AnalysisError::new_with_span(
+                                &format!("Undefined variable '{}'", target),
+                                span,
+                            )
                         })?;
                     if is_const {
-                        return Err(AnalysisError::new(&format!(
-                            "Cannot reassign constant variable '{}'",
-                            target
-                        )));
+                        return Err(AnalysisError::new_with_span(
+                            &format!("Cannot reassign constant variable '{}'", target),
+                            span,
+                        ));
                     }
                 }
                 Ok(())

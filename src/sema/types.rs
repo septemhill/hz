@@ -1,4 +1,4 @@
-use crate::ast::Visibility;
+use crate::ast::{Span, Visibility};
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::SymbolTable;
 
@@ -53,24 +53,29 @@ impl TypeAnalyzer {
                 ty,
                 value,
                 mutability,
-                ..
+                visibility: _,
+                span,
             } => {
                 let inferred_ty = if let Some(val_expr) = value {
                     let v_ty = self.analyze_expression(val_expr)?;
                     if let Some(explicit_ty) = ty {
                         if !self.types_compatible(explicit_ty, &v_ty) {
-                            return Err(AnalysisError::new(&format!(
-                                "Type mismatch in variable declaration: expected {}, found {}",
-                                explicit_ty, v_ty
-                            )));
+                            return Err(AnalysisError::new_with_span(
+                                &format!(
+                                    "Type mismatch in variable declaration: expected {}, found {}",
+                                    explicit_ty, v_ty
+                                ),
+                                span,
+                            ));
                         }
                     }
                     v_ty
                 } else if let Some(explicit_ty) = ty {
                     explicit_ty.clone()
                 } else {
-                    return Err(AnalysisError::new(
+                    return Err(AnalysisError::new_with_span(
                         "Variable must have either a type or an initial value",
+                        span,
                     ));
                 };
 
@@ -96,21 +101,32 @@ impl TypeAnalyzer {
                 }
                 Ok(())
             }
-            crate::ast::Stmt::Assign { target, value, .. } => {
+            crate::ast::Stmt::Assign {
+                target,
+                value,
+                op: _,
+                span,
+            } => {
                 if target != "_" {
                     let symbol_ty = self
                         .symbol_table
                         .resolve(target)
                         .map(|s| s.ty.clone())
                         .ok_or_else(|| {
-                            AnalysisError::new(&format!("Undefined variable '{}'", target))
+                            AnalysisError::new_with_span(
+                                &format!("Undefined variable '{}'", target),
+                                span,
+                            )
                         })?;
                     let expr_ty = self.analyze_expression(value)?;
                     if !self.types_compatible(&symbol_ty, &expr_ty) {
-                        return Err(AnalysisError::new(&format!(
-                            "Type mismatch in assignment to '{}': expected {}, found {}",
-                            target, symbol_ty, expr_ty
-                        )));
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "Type mismatch in assignment to '{}': expected {}, found {}",
+                                target, symbol_ty, expr_ty
+                            ),
+                            span,
+                        ));
                     }
                 }
                 Ok(())
@@ -229,26 +245,37 @@ impl TypeAnalyzer {
                 }
                 Ok(crate::ast::Type::Tuple(types))
             }
-            crate::ast::Expr::TupleIndex { tuple, index, .. } => {
+            crate::ast::Expr::TupleIndex { tuple, index, span } => {
                 let tuple_ty = self.analyze_expression(tuple)?;
                 if let crate::ast::Type::Tuple(types) = tuple_ty {
                     if *index < types.len() {
                         Ok(types[*index].clone())
                     } else {
-                        Err(AnalysisError::new("Tuple index out of bounds"))
+                        Err(AnalysisError::new_with_span(
+                            "Tuple index out of bounds",
+                            span,
+                        ))
                     }
                 } else {
-                    Err(AnalysisError::new("Tuple index on non-tuple type"))
+                    Err(AnalysisError::new_with_span(
+                        "Tuple index on non-tuple type",
+                        span,
+                    ))
                 }
             }
-            crate::ast::Expr::Ident(name, _) => {
+            crate::ast::Expr::Ident(name, span) => {
                 if name == "_" {
                     return Ok(crate::ast::Type::I64);
                 }
                 self.symbol_table
                     .resolve(name)
                     .map(|s| s.ty.clone())
-                    .ok_or_else(|| AnalysisError::new(&format!("Undefined variable '{}'", name)))
+                    .ok_or_else(|| {
+                        AnalysisError::new_with_span(
+                            &format!("Undefined variable '{}'", name),
+                            span,
+                        )
+                    })
             }
             crate::ast::Expr::Array(elements, _) => {
                 for elem in elements {
@@ -257,7 +284,10 @@ impl TypeAnalyzer {
                 Ok(crate::ast::Type::I64)
             }
             crate::ast::Expr::Binary {
-                op, left, right, ..
+                op,
+                left,
+                right,
+                span,
             } => {
                 let l_ty = self.analyze_expression(left)?;
                 let r_ty = self.analyze_expression(right)?;
@@ -275,8 +305,9 @@ impl TypeAnalyzer {
                         if self.is_numeric(&l_ty) && self.is_numeric(&r_ty) {
                             Ok(l_ty)
                         } else {
-                            Err(AnalysisError::new(
+                            Err(AnalysisError::new_with_span(
                                 "Binary operation requires numeric operands",
+                                span,
                             ))
                         }
                     }
@@ -289,36 +320,46 @@ impl TypeAnalyzer {
                         if self.types_compatible(&l_ty, &r_ty) {
                             Ok(crate::ast::Type::Bool)
                         } else {
-                            Err(AnalysisError::new("Comparison requires compatible types"))
+                            Err(AnalysisError::new_with_span(
+                                "Comparison requires compatible types",
+                                span,
+                            ))
                         }
                     }
                     crate::ast::BinaryOp::And | crate::ast::BinaryOp::Or => {
                         if l_ty == crate::ast::Type::Bool && r_ty == crate::ast::Type::Bool {
                             Ok(crate::ast::Type::Bool)
                         } else {
-                            Err(AnalysisError::new(
+                            Err(AnalysisError::new_with_span(
                                 "Logical operation requires boolean operands",
+                                span,
                             ))
                         }
                     }
                     crate::ast::BinaryOp::Range => Ok(crate::ast::Type::I64),
                 }
             }
-            crate::ast::Expr::Unary { op, expr, .. } => {
+            crate::ast::Expr::Unary { op, expr, span } => {
                 let e_ty = self.analyze_expression(expr)?;
                 match op {
                     crate::ast::UnaryOp::Neg | crate::ast::UnaryOp::Pos => {
                         if self.is_numeric(&e_ty) {
                             Ok(e_ty)
                         } else {
-                            Err(AnalysisError::new("Unary requires numeric operand"))
+                            Err(AnalysisError::new_with_span(
+                                "Unary requires numeric operand",
+                                span,
+                            ))
                         }
                     }
                     crate::ast::UnaryOp::Not => {
                         if e_ty == crate::ast::Type::Bool {
                             Ok(crate::ast::Type::Bool)
                         } else {
-                            Err(AnalysisError::new("Logical NOT requires boolean operand"))
+                            Err(AnalysisError::new_with_span(
+                                "Logical NOT requires boolean operand",
+                                span,
+                            ))
                         }
                     }
                 }
@@ -327,7 +368,7 @@ impl TypeAnalyzer {
                 name,
                 namespace,
                 args,
-                ..
+                span,
             } => {
                 if namespace.as_deref() == Some("io") && name == "println" {
                     for arg in args {
@@ -342,7 +383,10 @@ impl TypeAnalyzer {
                         .resolve(name)
                         .map(|s| s.ty.clone())
                         .ok_or_else(|| {
-                            AnalysisError::new(&format!("Undefined function '{}'", name))
+                            AnalysisError::new_with_span(
+                                &format!("Undefined function '{}'", name),
+                                span,
+                            )
                         })?
                 };
                 for arg in args {
@@ -354,7 +398,8 @@ impl TypeAnalyzer {
                 condition,
                 then_branch,
                 else_branch,
-                ..
+                capture: _,
+                span,
             } => {
                 self.analyze_expression(condition)?;
                 let then_ty = self.analyze_expression(then_branch)?;
@@ -362,8 +407,9 @@ impl TypeAnalyzer {
                 if self.types_compatible(&then_ty, &else_ty) {
                     Ok(then_ty)
                 } else {
-                    Err(AnalysisError::new(
+                    Err(AnalysisError::new_with_span(
                         "If expression branches must have compatible types",
+                        span,
                     ))
                 }
             }
@@ -379,11 +425,13 @@ impl TypeAnalyzer {
                 self.analyze_expression(object)?;
                 Ok(crate::ast::Type::I64)
             }
-            crate::ast::Expr::Struct { name, fields, .. } => {
+            crate::ast::Expr::Struct { name, fields, span } => {
                 self.symbol_table
                     .resolve(name)
                     .map(|s| s.ty.clone())
-                    .ok_or_else(|| AnalysisError::new(&format!("Undefined struct '{}'", name)))?;
+                    .ok_or_else(|| {
+                        AnalysisError::new_with_span(&format!("Undefined struct '{}'", name), span)
+                    })?;
                 for (_, field_expr) in fields {
                     self.analyze_expression(field_expr)?;
                 }
@@ -393,13 +441,12 @@ impl TypeAnalyzer {
                     is_exported: false,
                 })
             }
-            crate::ast::Expr::Try { expr, .. } => {
+            crate::ast::Expr::Try { expr, span } => {
                 let expr_ty = self.analyze_expression(expr)?;
                 if expr_ty.is_result() {
-                    expr_ty
-                        .result_inner()
-                        .cloned()
-                        .ok_or_else(|| AnalysisError::new("Try expression requires Result type"))
+                    expr_ty.result_inner().cloned().ok_or_else(|| {
+                        AnalysisError::new_with_span("Try expression requires Result type", span)
+                    })
                 } else {
                     Ok(expr_ty)
                 }
@@ -408,7 +455,7 @@ impl TypeAnalyzer {
                 expr,
                 error_var,
                 body,
-                span: _,
+                span,
             } => {
                 let expr_ty = self.analyze_expression(expr)?;
                 if !expr_ty.is_result() {

@@ -1249,6 +1249,9 @@ impl Parser {
     fn parse_var_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.advance(); // consume 'var'
 
+        // Get span of the 'var' keyword for error reporting
+        let span_start = self.peek(0).map(|t| t.span.start).unwrap_or(0);
+
         // Check for pub
         let visibility = if self.match_token(Token::Pub) {
             Visibility::Public
@@ -1294,6 +1297,9 @@ impl Parser {
 
         self.match_token(Token::Semicolon);
 
+        // Get end span from the last token
+        let span_end = self.peek(0).map(|t| t.span.end).unwrap_or(span_start);
+
         Ok(Stmt::Let {
             mutability: Mutability::Var,
             name,
@@ -1301,7 +1307,10 @@ impl Parser {
             ty,
             value,
             visibility,
-            span: Span { start: 0, end: 0 },
+            span: Span {
+                start: span_start,
+                end: span_end,
+            },
         })
     }
 

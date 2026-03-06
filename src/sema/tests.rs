@@ -5,23 +5,29 @@
 
 use crate::lexer::iter as lexer_iter;
 use crate::parser::Parser;
-use crate::sema::SemanticAnalyzer;
+use crate::sema::{AnalysisError, SemanticAnalyzer};
 
 /// Helper function to parse source code and run semantic analysis
-fn analyze_source(source: &str) -> Result<(), String> {
+fn analyze_source(source: &str) -> Result<(), AnalysisError> {
     let tokens = lexer_iter(source);
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().map_err(|e| e.to_string())?;
+    let program = parser
+        .parse_program()
+        .map_err(|e| AnalysisError::new(&e.to_string()))?;
 
     let mut analyzer = SemanticAnalyzer::new();
     analyzer.analyze(&program)
 }
 
 /// Helper function that returns the symbol table after analysis
-fn analyze_source_with_symbols(source: &str) -> Result<crate::sema::symbol::SymbolTable, String> {
+fn analyze_source_with_symbols(
+    source: &str,
+) -> Result<crate::sema::symbol::SymbolTable, AnalysisError> {
     let tokens = lexer_iter(source);
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().map_err(|e| e.to_string())?;
+    let program = parser
+        .parse_program()
+        .map_err(|e| AnalysisError::new(&e.to_string()))?;
 
     let mut analyzer = SemanticAnalyzer::new();
     analyzer.analyze(&program)?;
@@ -99,7 +105,7 @@ fn main() void {
     assert!(result.is_err(), "Expected error for duplicate function");
     let err = result.unwrap_err();
     assert!(
-        err.contains("Duplicate"),
+        err.message.contains("Duplicate"),
         "Error should mention 'Duplicate': {}",
         err
     );
@@ -124,7 +130,7 @@ fn main() void {
     assert!(result.is_err(), "Expected error for duplicate struct");
     let err = result.unwrap_err();
     assert!(
-        err.contains("Duplicate"),
+        err.message.contains("Duplicate"),
         "Error should mention 'Duplicate': {}",
         err
     );
@@ -145,7 +151,7 @@ fn main() void {
     assert!(result.is_err(), "Expected error for undefined variable");
     let err = result.unwrap_err();
     assert!(
-        err.contains("Undefined"),
+        err.message.contains("Undefined"),
         "Error should mention 'Undefined': {}",
         err
     );

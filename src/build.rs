@@ -167,7 +167,22 @@ impl BuildSystem {
 
         // 2. Sema
         let mut analyzer = sema::SemanticAnalyzer::new();
-        analyzer.analyze(&program)?;
+        analyzer.analyze(&program).map_err(|e| {
+            let file_name = unit.path.to_str().unwrap_or("unknown");
+            // Calculate line number from span offset
+            let line_num = e.line.map(|offset| {
+                source[..offset.min(source.len())]
+                    .chars()
+                    .filter(|&c| c == '\n')
+                    .count()
+                    + 1
+            });
+            let mut err = e.with_file(file_name);
+            if let Some(line) = line_num {
+                err = err.with_line(line);
+            }
+            format!("{}", err)
+        })?;
 
         // 3. Lower
         let mut lowering_ctx = lower::LoweringContext::new();

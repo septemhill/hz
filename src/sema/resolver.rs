@@ -1,4 +1,4 @@
-use crate::ast::Visibility;
+use crate::ast::{Span, Visibility};
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::SymbolTable;
 
@@ -78,10 +78,18 @@ impl SymbolResolver {
                 }
                 Ok(())
             }
-            crate::ast::Stmt::Assign { target, value, .. } => {
+            crate::ast::Stmt::Assign {
+                target,
+                value,
+                op: _,
+                span,
+            } => {
                 if target != "_" {
                     self.symbol_table.resolve(target).ok_or_else(|| {
-                        AnalysisError::new(&format!("Undefined variable '{}'", target))
+                        AnalysisError::new_with_span(
+                            &format!("Undefined variable '{}'", target),
+                            span,
+                        )
                     })?;
                 }
                 self.analyze_expression(value)?;
@@ -211,25 +219,33 @@ impl SymbolResolver {
 
     fn analyze_expression(&mut self, expr: &crate::ast::Expr) -> AnalysisResult<crate::ast::Type> {
         match expr {
-            crate::ast::Expr::Ident(name, _) => {
+            crate::ast::Expr::Ident(name, span) => {
                 if name == "_" {
                     return Ok(crate::ast::Type::I64);
                 }
                 self.symbol_table
                     .resolve(name)
                     .map(|s| s.ty.clone())
-                    .ok_or_else(|| AnalysisError::new(&format!("Undefined identifier '{}'", name)))
+                    .ok_or_else(|| {
+                        AnalysisError::new_with_span(
+                            &format!("Undefined identifier '{}'", name),
+                            span,
+                        )
+                    })
             }
             crate::ast::Expr::Call {
                 name,
                 namespace,
                 args,
-                ..
+                span,
             } => {
                 if namespace.as_deref() != Some("io") || name != "println" {
                     if namespace.is_none() {
                         self.symbol_table.resolve(name).ok_or_else(|| {
-                            AnalysisError::new(&format!("Undefined function '{}'", name))
+                            AnalysisError::new_with_span(
+                                &format!("Undefined function '{}'", name),
+                                span,
+                            )
                         })?;
                     }
                 }
