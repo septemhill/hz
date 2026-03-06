@@ -112,6 +112,11 @@ fn run_jit(source: &str) -> Result<(), Box<dyn Error>> {
     println!("Parsing source code...");
     let program = parser::parse(source)?;
 
+    // Semantic Analysis
+    println!("Semantic Analysis...");
+    let mut analyzer = sema::SemanticAnalyzer::new();
+    analyzer.analyze(&program)?;
+
     // Generate LLVM IR
     let context = inkwell::context::Context::create();
     let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;

@@ -416,6 +416,49 @@ impl SemanticAnalyzer {
 
                 Ok(symbol_ty)
             }
+            crate::ast::Expr::Catch {
+                expr,
+                error_var,
+                body,
+                ..
+            } => {
+                // Analyze the expression being caught
+                let expr_ty = self.analyze_expr(expr)?;
+
+                // Check if the expression type is a Result type (can return error)
+                if !expr_ty.is_result() {
+                    return Err(format!(
+                        "catch expression requires a Result type (e.g., i32!), found {}",
+                        expr_ty
+                    ));
+                }
+
+                // If there's an error variable, define it in a new scope
+                let error_var_name = error_var.clone();
+                if error_var_name.is_some() {
+                    self.symbol_table.enter_scope();
+                    self.symbol_table.define(
+                        error_var_name.unwrap(),
+                        Type::Error,
+                        crate::ast::Visibility::Private,
+                        false,
+                    );
+                }
+
+                // Analyze the catch body
+                let _body_ty = self.analyze_expr(body)?;
+
+                // Exit scope if we entered one for the error variable
+                if error_var.is_some() {
+                    self.symbol_table.exit_scope();
+                }
+
+                // Return the inner type (the type without the error indicator)
+                expr_ty
+                    .result_inner()
+                    .cloned()
+                    .ok_or_else(|| "Failed to get inner type from Result".to_string())
+            }
             _ => Ok(Type::I64), // Placeholder for other expressions
         }
     }

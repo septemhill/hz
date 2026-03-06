@@ -45,6 +45,8 @@ pub enum Type {
     },
     /// Error type (e.g., error or ErrorType)
     Error,
+    /// Result type with error (e.g., i32! means i32 or error)
+    Result(Box<Type>),
 }
 
 impl Type {
@@ -68,6 +70,19 @@ impl Type {
     pub fn custom_name(&self) -> Option<&String> {
         match self {
             Type::Custom { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    /// Check if this is a Result type (can return error)
+    pub fn is_result(&self) -> bool {
+        matches!(self, Type::Result(_))
+    }
+
+    /// Get the inner type of a Result type
+    pub fn result_inner(&self) -> Option<&Type> {
+        match self {
+            Type::Result(inner) => Some(inner),
             _ => None,
         }
     }
@@ -109,6 +124,7 @@ impl fmt::Display for Type {
                 None => write!(f, "[]{}", element_type),
             },
             Type::Error => write!(f, "error"),
+            Type::Result(inner) => write!(f, "{}!", inner),
         }
     }
 }

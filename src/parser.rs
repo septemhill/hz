@@ -2698,9 +2698,8 @@ impl Parser {
 
         // Check for ! suffix
         if self.match_token(Token::Not) {
-            // Error return type - for now, just return the base type
-            // In a full implementation, this would create a special error type
-            return Ok(base_type);
+            // Error return type - create Result type
+            return Ok(Type::Result(Box::new(base_type)));
         }
 
         Ok(base_type)

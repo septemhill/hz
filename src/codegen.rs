@@ -2200,6 +2200,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // For void, custom types, generics, and arrays, we'll just use i64 to avoid the conversion issue
                 self.context.i64_type().into()
             }
+            Type::Result(inner) => {
+                // Result type: use the inner type for LLVM representation
+                self.llvm_type(inner)
+            }
         }
     }
 

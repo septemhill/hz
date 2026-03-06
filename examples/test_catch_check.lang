@@ -1,0 +1,13 @@
+fn sample() i32 {
+    return 123;
+}
+
+fn sample2() i32! {
+    return 123;
+}
+
+fn main() void {
+    const x: i32 = sample() catch |_| 444;
+
+    return;
+}
