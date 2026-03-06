@@ -429,6 +429,7 @@ mod tests {
             external_functions: vec![],
             structs: vec![],
             enums: vec![],
+            errors: vec![],
             imports: vec![],
         };
 
@@ -520,8 +521,82 @@ impl LoweringContext {
                     span: *span,
                 }
             }
-            // Add other statement types
-            _ => todo!("Lowering for other statements not implemented"),
+            ast::Stmt::Assign {
+                target,
+                value,
+                span,
+                ..
+            } => {
+                // For now, just lower as expression statement
+                hir::HirStmt::Expr(hir::HirExpr::Block {
+                    stmts: vec![],
+                    expr: Some(Box::new(self.lower_expr(value))),
+                    ty: ast::Type::Void,
+                    span: *span,
+                })
+            }
+            ast::Stmt::While {
+                condition,
+                body,
+                span,
+                ..
+            } => hir::HirStmt::While {
+                condition: self.lower_expr(condition),
+                body: Box::new(self.lower_stmt(body)),
+                span: *span,
+            },
+            ast::Stmt::For {
+                var_name,
+                iterable,
+                body,
+                span,
+                ..
+            } => {
+                // For now, lower as while loop
+                hir::HirStmt::While {
+                    condition: self.lower_expr(iterable),
+                    body: Box::new(self.lower_stmt(body)),
+                    span: *span,
+                }
+            }
+            ast::Stmt::Loop { body, span, .. } => {
+                // For now, lower as infinite while loop
+                hir::HirStmt::While {
+                    condition: hir::HirExpr::Bool(true, ast::Type::Bool, *span),
+                    body: Box::new(self.lower_stmt(body)),
+                    span: *span,
+                }
+            }
+            ast::Stmt::Switch {
+                condition,
+                cases,
+                span,
+                ..
+            } => {
+                // For now, lower as if-else chain
+                hir::HirStmt::Switch {
+                    condition: self.lower_expr(condition),
+                    cases: cases
+                        .iter()
+                        .map(|c| hir::HirCase {
+                            patterns: c.patterns.iter().map(|p| self.lower_expr(p)).collect(),
+                            body: self.lower_stmt(&c.body),
+                            span: c.span,
+                        })
+                        .collect(),
+                    span: *span,
+                }
+            }
+            ast::Stmt::Import { span, .. } => {
+                // Import statements are handled at the module level, not in functions
+                // Just return an empty expression for now
+                hir::HirStmt::Expr(hir::HirExpr::Block {
+                    stmts: vec![],
+                    expr: None,
+                    ty: ast::Type::Void,
+                    span: *span,
+                })
+            }
         }
     }
 
@@ -542,6 +617,10 @@ impl LoweringContext {
             ast::Expr::Null(span) => {
                 hir::HirExpr::Null(ast::Type::Pointer(Box::new(ast::Type::Void)), *span)
             }
+            ast::Expr::Try { expr, span } => hir::HirExpr::Try {
+                expr: Box::new(self.lower_expr(expr)),
+                span: *span,
+            },
             ast::Expr::Tuple(vals, span) => hir::HirExpr::Tuple {
                 vals: vals.iter().map(|v| self.lower_expr(v)).collect(),
                 ty: ast::Type::Tuple(vals.iter().map(|_| ast::Type::I64).collect()), // Placeholder

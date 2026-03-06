@@ -222,6 +222,11 @@ impl SemanticAnalyzer {
                 );
             }
             crate::ast::Stmt::Assign { target, value, .. } => {
+                // Skip underscore assignment (used for ignoring values)
+                if target == "_" {
+                    return Ok(());
+                }
+
                 let (symbol_ty, is_const) = {
                     let symbol = self
                         .symbol_table
@@ -293,11 +298,16 @@ impl SemanticAnalyzer {
                 is_exported: false,
             }),
             crate::ast::Expr::Char(_, _) => Ok(Type::I8),
-            crate::ast::Expr::Ident(name, _) => self
-                .symbol_table
-                .resolve(name)
-                .map(|s| s.ty.clone())
-                .ok_or_else(|| format!("Undefined variable '{}'", name)),
+            crate::ast::Expr::Ident(name, _) => {
+                // Skip underscore identifier (used for ignoring values)
+                if name == "_" {
+                    return Ok(Type::I64); // Placeholder type for underscore
+                }
+                self.symbol_table
+                    .resolve(name)
+                    .map(|s| s.ty.clone())
+                    .ok_or_else(|| format!("Undefined variable '{}'", name))
+            }
             crate::ast::Expr::Binary {
                 op, left, right, ..
             } => {

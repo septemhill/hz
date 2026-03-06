@@ -43,6 +43,8 @@ pub enum Type {
         /// Element type
         element_type: Box<Type>,
     },
+    /// Error type (e.g., error or ErrorType)
+    Error,
 }
 
 impl Type {
@@ -106,6 +108,7 @@ impl fmt::Display for Type {
                 Some(s) => write!(f, "[{}]{}", s, element_type),
                 None => write!(f, "[]{}", element_type),
             },
+            Type::Error => write!(f, "error"),
         }
     }
 }
@@ -233,6 +236,25 @@ pub struct EnumDef {
     pub span: Span,
 }
 
+/// Error variant
+#[derive(Debug, Clone)]
+pub struct ErrorVariant {
+    pub name: String,
+    pub associated_types: Vec<Type>,
+    pub visibility: Visibility,
+}
+
+/// Error definition
+#[derive(Debug, Clone)]
+pub struct ErrorDef {
+    pub name: String,
+    pub variants: Vec<ErrorVariant>,
+    /// For error union types: Some(types) for `error X = A | B`
+    pub union_types: Option<Vec<Type>>,
+    pub visibility: Visibility,
+    pub span: Span,
+}
+
 /// Switch case definition
 #[derive(Debug, Clone)]
 pub struct SwitchCase {
@@ -320,6 +342,8 @@ pub enum Expr {
         fields: Vec<(String, Expr)>,
         span: Span,
     },
+    /// Try expression (e.g., try some_function())
+    Try { expr: Box<Expr>, span: Span },
 }
 
 /// Statement AST node
@@ -432,6 +456,7 @@ pub struct Program {
     pub external_functions: Vec<ExternalFnDef>,
     pub structs: Vec<StructDef>,
     pub enums: Vec<EnumDef>,
+    pub errors: Vec<ErrorDef>,
     pub imports: Vec<(Option<String>, String)>, // (alias, package_name)
 }
 

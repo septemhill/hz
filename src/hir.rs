@@ -71,6 +71,11 @@ pub enum HirExpr {
         ty: Type,
         span: Span,
     },
+    /// Try expression
+    Try {
+        expr: Box<HirExpr>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]

@@ -34,6 +34,8 @@ pub enum Token {
     External,
     Cdecl,
     Defer,
+    ErrorKw,
+    Try,
 
     // Identifiers
     Ident(String),
@@ -137,6 +139,8 @@ impl Token {
             Token::External => "external",
             Token::Cdecl => "cdecl",
             Token::Defer => "defer",
+            Token::ErrorKw => "error",
+            Token::Try => "try",
             Token::FatArrow => "=>",
             Token::Assign => "=",
             Token::Plus => "+",
@@ -413,7 +417,7 @@ impl Lexer {
         let ident: String = self.source[start..self.pos].iter().collect();
 
         // Check for keywords
-        match ident.as_str() {
+        let result = match ident.as_str() {
             "fn" => Token::Fn,
             "pub" => Token::Pub,
             "var" => Token::Var,
@@ -435,9 +439,16 @@ impl Lexer {
             "external" => Token::External,
             "cdecl" => Token::Cdecl,
             "defer" => Token::Defer,
+            "error" => {
+                eprintln!("DEBUG LEXER: Found 'error' keyword!");
+                Token::ErrorKw
+            }
+            "try" => Token::Try,
             "_" => Token::Underscore,
-            _ => Token::Ident(ident),
-        }
+            _ => Token::Ident(ident.clone()),
+        };
+        eprintln!("DEBUG LEXER: ident='{}' => {:?}", ident, result);
+        result
     }
 
     /// Read a number literal
@@ -717,6 +728,8 @@ impl LexerIterator {
             "external" => Token::External,
             "cdecl" => Token::Cdecl,
             "defer" => Token::Defer,
+            "error" => Token::ErrorKw,
+            "try" => Token::Try,
             _ => Token::Ident(ident),
         }
     }

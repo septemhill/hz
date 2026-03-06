@@ -1,0 +1,25 @@
+pub error FileError {
+    NotFound(String),
+    PermissionDenied,
+}
+
+error StatusError {
+
+}
+
+error UnionError = FileError | StatusError;
+
+fn file_not_found_error() i64! {
+    return 1;
+}
+
+fn perm_denied() i64! {
+    return 0;
+}
+    
+
+fn main() i64! {
+    const f: i64 = try file_not_found_error();
+    try perm_denied();
+    return f;
+}

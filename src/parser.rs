@@ -149,6 +149,10 @@ impl Parser {
     fn match_token(&mut self, token: Token) -> bool {
         self.skip_whitespace();
         if let Some(t) = self.current() {
+            eprintln!(
+                "DEBUG match_token: current token is {:?}, trying to match {:?}",
+                t, token
+            );
             if *t == token {
                 eprintln!("DEBUG match_token: matched {:?}, advancing", token);
                 self.advance();
@@ -624,6 +628,7 @@ impl Parser {
         let mut external_functions = Vec::new();
         let mut structs = Vec::new();
         let mut enums = Vec::new();
+        let mut errors = Vec::new();
         let mut imports = Vec::new();
 
         while !self.is_at_end() {
@@ -704,6 +709,18 @@ impl Parser {
                 continue;
             }
 
+            // Try to parse error definition
+            if self.match_token(Token::ErrorKw)
+                || (self.match_token(Token::Pub) && self.match_token(Token::ErrorKw))
+            {
+                match self.parse_error() {
+                    Ok(e) => errors.push(e),
+                    Err(e) => return Err(e),
+                }
+                self.set_state(ParserState::Initial);
+                continue;
+            }
+
             // Try to parse function definition (including pub fn)
             // Check if we have 'fn' or 'pub fn'
             let is_pub = self.peek(0).map(|t| t.token == Token::Pub).unwrap_or(false);
@@ -741,6 +758,7 @@ impl Parser {
             external_functions,
             structs,
             enums,
+            errors,
             imports,
         })
     }
@@ -1034,10 +1052,20 @@ impl Parser {
     fn parse_return_type(&mut self) -> Result<Type, ParseError> {
         self.skip_whitespace();
 
+        eprintln!(
+            "DEBUG parse_return_type: current token is {:?}",
+            self.current()
+        );
+
         // Check for void return type
         if let Some(Token::Ident(id)) = self.current().cloned() {
             if id == "void" {
                 self.advance();
+                // Check for error suffix !
+                if self.match_token(Token::Not) {
+                    // Error return type - for now, just return Void
+                    return Ok(Type::Void);
+                }
                 return Ok(Type::Void);
             }
         }
@@ -1050,6 +1078,7 @@ impl Parser {
 
         // Try to parse a type (including optional types)
         if let Ok(ty) = self.parse_type() {
+            eprintln!("DEBUG parse_return_type: parsed type {:?}", ty);
             return Ok(ty);
         }
 
@@ -2399,6 +2428,15 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Null(Span { start: 0, end: 0 }))
             }
+            // Handle try expression
+            Token::Try => {
+                self.advance();
+                let expr = self.parse_unary_expr()?;
+                Ok(Expr::Try {
+                    expr: Box::new(expr),
+                    span: Span { start: 0, end: 0 },
+                })
+            }
             // Handle 'self' keyword as identifier in expression context
             Token::SelfType => {
                 self.advance();
@@ -2581,7 +2619,22 @@ impl Parser {
             return Ok(Type::Option(Box::new(inner)));
         }
 
-        // Check for pointer type: *Type
+        // Check for error type suffix: Type! (e.g., i32! or void!)
+        // This needs to be checked after parsing the base type
+        let base_type = self.parse_base_type()?;
+
+        // Check for ! suffix
+        if self.match_token(Token::Not) {
+            // Error return type - for now, just return the base type
+            // In a full implementation, this would create a special error type
+            return Ok(base_type);
+        }
+
+        Ok(base_type)
+    }
+
+    /// Parse a base type (without modifiers)
+    fn parse_base_type(&mut self) -> Result<Type, ParseError> {
         if self.match_token(Token::Star) {
             let inner = self.parse_type()?;
             return Ok(Type::Pointer(Box::new(inner)));
@@ -2968,6 +3021,146 @@ impl Parser {
             methods,
             visibility,
             generic_params,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse an error definition
+    fn parse_error(&mut self) -> Result<ErrorDef, ParseError> {
+        // "pub" already consumed if present, "error" consumed
+        let visibility = Visibility::Public;
+
+        // Parse error name
+        let name = if let Token::Ident(n) = self.current().cloned().ok_or_else(|| ParseError {
+            message: "Expected error name".to_string(),
+            location: None,
+        })? {
+            let n = n.clone();
+            self.advance();
+            n
+        } else {
+            return Err(ParseError {
+                message: "Expected error name".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        };
+
+        // Check for error union syntax: error X = A | B | C
+        if self.match_token(Token::Assign) {
+            // Parse union types
+            let mut union_types = Vec::new();
+            loop {
+                self.skip_whitespace();
+
+                if let Token::Ident(type_name) =
+                    self.current().cloned().ok_or_else(|| ParseError {
+                        message: "Expected error type in union".to_string(),
+                        location: None,
+                    })?
+                {
+                    union_types.push(Type::Custom {
+                        name: type_name,
+                        generic_args: vec![],
+                        is_exported: false,
+                    });
+                    self.advance();
+                }
+
+                self.skip_whitespace();
+
+                if !self.match_token(Token::Pipe) {
+                    break;
+                }
+            }
+
+            self.match_token(Token::Semicolon);
+
+            return Ok(ErrorDef {
+                name,
+                variants: vec![],
+                union_types: Some(union_types),
+                visibility,
+                span: Span { start: 0, end: 0 },
+            });
+        }
+
+        // Parse variants (error with { ... })
+        if !self.match_token(Token::LBrace) {
+            return Err(ParseError {
+                message: "Expected '{'".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        let mut variants = Vec::new();
+
+        loop {
+            self.skip_whitespace();
+
+            if self.match_token(Token::RBrace) {
+                break;
+            }
+
+            // Parse variant
+            let variant_visibility = if self.match_token(Token::Pub) {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            };
+
+            let variant_name = if let Token::Ident(n) =
+                self.current().cloned().ok_or_else(|| ParseError {
+                    message: "Expected variant name".to_string(),
+                    location: None,
+                })? {
+                let n = n.clone();
+                self.advance();
+                n
+            } else {
+                return Err(ParseError {
+                    message: "Expected variant name".to_string(),
+                    location: self.current_token().map(|t| t.span.start),
+                });
+            };
+
+            // Parse associated types
+            let mut associated_types = Vec::new();
+            if self.match_token(Token::LParen) {
+                loop {
+                    self.skip_whitespace();
+
+                    if self.match_token(Token::RParen) {
+                        break;
+                    }
+
+                    associated_types.push(self.parse_type()?);
+
+                    self.skip_whitespace();
+
+                    if self.match_token(Token::RParen) {
+                        break;
+                    }
+
+                    self.match_token(Token::Comma);
+                }
+            }
+
+            variants.push(ErrorVariant {
+                name: variant_name,
+                associated_types,
+                visibility: variant_visibility,
+            });
+
+            self.match_token(Token::Comma);
+        }
+
+        self.match_token(Token::Semicolon);
+
+        Ok(ErrorDef {
+            name,
+            variants,
+            union_types: None,
+            visibility,
             span: Span { start: 0, end: 0 },
         })
     }

@@ -216,6 +216,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(())
             }
             hir::HirStmt::Assign { target, value, .. } => {
+                // Skip underscore assignment (used for ignoring values)
+                if target == "_" {
+                    let llvm_val = self.generate_hir_expr(value)?;
+                    // Just evaluate and discard
+                    return Ok(());
+                }
                 let ptr = self.variables.get(target).ok_or("Var not found")?.clone();
                 let llvm_val = self.generate_hir_expr(value)?;
                 self.builder.build_store(ptr, llvm_val)?;
@@ -433,7 +439,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
             hir::HirExpr::Ident(name, _, _) => {
-                let ptr = self.variables.get(name).ok_or("Var not found")?;
+                // Skip underscore identifier (used for ignoring values)
+                if name == "_" {
+                    // Return a dummy value
+                    return Ok(self.context.i64_type().const_zero().into());
+                }
+                let ptr = self
+                    .variables
+                    .get(name)
+                    .ok_or(format!("Var not found: {}", name))?;
                 let ty = self.variable_types.get(name).unwrap();
                 let llvm_type = self.llvm_type(ty);
                 Ok(self.builder.build_load(llvm_type, *ptr, name)?.into())
@@ -772,6 +786,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .builder
                     .build_load(struct_type, alloca, "struct_load")?
                     .into())
+            }
+            hir::HirExpr::Try { expr, .. } => {
+                // For now, just evaluate the expression and return its value
+                // In a full implementation, this would handle error propagation
+                self.generate_hir_expr(expr)
             }
         }
     }
@@ -1509,6 +1528,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(last_val.unwrap_or_else(|| self.context.i64_type().const_int(0, false).into()))
             }
             Expr::MemberAccess { .. } => todo!("Codegen for MemberAccess not implemented"),
+            Expr::Try { expr, .. } => {
+                // For now, just evaluate the expression and return its value
+                self.generate_expr(expr)
+            }
             Expr::Struct { .. } => todo!("Codegen for Struct not implemented"),
         }
     }
@@ -2103,6 +2126,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::SelfType => self.context.i64_type().into(), // TODO: Resolve to actual struct type
             Type::Pointer(_) => self.context.i64_type().into(), // TODO: Implement pointer types
             Type::Void => self.context.i64_type().into(),     // Fallback to i64 for void
+            Type::Error => self.context.i64_type().into(),    // Error type falls back to i64
             Type::Option(inner) => {
                 // Optional type: represented as a struct { value, is_valid }
                 // where is_valid is a boolean indicating whether the value is present
