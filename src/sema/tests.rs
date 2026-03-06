@@ -484,3 +484,51 @@ fn main() void {
     // This should work since we're not reassigning
     assert!(result.is_ok(), "Expected ok for const usage: {:?}", result);
 }
+
+// ==========================================================================
+// Test: Catch expression tests
+// ==========================================================================
+
+#[test]
+fn test_catch_expression_valid() {
+    // Test case from examples/test_catch_check.lang
+    let source = r#"
+fn sample() i32 {
+    return 123;
+}
+
+fn sample2() i32! {
+    return 123;
+}
+
+fn main() void {
+    const x: i32 = sample() catch |_| 444;
+
+    return;
+}
+"#;
+    let result = analyze_source(source);
+    // The cactch cannot work with non-errorable functions
+    assert!(result.is_err(), "Expected error for catch expression");
+}
+
+#[test]
+fn test_catch_without_type_annotation() {
+    // Test catch without explicit type annotation
+    let source = r#"
+fn might_fail() i32! {
+    return 42;
+}
+
+fn main() void {
+    const result = might_fail() catch |err| 0;
+}
+"#;
+    let result = analyze_source(source);
+    // This tests catch with error variable binding
+    assert!(
+        result.is_ok(),
+        "Expected ok for catch without type annotation: {:?}",
+        result
+    );
+}
