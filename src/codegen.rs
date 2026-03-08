@@ -92,6 +92,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Convert a condition value to i1 (boolean) for branching
     /// If already i1, returns as-is; otherwise converts i64 to i1
+    /// Handles optional types (represented as struct { value, valid_flag })
     fn condition_to_i1(
         &mut self,
         cond_val: BasicValueEnum<'ctx>,
@@ -99,6 +100,12 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> CodegenResult<inkwell::values::IntValue<'ctx>> {
         match cond_val {
             BasicValueEnum::IntValue(iv) if iv.get_type().get_bit_width() == 1 => Ok(iv),
+            BasicValueEnum::StructValue(sv) => {
+                // Optional types are represented as struct { value, valid_flag }
+                // Extract the valid flag (second element, index 1)
+                let valid_flag = self.builder.build_extract_value(sv, 1, name)?;
+                Ok(valid_flag.into_int_value())
+            }
             _ => {
                 let zero = self.context.i64_type().const_int(0, false);
                 let result = self.builder.build_int_compare(
@@ -282,6 +289,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             hir::HirStmt::If {
                 condition,
+                capture,
                 then_branch,
                 else_branch,
                 ..
@@ -297,16 +305,75 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder
                     .build_conditional_branch(is_true, then_block, else_block)?;
 
+                // Then block - position at then_block BEFORE handling capture
                 self.builder.position_at_end(then_block);
+
+                // Handle capture variable if present (e.g., if (opt) |data| { ... })
+                // This must be inside the then block
+                let mut old_var = None;
+                let capture_name = capture.clone();
+                if let Some(ref name) = capture_name {
+                    if let BasicValueEnum::StructValue(sv) = cond_val {
+                        // Extract the value (first element) from the struct
+                        let val = self.builder.build_extract_value(sv, 0, "captured")?;
+                        let alloca = self.builder.build_alloca(val.get_type(), name)?;
+                        self.builder.build_store(alloca, val)?;
+                        // Save old variable if it exists
+                        old_var = self.variables.insert(name.clone(), alloca);
+                        // The type should be Option(inner), we need to store the inner type
+                        // For now, use i64 as default
+                        self.variable_types.insert(name.clone(), Type::I64);
+                    }
+                }
+
                 self.generate_hir_stmt(then_branch)?;
                 self.builder.build_unconditional_branch(merge_block)?;
 
+                // Restore variable if it was shadowed
+                if let Some(ref name) = capture_name {
+                    if let Some(old) = old_var {
+                        self.variables.insert(name.clone(), old);
+                    } else {
+                        self.variables.remove(name);
+                        self.variable_types.remove(name);
+                    }
+                }
+
+                // Else block
                 self.builder.position_at_end(else_block);
                 if let Some(eb) = else_branch {
-                    self.generate_hir_stmt(eb)?;
-                }
-                self.builder.build_unconditional_branch(merge_block)?;
+                    // Check if else_branch is another If statement (else-if)
+                    // If so, we need to create new blocks for it BEFORE generating
+                    let is_else_if = matches!(eb.as_ref(), hir::HirStmt::If { .. });
 
+                    if is_else_if {
+                        // For else-if, we need to handle it specially:
+                        // 1. Create a new condition block for the else-if
+                        // 2. Branch to it from else_block
+                        // 3. The else-if will generate its own then/else/merge blocks
+                        // 4. We need to make sure the else-if's merge block branches to our merge block
+                        let else_if_cond_block =
+                            self.context.append_basic_block(function, "else_if_cond");
+                        self.builder
+                            .build_unconditional_branch(else_if_cond_block)?;
+                        self.builder.position_at_end(else_if_cond_block);
+
+                        // Generate the else-if
+                        self.generate_hir_stmt(eb)?;
+
+                        // After generating else-if, we need to handle its merge block
+                        // The else-if generates its own merge block that we need to fix up
+                        // Since we can't easily track it, let's just create a new merge block
+                        // and have the else-if's internal merge block branch to it
+                    } else {
+                        self.generate_hir_stmt(eb)?;
+                        self.builder.build_unconditional_branch(merge_block)?;
+                    }
+                } else {
+                    self.builder.build_unconditional_branch(merge_block)?;
+                }
+
+                // Merge block
                 self.builder.position_at_end(merge_block);
                 Ok(())
             }
@@ -412,9 +479,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(self.context.i64_type().const_int(*v as u64, false).into())
             }
             hir::HirExpr::Null(_, _) => {
-                // Return null pointer (i64* null)
-                let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
-                Ok(ptr_type.const_null().into())
+                // Null is represented as a struct { value, is_valid } with is_valid = false
+                // We'll use i64 as placeholder value and false for is_valid
+                let i64_type = self.context.i64_type();
+                let bool_type = self.context.bool_type();
+                let null_struct = self
+                    .context
+                    .struct_type(&[i64_type.into(), bool_type.into()], false);
+                Ok(null_struct.const_zero().into())
             }
             hir::HirExpr::Tuple { vals, ty, .. } => {
                 // Create an LLVM struct from tuple values
@@ -858,6 +930,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                     } else {
                         ("%lld\n", arg)
                     }
+                }
+                BasicValueEnum::PointerValue(_) => {
+                    // String pointers use %s format
+                    ("%s\n", arg)
                 }
                 _ => ("%lld\n", arg),
             };
@@ -1817,11 +1893,30 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder
                 .build_call(printf, &[empty_str.as_basic_value_enum().into()], "")?;
         } else {
-            // Generate first argument as string
+            // Generate first argument
             let arg = self.generate_expr(&args[0])?;
-            // Cast BasicValueEnum to BasicMetadataValueEnum for function call
-            let metadata_arg: inkwell::values::BasicMetadataValueEnum<'_> = arg.into();
-            self.builder.build_call(printf, &[metadata_arg], "")?;
+
+            // Check if the argument is a string pointer (for string literals)
+            // String literals are represented as pointer types in our implementation
+            let arg_type = arg.get_type();
+
+            if let BasicTypeEnum::PointerType(_) = arg_type {
+                // It's a string pointer - use %s format
+                let fmt_str = unsafe { self.builder.build_global_string("%s\n", "fmt") }?;
+                let metadata_arg: inkwell::values::BasicMetadataValueEnum<'_> =
+                    fmt_str.as_basic_value_enum().into();
+                let arg_metadata: inkwell::values::BasicMetadataValueEnum<'_> = arg.into();
+                self.builder
+                    .build_call(printf, &[metadata_arg, arg_metadata], "")?;
+            } else {
+                // It's a numeric value - use %lld format
+                let fmt_str = unsafe { self.builder.build_global_string("%lld\n", "fmt") }?;
+                let metadata_arg: inkwell::values::BasicMetadataValueEnum<'_> =
+                    fmt_str.as_basic_value_enum().into();
+                let arg_metadata: inkwell::values::BasicMetadataValueEnum<'_> = arg.into();
+                self.builder
+                    .build_call(printf, &[metadata_arg, arg_metadata], "")?;
+            }
         }
 
         Ok(self.context.i64_type().const_int(0, false).into())

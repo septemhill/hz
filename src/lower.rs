@@ -504,12 +504,14 @@ impl LoweringContext {
             }
             ast::Stmt::If {
                 condition,
+                capture,
                 then_branch,
                 else_branch,
                 span,
                 ..
             } => hir::HirStmt::If {
                 condition: self.lower_expr(condition),
+                capture: capture.clone(),
                 then_branch: Box::new(self.lower_stmt(then_branch)),
                 else_branch: else_branch.as_ref().map(|e| Box::new(self.lower_stmt(e))),
                 span: *span,

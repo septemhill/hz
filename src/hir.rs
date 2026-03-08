@@ -103,6 +103,7 @@ pub enum HirStmt {
     Return(Option<HirExpr>, Span),
     If {
         condition: HirExpr,
+        capture: Option<String>,
         then_branch: Box<HirStmt>,
         else_branch: Option<Box<HirStmt>>,
         span: Span,
