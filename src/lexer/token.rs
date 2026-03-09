@@ -32,6 +32,8 @@ pub enum Token {
     External,
     Cdecl,
     Defer,
+    #[allow(non_camel_case_types)]
+    DeferBang,
     ErrorKw,
     Try,
     Catch,
@@ -138,6 +140,7 @@ impl Token {
             Token::External => "external",
             Token::Cdecl => "cdecl",
             Token::Defer => "defer",
+            Token::DeferBang => "defer!",
             Token::ErrorKw => "error",
             Token::Try => "try",
             Token::Catch => "catch",

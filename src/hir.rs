@@ -124,6 +124,11 @@ pub enum HirStmt {
         stmt: Box<HirStmt>,
         span: Span,
     },
+    /// DeferBang statement (executes only on error in try statement)
+    DeferBang {
+        stmt: Box<HirStmt>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]

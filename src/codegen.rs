@@ -40,6 +40,14 @@ pub struct CodeGenerator<'ctx> {
     // Const variable scope (name -> LLVM value) - for compile-time error checking
     const_variables: HashMap<String, PointerValue<'ctx>>,
 
+    // Defer stack - tracks deferred statements per scope (LIFO)
+    // Each Vec<HirStmt> represents defers in one scope
+    defer_stack: Vec<Vec<hir::HirStmt>>,
+
+    // Defer! stack - tracks deferred! statements per scope (LIFO)
+    // These only execute when an error occurs in a try statement
+    defer_bang_stack: Vec<Vec<hir::HirStmt>>,
+
     // Return type of current function
     return_type: Option<Type>,
 
@@ -73,11 +81,74 @@ impl<'ctx> CodeGenerator<'ctx> {
             variables: HashMap::new(),
             const_variables: HashMap::new(),
             variable_types: HashMap::new(),
+            defer_stack: Vec::new(),
+            defer_bang_stack: Vec::new(),
             return_type: None,
             stdlib,
             imported_packages: HashMap::new(),
             module_name: module_name.to_string(),
         })
+    }
+
+    /// Push a new scope onto the defer stack
+    fn push_defer_scope(&mut self) {
+        self.defer_stack.push(Vec::new());
+    }
+
+    /// Pop the current scope and execute all defers in LIFO order
+    fn pop_defer_scope(&mut self) -> CodegenResult<()> {
+        if let Some(defers) = self.defer_stack.pop() {
+            // Execute defers in reverse order (LIFO)
+            // We iterate in reverse but since we want the defers to appear after
+            // all other statements in the block, we need to handle the builder position
+            for defer_stmt in defers.iter().rev() {
+                self.generate_hir_stmt(defer_stmt)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Add a defer statement to the current scope
+    fn add_defer(&mut self, stmt: hir::HirStmt) {
+        if let Some(current_scope) = self.defer_stack.last_mut() {
+            current_scope.push(stmt);
+        }
+    }
+
+    /// Push a new scope onto the defer! stack
+    fn push_defer_bang_scope(&mut self) {
+        self.defer_bang_stack.push(Vec::new());
+    }
+
+    /// Pop the current scope and execute all defer!s in LIFO order (only on error)
+    fn pop_defer_bang_scope(&mut self) -> CodegenResult<()> {
+        if let Some(defers) = self.defer_bang_stack.pop() {
+            // Execute defer!s in reverse order (LIFO)
+            for defer_stmt in defers.iter().rev() {
+                self.generate_hir_stmt(defer_stmt)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Add a defer! statement to the current scope
+    fn add_defer_bang(&mut self, stmt: hir::HirStmt) {
+        if let Some(current_scope) = self.defer_bang_stack.last_mut() {
+            current_scope.push(stmt);
+        }
+    }
+
+    /// Execute defer! statements (cleanup on error) - called when an error is detected
+    fn execute_defer_bang_on_error(&mut self) -> CodegenResult<()> {
+        // Execute all defer! statements in the current scope
+        // This is called when a try statement returns an error
+        if let Some(defers) = self.defer_bang_stack.last() {
+            let defers_to_run: Vec<hir::HirStmt> = defers.iter().rev().cloned().collect();
+            for defer_stmt in defers_to_run {
+                self.generate_hir_stmt(&defer_stmt)?;
+            }
+        }
+        Ok(())
     }
 
     /// Generate code for an HIR program
@@ -159,10 +230,15 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         self.variables.clear();
         self.variable_types.clear();
+        self.const_variables.clear();
+        self.defer_stack.clear();
 
         let entry_block = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry_block);
         self.current_block = Some(entry_block);
+
+        // Push function scope for defers
+        self.push_defer_scope();
 
         for (i, (name, ty)) in hir_fn.params.iter().enumerate() {
             let param_value = function
@@ -187,11 +263,14 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             match stmt {
                 hir::HirStmt::Return(_, _) => {
-                    // Explicit return - generate it and we're done
+                    // Explicit return - generate it (defers handled in the return handler)
                     self.generate_hir_stmt(stmt)?;
                     return Ok(());
                 }
                 _ if is_last && is_void => {
+                    // Execute defers before returning void
+                    self.pop_defer_scope()?;
+
                     // Last statement in void function
                     // For expression statements, call generate_hir_expr directly to avoid
                     // generating a return statement from the Call expression
@@ -209,6 +288,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return Ok(());
                 }
                 _ if is_last && !is_void => {
+                    // Execute defers before returning
+                    self.pop_defer_scope()?;
+
                     // Last statement in non-void function - use value as return
                     self.generate_hir_stmt(stmt)?;
                     // For main, always return 0
@@ -224,12 +306,18 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // If we get here, we didn't return in the loop
         if is_void {
+            // Execute defers before returning void
+            self.pop_defer_scope()?;
             self.builder.build_return(None)?;
         } else if hir_fn.name == "main" {
+            // Execute defers before returning 0
+            self.pop_defer_scope()?;
             // main function without explicit return - return 0
             self.builder
                 .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
         } else {
+            // Execute defers before returning 0
+            self.pop_defer_scope()?;
             // Non-void function without return - return 0
             self.builder
                 .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
@@ -279,6 +367,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(())
             }
             hir::HirStmt::Return(value, _) => {
+                // Execute defers before returning
+                self.pop_defer_scope()?;
+
                 if let Some(val) = value {
                     let llvm_val = self.generate_hir_expr(val)?;
                     self.builder.build_return(Some(&llvm_val))?;
@@ -452,8 +543,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(())
             }
             hir::HirStmt::Defer { stmt, .. } => {
-                // Defer is handled at function level - generate the deferred statement
-                self.generate_hir_stmt(stmt)?;
+                // Add the deferred statement to the current scope's defer list
+                // It will be executed in LIFO order when the scope exits
+                self.add_defer((**stmt).clone());
+                Ok(())
+            }
+            hir::HirStmt::DeferBang { stmt, .. } => {
+                // Add the deferred! statement to the current scope's defer! list
+                // It will be executed only when an error occurs (try returns error but not caught)
+                self.add_defer_bang((**stmt).clone());
                 Ok(())
             }
         }
@@ -1424,6 +1522,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Defer is handled at function level - collect and execute in reverse order
                 // For now, just generate the deferred statement immediately
                 // A proper implementation would collect defers and execute them on scope exit
+                self.generate_stmt(stmt)?;
+                Ok(())
+            }
+            Stmt::DeferBang { stmt, .. } => {
+                // DeferBang is similar to Defer but only executes on error
+                // For now, just generate the deferred statement immediately
                 self.generate_stmt(stmt)?;
                 Ok(())
             }

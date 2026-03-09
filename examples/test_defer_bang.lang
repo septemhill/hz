@@ -1,0 +1,18 @@
+import "io"
+
+fn on_error() void {
+    io.println("defer! cleanup called - error occurred");
+}
+
+fn test_defer_bang() void {
+    defer! on_error();
+    io.println("test_defer_bang body");
+    // This would normally trigger the defer! if there's an error
+    // For now, it will just execute normally
+}
+
+fn main() i64 {
+    test_defer_bang();
+    io.println("main done");
+    return 0;
+}

@@ -243,6 +243,14 @@ impl TypeAnalyzer {
                 self.analyze_statement(deferred_stmt)?;
                 Ok(())
             }
+            crate::ast::Stmt::DeferBang {
+                stmt: deferred_stmt,
+                ..
+            } => {
+                // DeferBang is similar to Defer but only executes on error
+                self.analyze_statement(deferred_stmt)?;
+                Ok(())
+            }
         }
     }
 

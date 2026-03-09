@@ -443,6 +443,8 @@ pub enum Stmt {
     },
     /// Defer statement (executes on scope exit)
     Defer { stmt: Box<Stmt>, span: Span },
+    /// Defer! statement (executes only on error in try statement)
+    DeferBang { stmt: Box<Stmt>, span: Span },
 }
 
 /// Function definition AST node

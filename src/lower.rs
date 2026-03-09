@@ -523,6 +523,13 @@ impl LoweringContext {
                     span: *span,
                 }
             }
+            ast::Stmt::DeferBang { stmt, span } => {
+                // Lower the deferred! statement (executes only on error)
+                hir::HirStmt::DeferBang {
+                    stmt: Box::new(self.lower_stmt(stmt)),
+                    span: *span,
+                }
+            }
             ast::Stmt::Assign {
                 target,
                 value,

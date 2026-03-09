@@ -171,6 +171,13 @@ impl LexerIterator {
 
         let ident: String = self.source[start..self.pos].iter().collect();
 
+        // Special case: check for "defer!" - if we have "defer" followed by "!", include the "!"
+        // This must be checked before the keyword matching
+        if ident == "defer" && self.pos < self.source.len() && self.source[self.pos] == '!' {
+            self.pos += 1; // consume the '!'
+            return Token::DeferBang;
+        }
+
         // Check for keywords
         match ident.as_str() {
             "fn" => Token::Fn,
@@ -196,6 +203,7 @@ impl LexerIterator {
             "external" => Token::External,
             "cdecl" => Token::Cdecl,
             "defer" => Token::Defer,
+            "defer!" => Token::DeferBang,
             "error" => Token::ErrorKw,
             "try" => Token::Try,
             "catch" => Token::Catch,

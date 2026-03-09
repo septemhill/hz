@@ -214,6 +214,11 @@ impl SymbolResolver {
                 self.analyze_statement(stmt)?;
                 Ok(())
             }
+            crate::ast::Stmt::DeferBang { stmt, .. } => {
+                // DeferBang is similar to Defer but only executes on error
+                self.analyze_statement(stmt)?;
+                Ok(())
+            }
         }
     }
 
