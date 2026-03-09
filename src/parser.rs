@@ -1065,8 +1065,8 @@ impl Parser {
                 self.advance();
                 // Check for error suffix !
                 if self.match_token(Token::Not) {
-                    // Error return type - for now, just return Void
-                    return Ok(Type::Void);
+                    // Error return type - void! means Result where inner is Void
+                    return Ok(Type::Result(Box::new(Type::Void)));
                 }
                 return Ok(Type::Void);
             }

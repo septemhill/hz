@@ -120,6 +120,14 @@ impl GlobalDefinitionsAnalyzer {
             }
             self.symbol_table
                 .define(e.name.clone(), Type::Error, e.visibility, true);
+
+            // Also register error variants in the symbol table
+            for variant in &e.variants {
+                // Register variant with fully qualified name: ErrorType.VariantName
+                let variant_name = format!("{}.{}", e.name, variant.name);
+                self.symbol_table
+                    .define(variant_name, Type::Error, variant.visibility, true);
+            }
         }
         Ok(())
     }

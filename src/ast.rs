@@ -86,6 +86,14 @@ impl Type {
             _ => None,
         }
     }
+
+    /// Check if this type is void! (Result where inner is Void)
+    pub fn is_void_result(&self) -> bool {
+        match self {
+            Type::Result(inner) => inner.as_ref() == &Type::Void,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for Type {

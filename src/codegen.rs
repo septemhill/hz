@@ -208,7 +208,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         let param_types: Vec<BasicMetadataTypeEnum> =
             param_tys.iter().map(|p| self.llvm_type(p).into()).collect();
 
-        if return_ty == &Type::Void {
+        // Handle void and void! (Result where inner is Void) as void return type
+        if return_ty == &Type::Void || return_ty.is_void_result() {
             self.context.void_type().fn_type(&param_types, false)
         } else {
             let return_type = self.llvm_type(return_ty);
@@ -253,7 +254,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // For void functions, we need to handle implicit returns properly
         // For main function, if return type is Void, treat it as i64 (return 0)
-        let is_void = hir_fn.return_ty == Type::Void && hir_fn.name != "main";
+        // Handle both void and void! (Result where inner is Void) as void return
+        let is_void = (hir_fn.return_ty == Type::Void || hir_fn.return_ty.is_void_result())
+            && hir_fn.name != "main";
 
         // Track statements
         let stmt_count = hir_fn.body.len();
@@ -370,7 +373,18 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 if let Some(val) = value {
                     let llvm_val = self.generate_hir_expr(val)?;
-                    self.builder.build_return(Some(&llvm_val))?;
+                    // Check if the return type is void! (Result where inner is Void)
+                    // In this case, we need to return void instead of the error value
+                    let is_void_result = self
+                        .return_type
+                        .as_ref()
+                        .map(|t| t.is_void_result())
+                        .unwrap_or(false);
+                    if is_void_result {
+                        self.builder.build_return(None)?;
+                    } else {
+                        self.builder.build_return(Some(&llvm_val))?;
+                    }
                 } else {
                     self.builder.build_return(None)?;
                 }
@@ -921,6 +935,29 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::MemberAccess {
                 object, member, ty, ..
             } => {
+                // Check if this is an error variant access (Type.VariantName)
+                // by checking if the object is an identifier
+                if let hir::HirExpr::Ident(obj_name, _, _) = object.as_ref() {
+                    // Try to find the full error variant name in variables
+                    let full_name = format!("{}.{}", obj_name, member);
+                    if let Some(ptr) = self.variables.get(&full_name) {
+                        // Found error variant as a variable
+                        let var_ty = self.variable_types.get(&full_name).unwrap();
+                        let llvm_type = self.llvm_type(var_ty);
+                        return Ok(self.builder.build_load(llvm_type, *ptr, &full_name)?.into());
+                    }
+                    // Also check const_variables
+                    if let Some(ptr) = self.const_variables.get(&full_name) {
+                        let var_ty = self.variable_types.get(&full_name).unwrap();
+                        let llvm_type = self.llvm_type(var_ty);
+                        return Ok(self.builder.build_load(llvm_type, *ptr, &full_name)?.into());
+                    }
+                    // If not found as variable, it might be an error type name
+                    // For now, return a placeholder error value (0)
+                    // A full implementation would look up the error variant in a table
+                    return Ok(self.context.i64_type().const_int(0, false).into());
+                }
+
                 // For member access, we need to get the struct and extract the field
                 let obj_val = self.generate_hir_expr(object)?;
                 let struct_type = obj_val.get_type();
@@ -1197,7 +1234,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         // If the function doesn't have a return statement, add implicit return
         // For main function without return type, default to returning 0 (i64)
         // For other functions without return type, default to void
-        if fn_def.return_ty == Type::Void {
+        // Handle void and void! (Result where inner is Void) as void return
+        if fn_def.return_ty == Type::Void || fn_def.return_ty.is_void_result() {
             self.builder.build_return(None)?;
         } else if fn_def.name == "main" {
             // main function returns i64
@@ -1488,7 +1526,19 @@ impl<'ctx> CodeGenerator<'ctx> {
             Stmt::Return { value, .. } => {
                 if let Some(val) = value {
                     let llvm_val = self.generate_expr(val)?;
-                    self.builder.build_return(Some(&llvm_val))?;
+                    // Check if the return type is void! (Result where inner is Void)
+                    // In this case, we need to return void instead of the error value
+                    // because LLVM void functions cannot return a value
+                    let is_void_result = self
+                        .return_type
+                        .as_ref()
+                        .map(|t| t.is_void_result())
+                        .unwrap_or(false);
+                    if is_void_result {
+                        self.builder.build_return(None)?;
+                    } else {
+                        self.builder.build_return(Some(&llvm_val))?;
+                    }
                 } else {
                     self.builder.build_return(None)?;
                 }
