@@ -208,9 +208,13 @@ impl<'ctx> CodeGenerator<'ctx> {
         let param_types: Vec<BasicMetadataTypeEnum> =
             param_tys.iter().map(|p| self.llvm_type(p).into()).collect();
 
-        // Handle void and void! (Result where inner is Void) as void return type
-        if return_ty == &Type::Void || return_ty.is_void_result() {
+        // Handle void as void return type
+        // But void! (Result where inner is Void) returns i64 to propagate error codes
+        if return_ty == &Type::Void {
             self.context.void_type().fn_type(&param_types, false)
+        } else if return_ty.is_void_result() {
+            // void! returns i64 to allow error propagation (0 = success, non-zero = error)
+            self.context.i64_type().fn_type(&param_types, false)
         } else {
             let return_type = self.llvm_type(return_ty);
             return_type.fn_type(&param_types, false)
@@ -240,6 +244,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Push function scope for defers
         self.push_defer_scope();
+        self.push_defer_bang_scope();
 
         for (i, (name, ty)) in hir_fn.params.iter().enumerate() {
             let param_value = function
@@ -254,9 +259,8 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // For void functions, we need to handle implicit returns properly
         // For main function, if return type is Void, treat it as i64 (return 0)
-        // Handle both void and void! (Result where inner is Void) as void return
-        let is_void = (hir_fn.return_ty == Type::Void || hir_fn.return_ty.is_void_result())
-            && hir_fn.name != "main";
+        // void! returns i64 (error code), so it's not void
+        let is_void = hir_fn.return_ty == Type::Void && hir_fn.name != "main";
 
         // Track statements
         let stmt_count = hir_fn.body.len();
@@ -374,14 +378,44 @@ impl<'ctx> CodeGenerator<'ctx> {
                 if let Some(val) = value {
                     let llvm_val = self.generate_hir_expr(val)?;
                     // Check if the return type is void! (Result where inner is Void)
-                    // In this case, we need to return void instead of the error value
+                    // In this case, we need to return the error code (i64) and call defer!
                     let is_void_result = self
                         .return_type
                         .as_ref()
                         .map(|t| t.is_void_result())
                         .unwrap_or(false);
                     if is_void_result {
-                        self.builder.build_return(None)?;
+                        // For void! return type, check if the value is an error (non-zero)
+                        // If non-zero, it's an error - execute defer! handlers before returning
+                        // Convert llvm_val to int value for comparison
+                        let int_val = llvm_val.into_int_value();
+                        let zero = self.context.i64_type().const_int(0, false);
+                        let is_error = self.builder.build_int_compare(
+                            inkwell::IntPredicate::NE,
+                            int_val,
+                            zero,
+                            "is_error",
+                        )?;
+
+                        let function = self.current_function.unwrap();
+                        let error_block = self.context.append_basic_block(function, "error_return");
+                        let continue_block =
+                            self.context.append_basic_block(function, "continue_return");
+
+                        self.builder.build_conditional_branch(
+                            is_error,
+                            error_block,
+                            continue_block,
+                        )?;
+
+                        // Error path - execute defer! and return error code
+                        self.builder.position_at_end(error_block);
+                        self.execute_defer_bang_on_error()?;
+                        self.builder.build_return(Some(&llvm_val))?;
+
+                        // Success path - just return success (0)
+                        self.builder.position_at_end(continue_block);
+                        self.builder.build_return(Some(&llvm_val))?;
                     } else {
                         self.builder.build_return(Some(&llvm_val))?;
                     }
@@ -953,9 +987,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                         return Ok(self.builder.build_load(llvm_type, *ptr, &full_name)?.into());
                     }
                     // If not found as variable, it might be an error type name
-                    // For now, return a placeholder error value (0)
-                    // A full implementation would look up the error variant in a table
-                    return Ok(self.context.i64_type().const_int(0, false).into());
+                    // Return a non-zero error value to indicate an error occurred
+                    return Ok(self.context.i64_type().const_int(1, false).into());
                 }
 
                 // For member access, we need to get the struct and extract the field
@@ -1001,9 +1034,47 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .into())
             }
             hir::HirExpr::Try { expr, .. } => {
-                // For now, just evaluate the expression and return its value
-                // In a full implementation, this would handle error propagation
-                self.generate_hir_expr(expr)
+                // Try expression: evaluate expr, if error propagate it up (return error)
+                // Otherwise continue with the value
+                let expr_value = self.generate_hir_expr(expr)?;
+
+                // Check if the return type is a Result type by looking at return_type
+                let is_result = self
+                    .return_type
+                    .as_ref()
+                    .map(|t| t.is_result())
+                    .unwrap_or(false);
+
+                if is_result {
+                    // Check if expr_value is an error (non-zero)
+                    let int_val = expr_value.into_int_value();
+                    let zero = self.context.i64_type().const_int(0, false);
+                    let is_error = self.builder.build_int_compare(
+                        inkwell::IntPredicate::NE,
+                        int_val,
+                        zero,
+                        "is_error",
+                    )?;
+
+                    let function = self.current_function.unwrap();
+                    let error_block = self.context.append_basic_block(function, "try_error");
+                    let continue_block = self.context.append_basic_block(function, "try_continue");
+
+                    self.builder
+                        .build_conditional_branch(is_error, error_block, continue_block)?;
+
+                    // Error path - execute defer! and return error
+                    self.builder.position_at_end(error_block);
+                    self.execute_defer_bang_on_error()?;
+                    self.builder.build_return(Some(&int_val))?;
+
+                    // Success path - continue with the value (for void!, this is 0)
+                    self.builder.position_at_end(continue_block);
+                    Ok(expr_value)
+                } else {
+                    // Not a result type, just return the value
+                    Ok(expr_value)
+                }
             }
             hir::HirExpr::Catch {
                 expr,
@@ -1233,10 +1304,14 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // If the function doesn't have a return statement, add implicit return
         // For main function without return type, default to returning 0 (i64)
-        // For other functions without return type, default to void
-        // Handle void and void! (Result where inner is Void) as void return
-        if fn_def.return_ty == Type::Void || fn_def.return_ty.is_void_result() {
+        // For void functions, return void
+        // For void! functions, return 0 (success code)
+        if fn_def.return_ty == Type::Void {
             self.builder.build_return(None)?;
+        } else if fn_def.return_ty.is_void_result() {
+            // void! returns i64 - 0 for success
+            self.builder
+                .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
         } else if fn_def.name == "main" {
             // main function returns i64
             self.builder

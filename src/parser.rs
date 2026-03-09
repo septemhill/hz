@@ -2522,11 +2522,17 @@ impl Parser {
             }
             // Handle try expression
             Token::Try => {
+                // Capture the span of the 'try' keyword before advancing
+                let try_span = self
+                    .current_token()
+                    .map(|t| t.span.clone())
+                    .unwrap_or(Span { start: 0, end: 0 });
                 self.advance();
                 let expr = self.parse_unary_expr()?;
+                // Use the captured span for the Try expression
                 Ok(Expr::Try {
                     expr: Box::new(expr),
-                    span: Span { start: 0, end: 0 },
+                    span: try_span,
                 })
             }
             // Handle catch expression (postfix operator)

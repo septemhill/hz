@@ -39,38 +39,43 @@ impl TypeAnalyzer {
         self.symbol_table.exit_scope();
 
         // Check: if function body contains try expression, return type must be Result
-        if self.contains_try_expression(&f.body) && !f.return_ty.is_result() {
-            return Err(AnalysisError::new_with_span(
-                &format!(
-                    "Function '{}' contains try expression but does not return a Result type. Try expressions require the function to return a Result type to propagate errors.",
-                    f.name
-                ),
-                &f.span,
-            ));
+        if let Some(try_span) = self.find_try_expression(&f.body) {
+            if !f.return_ty.is_result() {
+                return Err(AnalysisError::new_with_span(
+                    &format!(
+                        "Function '{}' contains try expression but does not return a Result type. Try expressions require the function to return a Result type to propagate errors.",
+                        f.name
+                    ),
+                    &try_span,
+                ));
+            }
         }
 
         Ok(())
     }
 
-    /// Check if any statement in the list contains a try expression
-    fn contains_try_expression(&self, stmts: &[crate::ast::Stmt]) -> bool {
+    /// Find the span of any try expression in the statement list, if one exists
+    fn find_try_expression(&self, stmts: &[crate::ast::Stmt]) -> Option<Span> {
         for stmt in stmts {
-            if self.stmt_contains_try(stmt) {
-                return true;
+            if let Some(span) = self.stmt_find_try(stmt) {
+                return Some(span);
             }
         }
-        false
+        None
     }
 
-    /// Check if a statement contains a try expression (recursively)
-    fn stmt_contains_try(&self, stmt: &crate::ast::Stmt) -> bool {
+    /// Find the span of a try expression in a statement (recursively)
+    fn stmt_find_try(&self, stmt: &crate::ast::Stmt) -> Option<Span> {
         match stmt {
-            crate::ast::Stmt::Expr { expr, .. } => self.expr_contains_try(expr),
+            crate::ast::Stmt::Expr { expr, .. } => {
+                // Return the span of the actual try expression, not the Expr statement
+                self.expr_find_try(expr)
+            }
             crate::ast::Stmt::Let { value, .. } => {
                 if let Some(val) = value {
-                    self.expr_contains_try(val)
+                    self.expr_find_try(val)
                 } else {
-                    false
+                    None
                 }
             }
             crate::ast::Stmt::If {
@@ -78,93 +83,105 @@ impl TypeAnalyzer {
                 else_branch,
                 ..
             } => {
-                let mut result = self.stmt_contains_try(then_branch);
-                if let Some(eb) = else_branch {
-                    result = result || self.stmt_contains_try(eb);
+                if let Some(s) = self.stmt_find_try(then_branch) {
+                    return Some(s);
                 }
-                result
+                if let Some(eb) = else_branch {
+                    return self.stmt_find_try(eb);
+                }
+                None
             }
-            crate::ast::Stmt::While { body, .. } => self.stmt_contains_try(body),
-            crate::ast::Stmt::For { body, .. } => self.stmt_contains_try(body),
-            crate::ast::Stmt::Loop { body, .. } => self.stmt_contains_try(body),
+            crate::ast::Stmt::While { body, .. } => self.stmt_find_try(body),
+            crate::ast::Stmt::For { body, .. } => self.stmt_find_try(body),
+            crate::ast::Stmt::Loop { body, .. } => self.stmt_find_try(body),
             crate::ast::Stmt::Switch { cases, .. } => {
                 for case in cases {
-                    if self.stmt_contains_try(&case.body) {
-                        return true;
+                    if let Some(s) = self.stmt_find_try(&case.body) {
+                        return Some(s);
                     }
                 }
-                false
+                None
             }
-            crate::ast::Stmt::Block { stmts, .. } => self.contains_try_expression(stmts),
-            crate::ast::Stmt::Defer { stmt, .. } => self.stmt_contains_try(stmt),
-            crate::ast::Stmt::DeferBang { stmt, .. } => self.stmt_contains_try(stmt),
+            crate::ast::Stmt::Block { stmts, .. } => self.find_try_expression(stmts),
+            crate::ast::Stmt::Defer { stmt, .. } => self.stmt_find_try(stmt),
+            crate::ast::Stmt::DeferBang { stmt, .. } => self.stmt_find_try(stmt),
             crate::ast::Stmt::Return { value, .. } => {
                 if let Some(val) = value {
-                    self.expr_contains_try(val)
+                    self.expr_find_try(val)
                 } else {
-                    false
+                    None
                 }
             }
-            crate::ast::Stmt::Assign { value, .. } => self.expr_contains_try(value),
-            crate::ast::Stmt::Import { .. } => false,
+            crate::ast::Stmt::Assign { value, .. } => self.expr_find_try(value),
+            crate::ast::Stmt::Import { .. } => None,
         }
     }
 
-    /// Check if an expression contains a try expression
-    fn expr_contains_try(&self, expr: &crate::ast::Expr) -> bool {
+    /// Find the span of a try expression in an expression, if it exists
+    fn expr_find_try(&self, expr: &crate::ast::Expr) -> Option<Span> {
         match expr {
-            crate::ast::Expr::Try { .. } => true,
+            crate::ast::Expr::Try { span, .. } => Some(*span),
             crate::ast::Expr::Call { args, .. } => {
                 for arg in args {
-                    if self.expr_contains_try(arg) {
-                        return true;
+                    if let Some(s) = self.expr_find_try(arg) {
+                        return Some(s);
                     }
                 }
-                false
+                None
             }
             crate::ast::Expr::Binary { left, right, .. } => {
-                self.expr_contains_try(left) || self.expr_contains_try(right)
+                if let Some(s) = self.expr_find_try(left) {
+                    return Some(s);
+                }
+                self.expr_find_try(right)
             }
-            crate::ast::Expr::Unary { expr, .. } => self.expr_contains_try(expr),
+            crate::ast::Expr::Unary { expr, .. } => self.expr_find_try(expr),
             crate::ast::Expr::If {
                 condition,
                 then_branch,
                 else_branch,
                 ..
             } => {
-                self.expr_contains_try(condition)
-                    || self.expr_contains_try(then_branch)
-                    || self.expr_contains_try(else_branch)
+                if let Some(s) = self.expr_find_try(condition) {
+                    return Some(s);
+                }
+                if let Some(s) = self.expr_find_try(then_branch) {
+                    return Some(s);
+                }
+                self.expr_find_try(else_branch)
             }
-            crate::ast::Expr::Block { stmts, .. } => self.contains_try_expression(stmts),
-            crate::ast::Expr::MemberAccess { object, .. } => self.expr_contains_try(object),
+            crate::ast::Expr::Block { stmts, .. } => self.find_try_expression(stmts),
+            crate::ast::Expr::MemberAccess { object, .. } => self.expr_find_try(object),
             crate::ast::Expr::Catch { expr, body, .. } => {
-                self.expr_contains_try(expr) || self.expr_contains_try(body)
+                if let Some(s) = self.expr_find_try(expr) {
+                    return Some(s);
+                }
+                self.expr_find_try(body)
             }
             crate::ast::Expr::Struct { fields, .. } => {
                 for (_, field_expr) in fields {
-                    if self.expr_contains_try(field_expr) {
-                        return true;
+                    if let Some(s) = self.expr_find_try(field_expr) {
+                        return Some(s);
                     }
                 }
-                false
+                None
             }
             crate::ast::Expr::Array(elements, _) | crate::ast::Expr::Tuple(elements, _) => {
                 for elem in elements {
-                    if self.expr_contains_try(elem) {
-                        return true;
+                    if let Some(s) = self.expr_find_try(elem) {
+                        return Some(s);
                     }
                 }
-                false
+                None
             }
-            crate::ast::Expr::TupleIndex { tuple, .. } => self.expr_contains_try(tuple),
+            crate::ast::Expr::TupleIndex { tuple, .. } => self.expr_find_try(tuple),
             // Base cases - no try expression
             crate::ast::Expr::Int(_, _)
             | crate::ast::Expr::Bool(_, _)
             | crate::ast::Expr::String(_, _)
             | crate::ast::Expr::Char(_, _)
             | crate::ast::Expr::Null(_)
-            | crate::ast::Expr::Ident(_, _) => false,
+            | crate::ast::Expr::Ident(_, _) => None,
         }
     }
 

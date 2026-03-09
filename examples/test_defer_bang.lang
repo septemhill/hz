@@ -5,24 +5,28 @@ error SampleError {
 }
 
 fn on_error() void {
-    io.println("defer! cleanup called - error occurred");
+    io.println("defer! 1 cleanup called - error occurred");
 }
 
-fn test_defer_bang() void {
+fn on_error2() void {
+    io.println("defer! 2 cleanup called - error occurred");
+}
+
+fn test_defer_bang() void! {
     defer! on_error();
+    defer! on_error2();
     io.println("test_defer_bang body");
 
     try codegenError();
-    // This would normally trigger the defer! if there's an error
-    // For now, it will just execute normally
+    io.println("unreachable")
 }
 
 fn codegenError() void! {
     return SampleError.CodegenError;
 }
 
-fn main() i64 {
-    test_defer_bang();
+fn main() i64! {
+    try test_defer_bang();
     io.println("main done");
     return 0;
 }
