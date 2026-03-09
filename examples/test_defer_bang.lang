@@ -1,5 +1,9 @@
 import "io"
 
+error SampleError {
+    CodegenError,
+}
+
 fn on_error() void {
     io.println("defer! cleanup called - error occurred");
 }
@@ -7,8 +11,14 @@ fn on_error() void {
 fn test_defer_bang() void {
     defer! on_error();
     io.println("test_defer_bang body");
+
+    try codegenError();
     // This would normally trigger the defer! if there's an error
     // For now, it will just execute normally
+}
+
+fn codegenError() void! {
+    return SampleError.CodegenError;
 }
 
 fn main() i64 {
