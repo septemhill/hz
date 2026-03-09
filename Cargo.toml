@@ -3,6 +3,10 @@ name = "lang"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+lsp = ["lsp-server", "tokio"]
+
 [dependencies]
 # LLVM binding for code generation
 inkwell = { version = "0.8.0", features = ["llvm21-1"] }
@@ -15,6 +19,14 @@ clap = { version = "4.5", features = ["derive"] }
 thiserror = "1.0"
 log = "0.4"
 env_logger = "0.11"
+
+# LSP support
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+lsp-server = { version = "0.7", optional = true }
+tokio = { version = "1.0", features = ["full"], optional = true }
+parking_lot = "0.12"
+url = "2.0"
 
 [package.metadata.pest]
 grammar = "src/grammar.pest"

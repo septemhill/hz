@@ -16,6 +16,9 @@ mod parser;
 mod sema;
 mod stdlib;
 
+#[cfg(feature = "lsp")]
+mod lsp;
+
 use clap::Parser;
 
 /// CLI arguments for the Lang compiler
@@ -53,6 +56,12 @@ enum Commands {
         /// Source file to run
         #[arg(value_name = "FILE")]
         source: std::path::PathBuf,
+    },
+    /// Run LSP server
+    Lsp {
+        /// Enable verbose logging
+        #[arg(short = 'v', long = "verbose")]
+        verbose: bool,
     },
     /// Generate LLVM IR only
     Ir {
@@ -287,6 +296,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             let source_content = fs::read_to_string(&source)?;
             let output_path = output.map(|p| p.to_string_lossy().to_string());
             dump_hir(&source_content, output_path)?;
+        }
+        Commands::Lsp { verbose: _ } => {
+            #[cfg(feature = "lsp")]
+            {
+                lsp::run_lsp_server();
+            }
+            #[cfg(not(feature = "lsp"))]
+            {
+                println!(
+                    "LSP server not compiled. Enable the 'lsp' feature: cargo build --features lsp"
+                );
+            }
         }
     }
 
