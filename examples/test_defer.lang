@@ -1,12 +1,25 @@
 import "io"
 
-fn cleanup() void {
-    io.println("cleanup called");
+fn cleanup1() void {
+    io.println("cleanup1 called");
 }
 
+fn cleanup2() void {
+    io.println("cleanup2 called");
+}
+
+fn cleanup3() void {
+    io.println("cleanup3 called");
+}
+
+
 fn test_defer() void {
-    defer cleanup();
+    defer cleanup1();
+
+    defer cleanup2();
     io.println("test_defer body");
+
+    defer cleanup3();
 }
 
 fn main() i64 {

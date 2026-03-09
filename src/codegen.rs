@@ -268,9 +268,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return Ok(());
                 }
                 _ if is_last && is_void => {
-                    // Execute defers before returning void
-                    self.pop_defer_scope()?;
-
                     // Last statement in void function
                     // For expression statements, call generate_hir_expr directly to avoid
                     // generating a return statement from the Call expression
@@ -283,16 +280,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                             self.generate_hir_stmt(stmt)?;
                         }
                     }
+                    // Execute defers AFTER the last statement
+                    self.pop_defer_scope()?;
                     // Return void
                     self.builder.build_return(None)?;
                     return Ok(());
                 }
                 _ if is_last && !is_void => {
-                    // Execute defers before returning
-                    self.pop_defer_scope()?;
-
                     // Last statement in non-void function - use value as return
                     self.generate_hir_stmt(stmt)?;
+                    // Execute defers AFTER the last statement
+                    self.pop_defer_scope()?;
                     // For main, always return 0
                     self.builder
                         .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
@@ -306,17 +304,17 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // If we get here, we didn't return in the loop
         if is_void {
-            // Execute defers before returning void
+            // Execute defers AFTER the implicit return
             self.pop_defer_scope()?;
             self.builder.build_return(None)?;
         } else if hir_fn.name == "main" {
-            // Execute defers before returning 0
+            // Execute defers AFTER returning 0
             self.pop_defer_scope()?;
             // main function without explicit return - return 0
             self.builder
                 .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
         } else {
-            // Execute defers before returning 0
+            // Execute defers AFTER returning 0
             self.pop_defer_scope()?;
             // Non-void function without return - return 0
             self.builder
