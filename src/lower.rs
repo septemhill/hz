@@ -470,6 +470,34 @@ impl LoweringContext {
         }
     }
 
+    /// Infer type from expression (simplified version)
+    fn infer_type(&self, expr: &ast::Expr) -> Option<ast::Type> {
+        match expr {
+            ast::Expr::Ident(name, _) => {
+                // For identifiers, we'd need scope lookup - return None for now
+                None
+            }
+            ast::Expr::Call {
+                name, namespace, ..
+            } => {
+                // For function calls, we can't easily infer the return type
+                // without a symbol table - just return None
+                let _ = (name, namespace); // suppress unused warnings
+                None
+            }
+            ast::Expr::Try { expr, span } => {
+                // For try expressions, try to get inner type
+                self.infer_type(expr)
+            }
+            ast::Expr::Struct { name, .. } => Some(ast::Type::Custom {
+                name: name.clone(),
+                generic_args: vec![],
+                is_exported: false,
+            }),
+            _ => None,
+        }
+    }
+
     fn lower_stmt(&mut self, s: &ast::Stmt) -> hir::HirStmt {
         match s {
             ast::Stmt::Expr { expr, .. } => hir::HirStmt::Expr(self.lower_expr(expr)),
@@ -481,9 +509,15 @@ impl LoweringContext {
                 span,
                 ..
             } => {
+                // If no type annotation, we need to infer from the value
+                // For now, require explicit type annotation
+                let inferred_ty = value.as_ref().and_then(|v| self.infer_type(v));
+
+                let ty = ty.clone().or(inferred_ty).unwrap_or(ast::Type::I64);
+
                 hir::HirStmt::Let {
                     name: name.clone(),
-                    ty: ty.clone().unwrap_or(ast::Type::I64), // Default to i64
+                    ty,
                     value: value.as_ref().map(|v| self.lower_expr(v)),
                     mutability: *mutability,
                     span: *span,

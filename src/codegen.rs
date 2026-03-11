@@ -992,23 +992,80 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
 
                 // For member access, we need to get the struct and extract the field
-                let obj_val = self.generate_hir_expr(object)?;
-                let struct_type = obj_val.get_type();
+                // First check if object is a simple identifier - we can handle it specially
+                let obj_val = if let hir::HirExpr::Ident(obj_name, _, _) = object.as_ref() {
+                    // Look up the variable - try const_variables first, then variables
+                    if let Some(ptr) = self.const_variables.get(obj_name) {
+                        // It's a const - load it
+                        if let Some(var_ty) = self.variable_types.get(obj_name) {
+                            let llvm_type = self.llvm_type(var_ty);
+                            self.builder.build_load(llvm_type, *ptr, obj_name)?
+                        } else {
+                            return Err(format!("Variable not found: {}", obj_name).into());
+                        }
+                    } else if let Some(ptr) = self.variables.get(obj_name) {
+                        // It's a variable - load it
+                        if let Some(var_ty) = self.variable_types.get(obj_name) {
+                            let llvm_type = self.llvm_type(var_ty);
+                            self.builder.build_load(llvm_type, *ptr, obj_name)?
+                        } else {
+                            return Err(format!("Variable not found: {}", obj_name).into());
+                        }
+                    } else {
+                        return Err(format!("Variable not found: {}", obj_name).into());
+                    }
+                } else {
+                    self.generate_hir_expr(object)?
+                };
 
                 // For now, we'll assume the member is a field index (0, 1, 2, ...)
                 // This is a simplification - a full implementation would look up the field name
                 let field_idx: u32 = member.parse().unwrap_or(0);
 
-                let alloca = self.builder.build_alloca(struct_type, "member_temp")?;
-                self.builder.build_store(alloca, obj_val)?;
-                let loaded = self
-                    .builder
-                    .build_load(struct_type, alloca, "member_load")?;
-                let extracted = self.builder.build_extract_value(
-                    loaded.into_struct_value(),
-                    field_idx,
-                    member,
-                )?;
+                // If obj_val is a pointer, we need to handle it differently
+                let extracted = match obj_val.get_type() {
+                    BasicTypeEnum::PointerType(_) => {
+                        // It's a pointer - we need the struct type to load properly
+                        // Since we can't easily get the pointee type from the pointer,
+                        // let's use a different approach - store to alloca then load
+                        let ptr = obj_val.into_pointer_value();
+                        // Try to create an alloca with the same pointer type, then load
+                        let alloca = self.builder.build_alloca(ptr.get_type(), "ptr_temp")?;
+                        self.builder.build_store(alloca, ptr)?;
+                        // Now load - this should give us a pointer value again
+                        let reloaded =
+                            self.builder
+                                .build_load(ptr.get_type(), alloca, "member_load")?;
+                        // Try to extract as struct
+                        self.builder.build_extract_value(
+                            reloaded.into_struct_value(),
+                            field_idx,
+                            member,
+                        )?
+                    }
+                    BasicTypeEnum::StructType(_) => {
+                        // It's a struct value - extract directly
+                        self.builder.build_extract_value(
+                            obj_val.into_struct_value(),
+                            field_idx,
+                            member,
+                        )?
+                    }
+                    _ => {
+                        // Fallback: try to treat as struct
+                        let struct_type = obj_val.get_type().into_struct_type();
+                        let alloca = self.builder.build_alloca(struct_type, "member_temp")?;
+                        self.builder.build_store(alloca, obj_val)?;
+                        let loaded = self
+                            .builder
+                            .build_load(struct_type, alloca, "member_load")?;
+                        self.builder.build_extract_value(
+                            loaded.into_struct_value(),
+                            field_idx,
+                            member,
+                        )?
+                    }
+                };
 
                 Ok(extracted.into())
             }
@@ -1156,14 +1213,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Declare a struct type in LLVM
     pub fn declare_struct(&mut self, struct_def: &StructDef) -> CodegenResult<()> {
-        // Only generate code for exported (public) structs
-        if !struct_def.visibility.is_public() {
-            return Ok(());
-        }
-
         let struct_name = &struct_def.name;
 
-        // Create struct type
+        // Create struct type (always define, regardless of visibility)
         let field_types: Vec<BasicTypeEnum> = struct_def
             .fields
             .iter()
@@ -1172,6 +1224,23 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let struct_type = self.context.opaque_struct_type(struct_name);
         struct_type.set_body(&field_types, false);
+
+        // Declare struct methods as standalone functions
+        // Methods are named as StructName_methodname
+        // Always declare methods regardless of struct visibility
+        for method in &struct_def.methods {
+            // For methods, we need to add the struct as a first parameter (self)
+            let mut param_types: Vec<Type> = vec![Type::Custom {
+                name: struct_name.clone(),
+                generic_args: vec![],
+                is_exported: true,
+            }];
+            param_types.extend(method.params.iter().map(|p| p.ty.clone()));
+
+            let fn_type = self.build_function_type(&method.return_ty, &param_types);
+            let mangled_name = format!("{}_{}", struct_name, method.name);
+            self.module.add_function(&mangled_name, fn_type, None);
+        }
 
         Ok(())
     }

@@ -58,6 +58,11 @@ impl SymbolTable {
         self.scopes[self.current_scope].symbols.insert(name, symbol);
     }
 
+    /// Check if a symbol already exists in the current scope
+    pub fn contains(&self, name: &str) -> bool {
+        self.scopes[self.current_scope].symbols.contains_key(name)
+    }
+
     pub fn resolve(&self, name: &str) -> Option<&Symbol> {
         let mut scope_idx = Some(self.current_scope);
         while let Some(idx) = scope_idx {

@@ -1,0 +1,50 @@
+struct PostgresConfig {
+    host: String,
+    port: i16,
+    username: String,
+    password: String,
+    database: String,
+}
+
+struct RedisConfig {
+    host: String,
+    port: i16,
+}
+
+struct Config {
+    postgres: PostgresConfig,
+    redis: RedisConfig,
+
+    pub fn parse(configPath: String) Config {
+        return Config {
+            postgres: PostgresConfig {
+                host: "localhost",
+                port: 5432,
+                username: "postgres",
+                password: "postgres",
+                database: "postgres"
+            },
+            redis: RedisConfig {
+                host: "localhost",
+                port: 6379
+            }
+        };
+    }
+
+    pub fn postgresHost(self: Config) String {
+        return self.postgres.host;
+    }
+}
+
+// Separate function to create config - avoids type inference issues
+fn create_config() Config {
+    return Config.parse("config.json");
+}
+
+fn main() i64! {
+    const config = create_config();
+
+    io.println(config.postgres.host);
+
+    return 0;
+}

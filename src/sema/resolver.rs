@@ -1,4 +1,4 @@
-use crate::ast::{Span, Visibility};
+use crate::ast::{Span, Type, Visibility};
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::SymbolTable;
 
@@ -9,17 +9,133 @@ use crate::sema::symbol::SymbolTable;
 
 pub struct SymbolResolver {
     symbol_table: SymbolTable,
+    // Reference to structs for method visibility checks
+    structs: Vec<crate::ast::StructDef>,
+    enums: Vec<crate::ast::EnumDef>,
+    // Current struct context (if we're inside a struct method)
+    current_struct: Option<String>,
 }
 
 impl SymbolResolver {
-    pub fn new(symbol_table: SymbolTable) -> Self {
-        SymbolResolver { symbol_table }
+    pub fn new(
+        symbol_table: SymbolTable,
+        structs: Vec<crate::ast::StructDef>,
+        enums: Vec<crate::ast::EnumDef>,
+    ) -> Self {
+        SymbolResolver {
+            symbol_table,
+            structs,
+            enums,
+            current_struct: None,
+        }
     }
 
     pub fn analyze(&mut self, program: &crate::ast::Program) -> AnalysisResult<()> {
         for f in &program.functions {
             self.analyze_function(f)?;
         }
+        // Also analyze struct methods
+        for s in &program.structs {
+            self.analyze_struct(s)?;
+        }
+        // Analyze enum methods
+        for e in &program.enums {
+            self.analyze_enum(e)?;
+        }
+        Ok(())
+    }
+
+    fn analyze_struct(&mut self, s: &crate::ast::StructDef) -> AnalysisResult<()> {
+        // Set current struct context
+        let previous_struct = self.current_struct.clone();
+        self.current_struct = Some(s.name.clone());
+
+        for method in &s.methods {
+            self.analyze_function(method)?;
+        }
+
+        // Restore previous struct context
+        self.current_struct = previous_struct;
+        Ok(())
+    }
+
+    fn analyze_enum(&mut self, e: &crate::ast::EnumDef) -> AnalysisResult<()> {
+        // Set current enum context (enum methods work similar to struct methods)
+        let previous_struct = self.current_struct.clone();
+        self.current_struct = Some(e.name.clone());
+
+        for method in &e.methods {
+            self.analyze_function(method)?;
+        }
+
+        // Restore previous struct context
+        self.current_struct = previous_struct;
+        Ok(())
+    }
+
+    /// Check if a method call is allowed based on visibility
+    /// Returns Ok if the call is allowed, Err if not
+    ///
+    /// Private methods (without pub) can only be called from:
+    /// 1. Same struct's methods
+    /// 2. Other functions in the same file
+    ///
+    /// Since all analysis is done for a single file at a time, we allow calls
+    /// from any context within the same analysis pass. External file calls
+    /// would need module-level visibility tracking which is not implemented yet.
+    fn check_method_visibility(
+        &self,
+        struct_name: &str,
+        method_name: &str,
+        span: Span,
+    ) -> AnalysisResult<()> {
+        // First, check if it's a struct
+        if let Some(struct_def) = self.structs.iter().find(|s| &s.name == struct_name) {
+            // Find the method
+            if let Some(method) = struct_def.methods.iter().find(|m| &m.name == method_name) {
+                // Check if method is public
+                if method.visibility == Visibility::Public {
+                    return Ok(());
+                }
+
+                // Method is private - check if we're calling from the same struct
+                if let Some(ref current) = self.current_struct {
+                    if current == struct_name {
+                        // Calling from same struct's method - allowed
+                        return Ok(());
+                    }
+                }
+
+                // For now, allow calls from anywhere in the same file
+                // (all functions are analyzed together, so they're all "in file")
+                // In a full implementation, we would track file/module boundaries
+                return Ok(());
+            }
+        }
+
+        // Check if it's an enum
+        if let Some(enum_def) = self.enums.iter().find(|e| &e.name == struct_name) {
+            // Find the method
+            if let Some(method) = enum_def.methods.iter().find(|m| &m.name == method_name) {
+                // Check if method is public
+                if method.visibility == Visibility::Public {
+                    return Ok(());
+                }
+
+                // Method is private - check if we're calling from the same enum
+                if let Some(ref current) = self.current_struct {
+                    if current == struct_name {
+                        // Calling from same enum's method - allowed
+                        return Ok(());
+                    }
+                }
+
+                // For now, allow calls from anywhere in the same file
+                return Ok(());
+            }
+        }
+
+        // Method not found - let other code handle it (will get undefined error later)
         Ok(())
     }
 
@@ -244,20 +360,43 @@ impl SymbolResolver {
                 args,
                 span,
             } => {
-                if namespace.as_deref() != Some("io") || name != "println" {
-                    if namespace.is_none() {
-                        self.symbol_table.resolve(name).ok_or_else(|| {
-                            AnalysisError::new_with_span(
-                                &format!("Undefined function '{}'", name),
-                                span,
-                            )
-                        })?;
+                // Check if it's io.println (special case)
+                if namespace.as_deref() == Some("io") && name == "println" {
+                    // io.println returns void
+                    return Ok(crate::ast::Type::Void);
+                }
+
+                // For other calls, we'd need to look up the function type
+                // For now, handle namespace calls (like Config.parse)
+                if let Some(ns) = namespace {
+                    // This is a namespace call - try to find the struct method
+                    // Check method visibility
+                    self.check_method_visibility(&ns, name, *span)?;
+
+                    // The return type would be the function's return type
+                    // For now, we'll need to look this up
+                    // Return a placeholder - the actual type should come from the function definition
+
+                    // Try to find the function in the program
+                    // This is a simplified version - ideally we'd have a symbol table
+                    // For struct methods, return a Result type based on convention
+
+                    // Since we can't easily look up the function, we'll return a default type
+                    // The codegen will need to handle this properly
+                    Ok(crate::ast::Type::I64)
+                } else {
+                    // Regular function call
+                    // Try to resolve the function
+                    if self.symbol_table.resolve(name).is_none() {
+                        return Err(AnalysisError::new_with_span(
+                            &format!("Undefined function '{}'", name),
+                            span,
+                        ));
                     }
+                    // Return I64 as placeholder
+                    // In a full implementation, we'd look up the function's return type
+                    Ok(crate::ast::Type::I64)
                 }
-                for arg in args {
-                    self.analyze_expression(arg)?;
-                }
-                Ok(crate::ast::Type::I64)
             }
             crate::ast::Expr::Catch {
                 expr,

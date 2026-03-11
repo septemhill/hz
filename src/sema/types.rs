@@ -225,9 +225,16 @@ impl TypeAnalyzer {
                 };
 
                 // Handle both single name and tuple destructuring
+                // Check for duplicate variable declarations in the same scope
                 if let Some(ns) = names {
                     for name_opt in ns {
                         if let Some(n) = name_opt {
+                            if self.symbol_table.contains(n) {
+                                return Err(AnalysisError::new_with_span(
+                                    &format!("Variable '{}' is already declared in this scope", n),
+                                    span,
+                                ));
+                            }
                             self.symbol_table.define(
                                 n.clone(),
                                 inferred_ty.clone(),
@@ -237,6 +244,12 @@ impl TypeAnalyzer {
                         }
                     }
                 } else {
+                    if self.symbol_table.contains(name) {
+                        return Err(AnalysisError::new_with_span(
+                            &format!("Variable '{}' is already declared in this scope", name),
+                            span,
+                        ));
+                    }
                     self.symbol_table.define(
                         name.clone(),
                         inferred_ty,

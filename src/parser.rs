@@ -149,20 +149,11 @@ impl Parser {
     fn match_token(&mut self, token: Token) -> bool {
         self.skip_whitespace();
         if let Some(t) = self.current() {
-            eprintln!(
-                "DEBUG match_token: current token is {:?}, trying to match {:?}",
-                t, token
-            );
             if *t == token {
-                eprintln!("DEBUG match_token: matched {:?}, advancing", token);
                 self.advance();
                 return true;
             }
         }
-        eprintln!(
-            "DEBUG match_token: {:?} did NOT match, returning false",
-            token
-        );
         false
     }
 
@@ -469,6 +460,9 @@ fn main() i64 {
             ("examples/test_operators.lang", true),
             ("examples/test_error.lang", true),
             ("examples/test_defer.lang", true),
+            ("examples/test_defer.lang", true),
+            ("examples/test_defer_bang.lang", true),
+            ("examples/test_tuple.lang", true),
             // // These require struct/interface parsing fix - parser fails
             // ("examples/test_features.lang", false),
             // // These require pub keyword - parser doesn't handle it properly
@@ -1054,11 +1048,6 @@ impl Parser {
     fn parse_return_type(&mut self) -> Result<Type, ParseError> {
         self.skip_whitespace();
 
-        eprintln!(
-            "DEBUG parse_return_type: current token is {:?}",
-            self.current()
-        );
-
         // Check for void return type
         if let Some(Token::Ident(id)) = self.current().cloned() {
             if id == "void" {
@@ -1136,8 +1125,6 @@ impl Parser {
             message: "Unexpected end of input".to_string(),
             location: None,
         })?;
-
-        eprintln!("DEBUG parse_statement: token = {:?}", token);
 
         match token {
             Token::Return => self.parse_return_stmt(),
@@ -2292,8 +2279,13 @@ impl Parser {
 
             // Struct literal: TypeName{ field1: value1, field2: value2 }
             // or shorthand: TypeName{ field1, field2 }
+            // IMPORTANT: We need to distinguish struct literals from field definitions.
+            // A struct literal looks like: TypeName { ... }
+            // A field definition looks like: fieldname: Type
+            // We need to check if the identifier is followed by a colon (field) or LBrace (struct literal)
             if self.match_token(Token::LBrace) {
-                // Check if we have a valid struct name (expr should be an Ident)
+                // First, verify this is a struct literal by checking if the previous expr was an Ident
+                // AND there's no colon (which would indicate a field definition)
                 let struct_name = match &expr {
                     Expr::Ident(n, _) => n.clone(),
                     _ => {
@@ -2303,6 +2295,12 @@ impl Parser {
                         });
                     }
                 };
+
+                // Check if this looks like a field definition (identifier followed by colon)
+                // by peeking at what comes after the LBrace - if it's "field: type", it's a struct literal
+                // If it's "field," or "field = value", it could still be a struct literal
+                // Actually, we need to look BEFORE the LBrace - if there's an identifier followed by colon,
+                // that's a field, not a struct literal
 
                 self.skip_whitespace();
 
@@ -2941,10 +2939,12 @@ impl Parser {
                     break;
                 }
                 // After matching comma, check if next is a method
-                if self.match_token(Token::Fn) || self.match_token(Token::Pub) {
-                    // This is a method - if we matched pub, we're already past it
-                    // If we matched fn, current is fn. If we matched pub, current is fn now.
-                    // Just call parse_function which will handle it
+                // Check current token without consuming - parse_function will consume it
+                if self
+                    .current()
+                    .map(|t| matches!(t, Token::Fn))
+                    .unwrap_or(false)
+                {
                     methods.push(self.parse_function()?);
                     self.match_token(Token::Comma);
                     continue;
@@ -2953,21 +2953,54 @@ impl Parser {
             }
 
             // Check for method (fn keyword) - only if we didn't just handle a trailing comma
-            if self.match_token(Token::Fn) || self.match_token(Token::Pub) {
-                // This is a method - if we matched pub, we're already past it
-                // If we matched fn, current is fn. If we matched pub, current is fn now.
-                // Just call parse_function which will handle it
+            // Check current token without consuming - parse_function will consume it
+            if self
+                .current()
+                .map(|t| matches!(t, Token::Fn))
+                .unwrap_or(false)
+            {
+                // This is a method - parse_function will consume the fn token
                 methods.push(self.parse_function()?);
                 self.match_token(Token::Comma);
                 continue;
             }
 
-            // Parse field
-            let field_visibility = if self.match_token(Token::Pub) {
+            // Check for public method (pub fn)
+            // We need to check this before parsing field visibility
+            // Use peek to check without consuming tokens
+            let is_pub_fn = self
+                .peek(0)
+                .map(|t| matches!(&t.token, Token::Pub))
+                .unwrap_or(false)
+                && self
+                    .peek(1)
+                    .map(|t| matches!(&t.token, Token::Fn))
+                    .unwrap_or(false);
+
+            if is_pub_fn {
+                // This is a public method - parse_function will consume the pub and fn tokens
+                methods.push(self.parse_function()?);
+                self.match_token(Token::Comma);
+                continue;
+            }
+
+            // Check for public field (pub field_name: type)
+            // Note: we need to peek to check if there's a pub, but NOT consume it here
+            // because it will be handled in the field parsing section below
+            // Actually, for fields, we should consume it here if present
+            let field_visibility: Visibility = if self
+                .peek(0)
+                .map(|t| matches!(&t.token, Token::Pub))
+                .unwrap_or(false)
+            {
+                // Consume the Pub token
+                self.match_token(Token::Pub);
                 Visibility::Public
             } else {
                 Visibility::Private
             };
+
+            // Parse field
 
             let field_name = if let Token::Ident(n) =
                 self.current().cloned().ok_or_else(|| ParseError {
@@ -3049,15 +3082,23 @@ impl Parser {
                 break;
             }
 
-            // Check for method
-            if self.match_token(Token::Fn) || self.match_token(Token::Pub) {
-                // Note: Previous token tracking changed - using current token instead
-                if let Some(prev) = self.peek(0) {
-                    if let Token::Pub = prev.token {
-                        self.match_token(Token::Fn);
-                    }
-                }
+            // Check for method (fn or pub fn)
+            // Use peek to check without consuming tokens
+            let is_fn = self
+                .peek(0)
+                .map(|t| matches!(&t.token, Token::Fn))
+                .unwrap_or(false);
+            let is_pub_fn = self
+                .peek(0)
+                .map(|t| matches!(&t.token, Token::Pub))
+                .unwrap_or(false)
+                && self
+                    .peek(1)
+                    .map(|t| matches!(&t.token, Token::Fn))
+                    .unwrap_or(false);
 
+            if is_fn || is_pub_fn {
+                // This is a method - parse_function will handle visibility
                 methods.push(self.parse_function()?);
                 self.match_token(Token::Comma);
                 continue;

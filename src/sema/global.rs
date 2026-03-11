@@ -84,6 +84,24 @@ impl GlobalDefinitionsAnalyzer {
                 s.visibility,
                 true,
             );
+
+            // Also register struct methods in the symbol table
+            // Methods are named as StructName_methodname for external access
+            for method in &s.methods {
+                let method_name = format!("{}_{}", s.name, method.name);
+                if self.symbol_table.resolve(&method_name).is_some() {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Duplicate declaration of method '{}'", method_name),
+                        &method.span,
+                    ));
+                }
+                self.symbol_table.define(
+                    method_name,
+                    method.return_ty.clone(),
+                    method.visibility,
+                    true,
+                );
+            }
         }
         Ok(())
     }
@@ -106,6 +124,23 @@ impl GlobalDefinitionsAnalyzer {
                 e.visibility,
                 true,
             );
+
+            // Also register enum methods in the symbol table
+            for method in &e.methods {
+                let method_name = format!("{}_{}", e.name, method.name);
+                if self.symbol_table.resolve(&method_name).is_some() {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Duplicate declaration of method '{}'", method_name),
+                        &method.span,
+                    ));
+                }
+                self.symbol_table.define(
+                    method_name,
+                    method.return_ty.clone(),
+                    method.visibility,
+                    true,
+                );
+            }
         }
         Ok(())
     }

@@ -136,6 +136,15 @@ fn run_jit(source: &str) -> Result<(), Box<dyn Error>> {
     for f in &program.functions {
         codegen.declare_function(f)?;
     }
+
+    // Declare structs and enums (needed for method calls)
+    for s in &program.structs {
+        codegen.declare_struct(s)?;
+    }
+    for e in &program.enums {
+        codegen.declare_enum(e)?;
+    }
+
     codegen.generate_hir(&hir_program)?;
 
     // Print the generated IR

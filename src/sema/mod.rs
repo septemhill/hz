@@ -47,7 +47,8 @@ impl SemanticAnalyzer {
 
         // Pass 3: Symbol resolution
         let symbol_table = type_analyzer.get_symbol_table().clone();
-        let mut symbol_resolver = SymbolResolver::new(symbol_table);
+        let mut symbol_resolver =
+            SymbolResolver::new(symbol_table, program.structs.clone(), program.enums.clone());
         symbol_resolver.analyze(program)?;
 
         // Pass 4: Mutability analysis

@@ -1,8 +1,22 @@
+import "io"
+
+error SampleError {
+    TupleError,
+}
+
 fn return_tuple() (i64, i64, i64) {
     return (1, 2, 3);
 }
 
-fn main() i64 {
+fn return_optional_tuple() ?(i64, i64, i64) {
+    return (1, 2, 3);
+}
+
+fn return_error_tuple() (i64, i64, i64)! {
+    return SampleError.TupleError;
+}
+
+fn main() i64! {
     // Access tuple 0 element.
     const t = (1, 2, 3);
     const x = t.0;
@@ -12,6 +26,17 @@ fn main() i64 {
 
     // Destructure tuple, ignore 2nd element.
     const (d, _, f) = return_tuple();
+
+    const tt: ?(i64, i64, i64) = return_optional_tuple();
+
+    if (tt) |d| {
+        io.println(d.0);
+        io.println(d.1);
+        io.println(d.2);
+    }
+
+    const z = try return_error_tuple();
+    io.println(z.0);
 
     return t.0;
 }
