@@ -1155,11 +1155,8 @@ impl Parser {
             Token::Import => self.parse_import_stmt(),
             Token::Var => self.parse_var_stmt(),
             Token::Const => self.parse_const_stmt(),
-            Token::Let => self.parse_let_stmt(),
             Token::If => self.parse_if_stmt(),
-            Token::While => self.parse_while_stmt(),
             Token::For => self.parse_for_stmt(),
-            Token::Loop => self.parse_loop_stmt(),
             Token::LBrace => self.parse_block_stmt(),
             Token::Switch => self.parse_switch_stmt(),
             Token::Defer => self.parse_defer_stmt(),
@@ -1629,59 +1626,6 @@ impl Parser {
         self.parse_expression()
     }
 
-    /// Parse while statement
-    fn parse_while_stmt(&mut self) -> Result<Stmt, ParseError> {
-        self.advance(); // consume 'while'
-
-        // Check for parenthesized condition: while (expr) ...
-        self.skip_whitespace();
-        let condition = if self.match_token(Token::LParen) {
-            // Parse the expression inside the parentheses
-            let cond = self.parse_expression()?;
-            self.skip_whitespace();
-
-            // Expect closing parenthesis
-            if !self.match_token(Token::RParen) {
-                return Err(ParseError {
-                    message: "Expected ')' after while condition".to_string(),
-                    location: self.current_token().map(|t| t.span.start),
-                });
-            }
-            cond
-        } else {
-            self.parse_expression()?
-        };
-
-        self.skip_whitespace();
-        // Check for capture: |e|
-        let mut capture = None;
-        if self.match_token(Token::Pipe) {
-            if let Token::Ident(name) = self.current().cloned().ok_or_else(|| ParseError {
-                message: "Expected identifier after '|'".to_string(),
-                location: None,
-            })? {
-                capture = Some(name);
-                self.advance();
-                if !self.match_token(Token::Pipe) {
-                    return Err(ParseError {
-                        message: "Expected closing '|'".to_string(),
-                        location: self.current_token().map(|t| t.span.start),
-                    });
-                }
-            }
-        }
-
-        self.skip_whitespace();
-        let body = Box::new(self.parse_statement()?);
-
-        Ok(Stmt::While {
-            condition,
-            capture,
-            body,
-            span: Span { start: 0, end: 0 },
-        })
-    }
-
     /// Parse for statement
     fn parse_for_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.advance(); // consume 'for'
@@ -1777,19 +1721,6 @@ impl Parser {
             iterable,
             capture,
             index_var,
-            body,
-            span: Span { start: 0, end: 0 },
-        })
-    }
-
-    /// Parse loop statement
-    fn parse_loop_stmt(&mut self) -> Result<Stmt, ParseError> {
-        self.advance(); // consume 'loop'
-
-        self.skip_whitespace();
-        let body = Box::new(self.parse_statement()?);
-
-        Ok(Stmt::Loop {
             body,
             span: Span { start: 0, end: 0 },
         })

@@ -514,22 +514,25 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.position_at_end(merge_block);
                 Ok(())
             }
-            hir::HirStmt::While {
-                condition, body, ..
+            hir::HirStmt::For {
+                var_name,
+                iterable,
+                body,
+                span,
             } => {
+                // For now, lower as while loop
                 let function = self.current_function.unwrap();
-                let cond_block = self.context.append_basic_block(function, "while_cond");
-                let body_block = self.context.append_basic_block(function, "while_body");
-                let end_block = self.context.append_basic_block(function, "while_end");
+                let cond_block = self.context.append_basic_block(function, "for_cond");
+                let body_block = self.context.append_basic_block(function, "for_body");
+                let end_block = self.context.append_basic_block(function, "for_end");
 
                 // Jump to condition block
                 self.builder.build_unconditional_branch(cond_block)?;
 
                 // Condition block
                 self.builder.position_at_end(cond_block);
-                let cond_val = self.generate_hir_expr(condition)?;
-                // Convert condition to i1 for branching
-                let is_true = self.condition_to_i1(cond_val, "while_is_true")?;
+                let iter_val = self.generate_hir_expr(iterable)?;
+                let is_true = self.condition_to_i1(iter_val, "for_is_true")?;
                 self.builder
                     .build_conditional_branch(is_true, body_block, end_block)?;
 
@@ -1701,13 +1704,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                 else_branch,
                 ..
             } => self.generate_if(condition, capture, then_branch, else_branch.as_deref()),
-            Stmt::While {
-                condition,
-                capture,
-                body,
-                ..
-            } => self.generate_while(condition, capture, body),
-            Stmt::Loop { body, .. } => self.generate_loop(body),
             Stmt::For { .. } => todo!("Codegen for For loops not implemented"),
             Stmt::Switch { .. } => todo!("Codegen for Switch statements not implemented"),
             Stmt::Defer { stmt, .. } => {
@@ -2395,110 +2391,6 @@ impl<'ctx> CodeGenerator<'ctx> {
         ]);
 
         Ok(phi.as_basic_value())
-    }
-
-    /// Generate while loop
-    fn generate_while(
-        &mut self,
-        condition: &Expr,
-        capture: &Option<String>,
-        body: &Stmt,
-    ) -> CodegenResult<()> {
-        let function = self.current_function.unwrap();
-
-        let cond_block = self.context.append_basic_block(function, "while_cond");
-        let body_block = self.context.append_basic_block(function, "while_body");
-        let end_block = self.context.append_basic_block(function, "while_end");
-
-        // Jump to condition
-        self.builder.build_unconditional_branch(cond_block)?;
-
-        // Condition block
-        self.builder.position_at_end(cond_block);
-        let cond_val = self.generate_expr(condition)?;
-
-        // Check if it's an optional type: struct { value, is_valid }
-        let is_valid = if let BasicValueEnum::StructValue(sv) = cond_val {
-            if sv.get_type().get_field_types().len() == 2 {
-                self.builder
-                    .build_extract_value(sv, 1, "is_valid")?
-                    .into_int_value()
-            } else {
-                let zero = self.context.i64_type().const_int(0, false);
-                self.builder.build_int_compare(
-                    inkwell::IntPredicate::NE,
-                    cond_val.into_int_value(),
-                    zero,
-                    "cond",
-                )?
-            }
-        } else {
-            let zero = self.context.i64_type().const_int(0, false);
-            self.builder.build_int_compare(
-                inkwell::IntPredicate::NE,
-                cond_val.into_int_value(),
-                zero,
-                "cond",
-            )?
-        };
-
-        self.builder
-            .build_conditional_branch(is_valid, body_block, end_block)?;
-
-        // Body block
-        self.builder.position_at_end(body_block);
-
-        // Handle capture
-        let mut old_var = None;
-        if let Some(name) = capture {
-            if let BasicValueEnum::StructValue(sv) = cond_val {
-                let val = self.builder.build_extract_value(sv, 0, "captured")?;
-                let alloca = self.builder.build_alloca(val.get_type(), name)?;
-                self.builder.build_store(alloca, val)?;
-
-                old_var = self.variables.insert(name.clone(), alloca);
-                self.variable_types
-                    .insert(name.clone(), self.llvm_type_to_lang(&val.get_type()));
-            }
-        }
-
-        self.generate_stmt(body)?;
-        self.builder.build_unconditional_branch(cond_block)?;
-
-        // Restore variable if shadowed
-        if let Some(name) = capture {
-            if let Some(old) = old_var {
-                self.variables.insert(name.clone(), old);
-            } else {
-                self.variables.remove(name);
-            }
-        }
-
-        // End block
-        self.builder.position_at_end(end_block);
-
-        Ok(())
-    }
-
-    /// Generate infinite loop
-    fn generate_loop(&mut self, body: &Stmt) -> CodegenResult<()> {
-        let function = self.current_function.unwrap();
-
-        let body_block = self.context.append_basic_block(function, "loop_body");
-        let end_block = self.context.append_basic_block(function, "loop_end");
-
-        // Jump to body
-        self.builder.build_unconditional_branch(body_block)?;
-
-        // Body block
-        self.builder.position_at_end(body_block);
-        self.generate_stmt(body)?;
-        self.builder.build_unconditional_branch(body_block)?;
-
-        // End block
-        self.builder.position_at_end(end_block);
-
-        Ok(())
     }
 
     /// Convert our Type to LLVM type

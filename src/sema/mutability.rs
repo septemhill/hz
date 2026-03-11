@@ -103,23 +103,6 @@ impl MutabilityAnalyzer {
                 }
                 Ok(())
             }
-            crate::ast::Stmt::While { body, capture, .. } => {
-                let cap = capture.clone();
-                if cap.is_some() {
-                    self.symbol_table.enter_scope();
-                    self.symbol_table.define(
-                        cap.unwrap(),
-                        crate::ast::Type::I64,
-                        Visibility::Private,
-                        false,
-                    );
-                    self.analyze_statement(body)?;
-                    self.symbol_table.exit_scope();
-                } else {
-                    self.analyze_statement(body)?;
-                }
-                Ok(())
-            }
             crate::ast::Stmt::For {
                 var_name,
                 iterable: _,
@@ -155,10 +138,6 @@ impl MutabilityAnalyzer {
                 }
                 self.analyze_statement(body)?;
                 self.symbol_table.exit_scope();
-                Ok(())
-            }
-            crate::ast::Stmt::Loop { body, .. } => {
-                self.analyze_statement(body)?;
                 Ok(())
             }
             crate::ast::Stmt::Switch { cases, .. } => {

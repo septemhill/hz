@@ -31,8 +31,6 @@ _kw_let = { "let" }
 _kw_mut = { "mut" }
 _kw_if = { "if" }
 _kw_else = { "else" }
-_kw_while = { "while" }
-_kw_loop = { "loop" }
 _kw_return = { "return" }
 _kw_true = { "true" }
 _kw_false = { "false" }
@@ -145,8 +143,6 @@ stmt = {
     semi_stmt | 
     block_stmt | 
     if_stmt | 
-    while_stmt | 
-    loop_stmt | 
     return_stmt 
 }
 
@@ -164,16 +160,6 @@ block_stmt = { "{" ~ stmt* ~ "}" }
 // If statement
 if_stmt = { 
     "if" ~ "(" ~ expr ~ ")" ~ stmt ~ ("else" ~ stmt)? 
-}
-
-// While loop
-while_stmt = { 
-    "while" ~ "(" ~ expr ~ ")" ~ stmt 
-}
-
-// Infinite loop
-loop_stmt = { 
-    "loop" ~ stmt 
 }
 
 // Return statement

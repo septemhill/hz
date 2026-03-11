@@ -578,38 +578,18 @@ impl LoweringContext {
                     span: *span,
                 })
             }
-            ast::Stmt::While {
-                condition,
-                body,
-                span,
-                ..
-            } => hir::HirStmt::While {
-                condition: self.lower_expr(condition),
-                body: Box::new(self.lower_stmt(body)),
-                span: *span,
-            },
             ast::Stmt::For {
                 var_name,
                 iterable,
                 body,
                 span,
                 ..
-            } => {
-                // For now, lower as while loop
-                hir::HirStmt::While {
-                    condition: self.lower_expr(iterable),
-                    body: Box::new(self.lower_stmt(body)),
-                    span: *span,
-                }
-            }
-            ast::Stmt::Loop { body, span, .. } => {
-                // For now, lower as infinite while loop
-                hir::HirStmt::While {
-                    condition: hir::HirExpr::Bool(true, ast::Type::Bool, *span),
-                    body: Box::new(self.lower_stmt(body)),
-                    span: *span,
-                }
-            }
+            } => hir::HirStmt::For {
+                var_name: var_name.clone(),
+                iterable: self.lower_expr(iterable),
+                body: Box::new(self.lower_stmt(body)),
+                span: *span,
+            },
             ast::Stmt::Switch {
                 condition,
                 cases,

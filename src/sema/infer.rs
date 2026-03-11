@@ -147,8 +147,6 @@ pub enum TypedStmtKind {
         index_var: Option<String>,
         body: Box<TypedStmt>,
     },
-    /// Infinite loop
-    Loop { body: Box<TypedStmt> },
     /// Switch statement
     Switch {
         condition: TypedExpr,
@@ -280,9 +278,7 @@ impl TypeInferrer {
             Stmt::Return { span, .. } => *span,
             Stmt::Block { span, .. } => *span,
             Stmt::If { span, .. } => *span,
-            Stmt::While { span, .. } => *span,
             Stmt::For { span, .. } => *span,
-            Stmt::Loop { span, .. } => *span,
             Stmt::Switch { span, .. } => *span,
             Stmt::Defer { span, .. } => *span,
             Stmt::DeferBang { span, .. } => *span,
@@ -439,37 +435,6 @@ impl TypeInferrer {
                     span: *span,
                 })
             }
-            Stmt::While {
-                condition,
-                capture,
-                body,
-                span,
-            } => {
-                let typed_condition = self.infer_expr(condition)?;
-
-                // Handle capture variable
-                if let Some(cap) = capture {
-                    if let Type::Option(inner_ty) = typed_condition.ty.clone() {
-                        self.symbol_table.define(
-                            cap.clone(),
-                            *inner_ty,
-                            Visibility::Private,
-                            false,
-                        );
-                    }
-                }
-
-                let typed_body = self.infer_stmt(body)?;
-
-                Ok(TypedStmt {
-                    stmt: TypedStmtKind::While {
-                        condition: typed_condition,
-                        capture: capture.clone(),
-                        body: Box::new(typed_body),
-                    },
-                    span: *span,
-                })
-            }
             Stmt::For {
                 var_name,
                 iterable,
@@ -504,15 +469,6 @@ impl TypeInferrer {
                         iterable: typed_iterable,
                         capture: capture.clone(),
                         index_var: index_var.clone(),
-                        body: Box::new(typed_body),
-                    },
-                    span: *span,
-                })
-            }
-            Stmt::Loop { body, span } => {
-                let typed_body = self.infer_stmt(body)?;
-                Ok(TypedStmt {
-                    stmt: TypedStmtKind::Loop {
                         body: Box::new(typed_body),
                     },
                     span: *span,

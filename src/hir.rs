@@ -108,15 +108,17 @@ pub enum HirStmt {
         else_branch: Option<Box<HirStmt>>,
         span: Span,
     },
-    While {
-        condition: HirExpr,
-        body: Box<HirStmt>,
-        span: Span,
-    },
     // Switch will be desugared into nested If/Else or a Jump Table HIR node
     Switch {
         condition: HirExpr,
         cases: Vec<HirCase>,
+        span: Span,
+    },
+    /// For loop
+    For {
+        var_name: Option<String>,
+        iterable: HirExpr,
+        body: Box<HirStmt>,
         span: Span,
     },
     /// Defer statement (executes on scope exit)

@@ -18,13 +18,6 @@ fn test_keyword_fn() {
 }
 
 #[test]
-fn test_keyword_let() {
-    let result = tokenize("let").unwrap();
-    assert_eq!(result.len(), 2);
-    assert_eq!(result[0].token, Token::Let);
-}
-
-#[test]
 fn test_keyword_var() {
     let result = tokenize("var").unwrap();
     assert_eq!(result.len(), 2);
@@ -57,20 +50,6 @@ fn test_keyword_else() {
     let result = tokenize("else").unwrap();
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].token, Token::Else);
-}
-
-#[test]
-fn test_keyword_while() {
-    let result = tokenize("while").unwrap();
-    assert_eq!(result.len(), 2);
-    assert_eq!(result[0].token, Token::While);
-}
-
-#[test]
-fn test_keyword_loop() {
-    let result = tokenize("loop").unwrap();
-    assert_eq!(result.len(), 2);
-    assert_eq!(result[0].token, Token::Loop);
 }
 
 #[test]
@@ -454,7 +433,7 @@ fn test_lexer_iterator_next_first_token() {
 // Test Iterator::next() returns keywords correctly
 #[test]
 fn test_lexer_iterator_next_keywords() {
-    let mut iter = LexerIterator::new("fn let var const return if else while loop");
+    let mut iter = LexerIterator::new("fn let var const return if else");
 
     let tokens = std::iter::from_fn(|| iter.next())
         .filter_map(|r| r.ok())
@@ -462,14 +441,11 @@ fn test_lexer_iterator_next_keywords() {
         .collect::<Vec<_>>();
 
     assert!(tokens.contains(&Token::Fn));
-    assert!(tokens.contains(&Token::Let));
     assert!(tokens.contains(&Token::Var));
     assert!(tokens.contains(&Token::Const));
     assert!(tokens.contains(&Token::Return));
     assert!(tokens.contains(&Token::If));
     assert!(tokens.contains(&Token::Else));
-    assert!(tokens.contains(&Token::While));
-    assert!(tokens.contains(&Token::Loop));
 }
 
 // Test Iterator::next() returns identifiers correctly
@@ -663,7 +639,7 @@ fn test_lexer_iterator_next_skips_comments() {
 // Test Iterator::next() skips whitespace
 #[test]
 fn test_lexer_iterator_next_skips_whitespace() {
-    let mut iter = LexerIterator::new("   fn   let   var   ");
+    let mut iter = LexerIterator::new("   fn   var   const   ");
 
     let tokens = std::iter::from_fn(|| iter.next())
         .filter_map(|r| r.ok())
@@ -671,7 +647,6 @@ fn test_lexer_iterator_next_skips_whitespace() {
         .collect::<Vec<_>>();
 
     assert!(tokens.contains(&Token::Fn));
-    assert!(tokens.contains(&Token::Let));
     assert!(tokens.contains(&Token::Var));
 }
 
@@ -716,7 +691,7 @@ fn test_lexer_iterator_for_loop() {
 // Test Lexer::iter() convenience method
 #[test]
 fn test_lexer_iter_convenience() {
-    let mut iter = Lexer::iter("fn let var");
+    let mut iter = Lexer::iter("fn var const");
 
     let tokens = std::iter::from_fn(|| iter.next())
         .filter_map(|r| r.ok())
@@ -724,7 +699,6 @@ fn test_lexer_iter_convenience() {
         .collect::<Vec<_>>();
 
     assert!(tokens.contains(&Token::Fn));
-    assert!(tokens.contains(&Token::Let));
     assert!(tokens.contains(&Token::Var));
 }
 
@@ -772,7 +746,7 @@ fn test_peekable_lexer_iterator_peek_does_not_consume() {
 // Test PeekableLexerIterator::next() consumes peeked token
 #[test]
 fn test_peekable_lexer_iterator_next_consumes_peeked() {
-    let mut iter = PeekableLexerIterator::new("fn let");
+    let mut iter = PeekableLexerIterator::new("fn var");
 
     // Peek at first token
     let peeked = iter.peek(0);
@@ -782,15 +756,15 @@ fn test_peekable_lexer_iterator_next_consumes_peeked() {
     let next = iter.next().unwrap().unwrap();
     assert_eq!(next.token, Token::Fn);
 
-    // Next peek should return 'let'
+    // Next peek should return 'var'
     let peeked_after = iter.peek(0);
-    assert_eq!(peeked_after.unwrap().token, Token::Let);
+    assert_eq!(peeked_after.unwrap().token, Token::Var);
 }
 
 // Test PeekableLexerIterator::next() works without prior peek
 #[test]
 fn test_peekable_lexer_iterator_next_without_peek() {
-    let mut iter = PeekableLexerIterator::new("fn let");
+    let mut iter = PeekableLexerIterator::new("fn var");
 
     // Call next without peek
     let next = iter.next().unwrap().unwrap();
@@ -798,7 +772,7 @@ fn test_peekable_lexer_iterator_next_without_peek() {
 
     // Call next again
     let next2 = iter.next().unwrap().unwrap();
-    assert_eq!(next2.token, Token::Let);
+    assert_eq!(next2.token, Token::Var);
 }
 
 // Test PeekableLexerIterator::is_at_end() returns false at start
@@ -870,65 +844,65 @@ fn test_peekable_lexer_iterator_error_handling() {
 // Test peek(1) returns the next token correctly
 #[test]
 fn test_peekable_lexer_iterator_peek_offset_one() {
-    let mut iter = PeekableLexerIterator::new("fn let x");
+    let mut iter = PeekableLexerIterator::new("fn var x");
 
-    // Peek at offset 1 should return 'let'
+    // Peek at offset 1 should return 'var'
     let peeked = iter.peek(1);
     assert!(peeked.is_some());
-    assert_eq!(peeked.unwrap().token, Token::Let);
+    assert_eq!(peeked.unwrap().token, Token::Var);
 
     // Peek at offset 1 again should return same token
     let peeked_again = iter.peek(1);
     assert!(peeked_again.is_some());
-    assert_eq!(peeked_again.unwrap().token, Token::Let);
+    assert_eq!(peeked_again.unwrap().token, Token::Var);
 }
 
 // Test peek(0) and peek(1) together
 #[test]
 fn test_peekable_lexer_iterator_peek_zero_and_one_together() {
-    let mut iter = PeekableLexerIterator::new("fn let var");
+    let mut iter = PeekableLexerIterator::new("fn var const");
 
     // Peek at offset 0 should return 'fn'
     let peeked_0 = iter.peek(0);
     assert!(peeked_0.is_some());
     assert_eq!(peeked_0.unwrap().token, Token::Fn);
 
-    // Peek at offset 1 should return 'let'
+    // Peek at offset 1 should return 'var'
     let peeked_1 = iter.peek(1);
     assert!(peeked_1.is_some());
-    assert_eq!(peeked_1.unwrap().token, Token::Let);
+    assert_eq!(peeked_1.unwrap().token, Token::Var);
 
     // Peek at offset 0 again should still return 'fn'
     let peeked_0_again = iter.peek(0);
     assert!(peeked_0_again.is_some());
     assert_eq!(peeked_0_again.unwrap().token, Token::Fn);
 
-    // Peek at offset 1 again should still return 'let'
+    // Peek at offset 1 again should still return 'var'
     let peeked_1_again = iter.peek(1);
     assert!(peeked_1_again.is_some());
-    assert_eq!(peeked_1_again.unwrap().token, Token::Let);
+    assert_eq!(peeked_1_again.unwrap().token, Token::Var);
 }
 
 // Test consuming after peek(1)
 #[test]
 fn test_peekable_lexer_iterator_peek_one_then_consume() {
-    let mut iter = PeekableLexerIterator::new("fn let var");
+    let mut iter = PeekableLexerIterator::new("fn var const");
 
     // Peek at offset 1
     let peeked_1 = iter.peek(1);
-    assert_eq!(peeked_1.unwrap().token, Token::Let);
+    assert_eq!(peeked_1.unwrap().token, Token::Var);
 
     // Consume first token - should get 'fn'
     let next = iter.next().unwrap().unwrap();
     assert_eq!(next.token, Token::Fn);
 
-    // Now peek(0) should return 'let'
+    // Now peek(0) should return 'var'
     let peeked_0_after = iter.peek(0);
-    assert_eq!(peeked_0_after.unwrap().token, Token::Let);
+    assert_eq!(peeked_0_after.unwrap().token, Token::Var);
 
-    // Now peek(1) should return 'var'
+    // Now peek(1) should return 'const'
     let peeked_1_after = iter.peek(1);
-    assert_eq!(peeked_1_after.unwrap().token, Token::Var);
+    assert_eq!(peeked_1_after.unwrap().token, Token::Const);
 }
 
 // Test cross-using peek(0) and peek(1) with simple input
@@ -967,7 +941,7 @@ fn test_peekable_lexer_iterator_peek_cross_use_complex() {
 // Test that peek(1) doesn't consume tokens
 #[test]
 fn test_peekable_lexer_iterator_peek_one_does_not_consume() {
-    let mut iter = PeekableLexerIterator::new("fn let var");
+    let mut iter = PeekableLexerIterator::new("fn var const");
 
     // Peek at offset 1 multiple times
     iter.peek(1);
@@ -977,9 +951,9 @@ fn test_peekable_lexer_iterator_peek_one_does_not_consume() {
     let next = iter.next().unwrap().unwrap();
     assert_eq!(next.token, Token::Fn);
 
-    // Consume second token - should still get 'let'
+    // Consume second token - should still get 'var'
     let next2 = iter.next().unwrap().unwrap();
-    assert_eq!(next2.token, Token::Let);
+    assert_eq!(next2.token, Token::Var);
 }
 
 // Test peek(1) at end of input

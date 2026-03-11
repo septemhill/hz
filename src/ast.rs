@@ -421,14 +421,6 @@ pub enum Stmt {
         else_branch: Option<Box<Stmt>>,
         span: Span,
     },
-    /// While loop
-    While {
-        condition: Expr,
-        /// Optional capture variable (e.g., while (opt.next()) |e| { ... })
-        capture: Option<String>,
-        body: Box<Stmt>,
-        span: Span,
-    },
     /// For loop
     For {
         /// Optional index or element variable (e.g., for i in range)
@@ -441,8 +433,6 @@ pub enum Stmt {
         body: Box<Stmt>,
         span: Span,
     },
-    /// Infinite loop
-    Loop { body: Box<Stmt>, span: Span },
     /// Switch statement
     Switch {
         condition: Expr,

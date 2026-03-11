@@ -322,9 +322,9 @@ fn get_completions() -> Vec<serde_json::Value> {
 
     // Keywords
     let keywords = vec![
-        "fn", "var", "const", "let", "return", "import", "struct", "enum", "if", "else", "while",
-        "loop", "for", "switch", "true", "false", "null", "self", "external", "cdecl", "defer",
-        "defer!", "error", "try", "catch",
+        "fn", "var", "const", "return", "import", "struct", "enum", "if", "else", "for", "switch",
+        "true", "false", "null", "self", "external", "cdecl", "defer", "defer!", "error", "try",
+        "catch",
     ];
 
     for kw in keywords {

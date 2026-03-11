@@ -91,9 +91,7 @@ impl TypeAnalyzer {
                 }
                 None
             }
-            crate::ast::Stmt::While { body, .. } => self.stmt_find_try(body),
             crate::ast::Stmt::For { body, .. } => self.stmt_find_try(body),
-            crate::ast::Stmt::Loop { body, .. } => self.stmt_find_try(body),
             crate::ast::Stmt::Switch { cases, .. } => {
                 for case in cases {
                     if let Some(s) = self.stmt_find_try(&case.body) {
@@ -343,13 +341,6 @@ impl TypeAnalyzer {
                 }
                 Ok(())
             }
-            crate::ast::Stmt::While {
-                condition, body, ..
-            } => {
-                self.analyze_expression(condition)?;
-                self.analyze_statement(body)?;
-                Ok(())
-            }
             crate::ast::Stmt::For {
                 var_name,
                 iterable,
@@ -386,10 +377,6 @@ impl TypeAnalyzer {
                 }
                 self.analyze_statement(body)?;
                 self.symbol_table.exit_scope();
-                Ok(())
-            }
-            crate::ast::Stmt::Loop { body, .. } => {
-                self.analyze_statement(body)?;
                 Ok(())
             }
             crate::ast::Stmt::Switch {
