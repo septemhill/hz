@@ -15,7 +15,7 @@ impl std::fmt::Display for LexerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}:{}: Lexer error at position {}: {}",
+            "[lexer]: {}:{}: Lexer error at position {}: {}",
             self.file_name, self.line, self.location, self.message
         )
     }

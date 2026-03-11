@@ -320,7 +320,8 @@ impl TypeInferrer {
                     return Err(AnalysisError::new_with_span(
                         "Variable must have either a type or an initial value",
                         span,
-                    ));
+                    )
+                    .with_module("infer"));
                 };
 
                 // Define the variable in the symbol table
@@ -649,16 +650,16 @@ impl TypeInferrer {
                             span: *span,
                         })
                     } else {
-                        Err(AnalysisError::new_with_span(
-                            "Tuple index out of bounds",
-                            span,
-                        ))
+                        Err(
+                            AnalysisError::new_with_span("Tuple index out of bounds", span)
+                                .with_module("infer"),
+                        )
                     }
                 } else {
-                    Err(AnalysisError::new_with_span(
-                        "Tuple index on non-tuple type",
-                        span,
-                    ))
+                    Err(
+                        AnalysisError::new_with_span("Tuple index on non-tuple type", span)
+                            .with_module("infer"),
+                    )
                 }
             }
             Expr::Ident(name, span) => {
@@ -679,6 +680,7 @@ impl TypeInferrer {
                             &format!("Undefined variable '{}'", name),
                             span,
                         )
+                        .with_module("infer")
                     })?;
 
                 Ok(TypedExpr {
@@ -950,7 +952,8 @@ impl TypeInferrer {
                     Err(AnalysisError::new_with_span(
                         "Binary operation requires numeric operands",
                         span,
-                    ))
+                    )
+                    .with_module("infer"))
                 }
             }
             BinaryOp::Eq
@@ -970,7 +973,8 @@ impl TypeInferrer {
                     Err(AnalysisError::new_with_span(
                         "Logical operation requires boolean operands",
                         span,
-                    ))
+                    )
+                    .with_module("infer"))
                 }
             }
             BinaryOp::Range => {
@@ -993,10 +997,10 @@ impl TypeInferrer {
                 if self.is_numeric(expr_ty) {
                     Ok(expr_ty.clone())
                 } else {
-                    Err(AnalysisError::new_with_span(
-                        "Negation requires numeric operand",
-                        span,
-                    ))
+                    Err(
+                        AnalysisError::new_with_span("Negation requires numeric operand", span)
+                            .with_module("infer"),
+                    )
                 }
             }
             UnaryOp::Pos => {
@@ -1008,10 +1012,10 @@ impl TypeInferrer {
                 if *expr_ty == Type::Bool {
                     Ok(Type::Bool)
                 } else {
-                    Err(AnalysisError::new_with_span(
-                        "Logical not requires boolean operand",
-                        span,
-                    ))
+                    Err(
+                        AnalysisError::new_with_span("Logical not requires boolean operand", span)
+                            .with_module("infer"),
+                    )
                 }
             }
         }

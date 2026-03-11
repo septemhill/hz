@@ -192,6 +192,30 @@ impl Parser {
     fn skip_whitespace(&mut self) {
         // With lexer, we don't have whitespace tokens
     }
+
+    /// Get the end span from an expression
+    fn get_expr_span(&self, expr: &Expr) -> usize {
+        match expr {
+            Expr::Int(_, span) => span.end,
+            Expr::Bool(_, span) => span.end,
+            Expr::String(_, span) => span.end,
+            Expr::Char(_, span) => span.end,
+            Expr::Null(span) => span.end,
+            Expr::Tuple(_, span) => span.end,
+            Expr::TupleIndex { span, .. } => span.end,
+            Expr::Ident(_, span) => span.end,
+            Expr::Array(_, span) => span.end,
+            Expr::Binary { span, .. } => span.end,
+            Expr::Unary { span, .. } => span.end,
+            Expr::Call { span, .. } => span.end,
+            Expr::If { span, .. } => span.end,
+            Expr::Block { span, .. } => span.end,
+            Expr::MemberAccess { span, .. } => span.end,
+            Expr::Struct { span, .. } => span.end,
+            Expr::Try { span, .. } => span.end,
+            Expr::Catch { span, .. } => span.end,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1886,30 +1910,39 @@ impl Parser {
 
         // Check for assignment: target op value;
         match &expr {
-            Expr::Ident(name, _) => {
+            Expr::Ident(name, ident_span) => {
                 if let Some(op) = self.match_assign_op() {
                     let value = self.parse_expression()?;
                     self.skip_whitespace();
                     self.match_token(Token::Semicolon);
 
+                    // Get the end span from the value expression
+                    let span_end = self.get_expr_span(&value);
+
                     return Ok(Stmt::Assign {
                         target: name.clone(),
                         op,
                         value,
-                        span: Span { start: 0, end: 0 },
+                        span: Span {
+                            start: ident_span.start,
+                            end: span_end,
+                        },
                     });
                 }
             }
             Expr::MemberAccess {
                 object: member_expr,
                 member,
-                ..
+                span: member_span,
             } => {
                 // Handle member assignment like self.i += 1
                 if let Some(op) = self.match_assign_op() {
                     let value = self.parse_expression()?;
                     self.skip_whitespace();
                     self.match_token(Token::Semicolon);
+
+                    // Get the end span from the value expression
+                    let span_end = self.get_expr_span(&value);
 
                     // Convert to a setter expression - format the target string
                     fn format_target(expr: &Expr) -> String {
@@ -1926,7 +1959,10 @@ impl Parser {
                         target,
                         op,
                         value,
-                        span: Span { start: 0, end: 0 },
+                        span: Span {
+                            start: member_span.start,
+                            end: span_end,
+                        },
                     });
                 }
             }
@@ -2698,8 +2734,13 @@ impl Parser {
                 Ok(Expr::Array(elements, Span { start: 0, end: 0 }))
             }
             Token::Ident(name) => {
+                // Get span from current token before advancing
+                let span = self
+                    .current_token()
+                    .map(|t| t.span)
+                    .unwrap_or(Span::default());
                 self.advance();
-                Ok(Expr::Ident(name, Span { start: 0, end: 0 }))
+                Ok(Expr::Ident(name, span))
             }
             Token::If => self.parse_if_expr(),
             _ => Err(ParseError {
@@ -3355,9 +3396,13 @@ pub struct ParseError {
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(loc) = self.location {
-            write!(f, "Parse error at position {}: {}", loc, self.message)
+            write!(
+                f,
+                "[parser]: Parse error at position {}: {}",
+                loc, self.message
+            )
         } else {
-            write!(f, "Parse error: {}", self.message)
+            write!(f, "[parser]: Parse error: {}", self.message)
         }
     }
 }

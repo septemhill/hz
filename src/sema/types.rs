@@ -47,7 +47,7 @@ impl TypeAnalyzer {
                         f.name
                     ),
                     &try_span,
-                ));
+                ).with_module("types"));
             }
         }
 
@@ -211,7 +211,8 @@ impl TypeAnalyzer {
                                     explicit_ty, v_ty
                                 ),
                                 span,
-                            ));
+                            )
+                            .with_module("types"));
                         }
                     }
                     v_ty
@@ -221,7 +222,8 @@ impl TypeAnalyzer {
                     return Err(AnalysisError::new_with_span(
                         "Variable must have either a type or an initial value",
                         span,
-                    ));
+                    )
+                    .with_module("types"));
                 };
 
                 // Handle both single name and tuple destructuring
@@ -233,7 +235,8 @@ impl TypeAnalyzer {
                                 return Err(AnalysisError::new_with_span(
                                     &format!("Variable '{}' is already declared in this scope", n),
                                     span,
-                                ));
+                                )
+                                .with_module("types"));
                             }
                             self.symbol_table.define(
                                 n.clone(),
@@ -248,7 +251,8 @@ impl TypeAnalyzer {
                         return Err(AnalysisError::new_with_span(
                             &format!("Variable '{}' is already declared in this scope", name),
                             span,
-                        ));
+                        )
+                        .with_module("types"));
                     }
                     self.symbol_table.define(
                         name.clone(),
@@ -275,6 +279,7 @@ impl TypeAnalyzer {
                                 &format!("Undefined variable '{}'", target),
                                 span,
                             )
+                            .with_module("types")
                         })?;
                     let expr_ty = self.analyze_expression(value)?;
                     if !self.types_compatible(&symbol_ty, &expr_ty) {
@@ -284,7 +289,8 @@ impl TypeAnalyzer {
                                 target, symbol_ty, expr_ty
                             ),
                             span,
-                        ));
+                        )
+                        .with_module("types"));
                     }
                 }
                 Ok(())
@@ -326,7 +332,8 @@ impl TypeAnalyzer {
                         return Err(AnalysisError::new_with_span(
                             "Capture variable requires an optional type",
                             span,
-                        ));
+                        )
+                        .with_module("types"));
                     }
                 }
 
@@ -647,10 +654,13 @@ impl TypeAnalyzer {
             } => {
                 let expr_ty = self.analyze_expression(expr)?;
                 if !expr_ty.is_result() {
-                    return Err(AnalysisError::new(&format!(
-                        "catch expression requires a Result type, expected Result<T> but found {}",
-                        expr_ty
-                    )));
+                    return Err(AnalysisError::new_with_span(
+                        &format!(
+                            "catch expression requires a Result type, expected Result<T> but found {}",
+                            expr_ty
+                        ),
+                        span,
+                    ));
                 }
                 let ev = error_var.clone();
                 if ev.is_some() {
@@ -666,10 +676,9 @@ impl TypeAnalyzer {
                 if error_var.is_some() {
                     self.symbol_table.exit_scope();
                 }
-                expr_ty
-                    .result_inner()
-                    .cloned()
-                    .ok_or_else(|| AnalysisError::new("Failed to get inner type from Result"))
+                expr_ty.result_inner().cloned().ok_or_else(|| {
+                    AnalysisError::new_with_span("Failed to get inner type from Result", span)
+                })
             }
         }
     }

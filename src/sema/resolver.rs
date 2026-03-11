@@ -206,6 +206,7 @@ impl SymbolResolver {
                             &format!("Undefined variable '{}'", target),
                             span,
                         )
+                        .with_module("resolver")
                     })?;
                 }
                 self.analyze_expression(value)?;
@@ -352,6 +353,7 @@ impl SymbolResolver {
                             &format!("Undefined identifier '{}'", name),
                             span,
                         )
+                        .with_module("resolver")
                     })
             }
             crate::ast::Expr::Call {
@@ -391,7 +393,8 @@ impl SymbolResolver {
                         return Err(AnalysisError::new_with_span(
                             &format!("Undefined function '{}'", name),
                             span,
-                        ));
+                        )
+                        .with_module("resolver"));
                     }
                     // Return I64 as placeholder
                     // In a full implementation, we'd look up the function's return type
@@ -422,9 +425,10 @@ impl SymbolResolver {
                 Ok(crate::ast::Type::I64)
             }
             crate::ast::Expr::Struct { name, fields, .. } => {
-                self.symbol_table
-                    .resolve(name)
-                    .ok_or_else(|| AnalysisError::new(&format!("Undefined struct '{}'", name)))?;
+                self.symbol_table.resolve(name).ok_or_else(|| {
+                    AnalysisError::new(&format!("Undefined struct '{}'", name))
+                        .with_module("resolver")
+                })?;
                 for (_, field_expr) in fields {
                     self.analyze_expression(field_expr)?;
                 }

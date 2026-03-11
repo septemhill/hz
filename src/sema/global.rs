@@ -34,7 +34,8 @@ impl GlobalDefinitionsAnalyzer {
                 return Err(AnalysisError::new_with_span(
                     &format!("Duplicate declaration of function '{}'", f.name),
                     &f.span,
-                ));
+                )
+                .with_module("global"));
             }
             self.symbol_table
                 .define(f.name.clone(), f.return_ty.clone(), f.visibility, true);
@@ -54,7 +55,8 @@ impl GlobalDefinitionsAnalyzer {
                         ext_fn.name
                     ),
                     &ext_fn.span,
-                ));
+                )
+                .with_module("global"));
             }
             self.symbol_table.define(
                 ext_fn.name.clone(),
@@ -72,7 +74,8 @@ impl GlobalDefinitionsAnalyzer {
                 return Err(AnalysisError::new_with_span(
                     &format!("Duplicate declaration of type '{}'", s.name),
                     &s.span,
-                ));
+                )
+                .with_module("global"));
             }
             self.symbol_table.define(
                 s.name.clone(),
@@ -93,7 +96,8 @@ impl GlobalDefinitionsAnalyzer {
                     return Err(AnalysisError::new_with_span(
                         &format!("Duplicate declaration of method '{}'", method_name),
                         &method.span,
-                    ));
+                    )
+                    .with_module("global"));
                 }
                 self.symbol_table.define(
                     method_name,
@@ -112,7 +116,8 @@ impl GlobalDefinitionsAnalyzer {
                 return Err(AnalysisError::new_with_span(
                     &format!("Duplicate declaration of type '{}'", e.name),
                     &e.span,
-                ));
+                )
+                .with_module("global"));
             }
             self.symbol_table.define(
                 e.name.clone(),
@@ -132,7 +137,8 @@ impl GlobalDefinitionsAnalyzer {
                     return Err(AnalysisError::new_with_span(
                         &format!("Duplicate declaration of method '{}'", method_name),
                         &method.span,
-                    ));
+                    )
+                    .with_module("global"));
                 }
                 self.symbol_table.define(
                     method_name,
@@ -151,7 +157,8 @@ impl GlobalDefinitionsAnalyzer {
                 return Err(AnalysisError::new_with_span(
                     &format!("Duplicate declaration of error type '{}'", e.name),
                     &e.span,
-                ));
+                )
+                .with_module("global"));
             }
             self.symbol_table
                 .define(e.name.clone(), Type::Error, e.visibility, true);

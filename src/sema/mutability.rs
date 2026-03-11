@@ -58,12 +58,14 @@ impl MutabilityAnalyzer {
                                 &format!("Undefined variable '{}'", target),
                                 span,
                             )
+                            .with_module("mutability")
                         })?;
                     if is_const {
                         return Err(AnalysisError::new_with_span(
                             &format!("Cannot reassign constant variable '{}'", target),
                             span,
-                        ));
+                        )
+                        .with_module("mutability"));
                     }
                 }
                 Ok(())
@@ -167,6 +169,40 @@ impl MutabilityAnalyzer {
             }
             crate::ast::Stmt::Defer { stmt, .. } => {
                 self.analyze_statement(stmt)?;
+                Ok(())
+            }
+            crate::ast::Stmt::Let {
+                name,
+                names,
+                ty,
+                value,
+                mutability,
+                visibility,
+                span: _,
+            } => {
+                let is_const = *mutability == crate::ast::Mutability::Const;
+                // Use I64 as default type when no type annotation and no value
+                let default_ty = crate::ast::Type::I64;
+                let inferred_ty = value
+                    .as_ref()
+                    .map(|_| default_ty.clone())
+                    .unwrap_or_else(|| ty.clone().unwrap_or(default_ty));
+                // Handle tuple destructuring
+                if let Some(var_names) = names {
+                    for var_name in var_names {
+                        if let Some(n) = var_name {
+                            self.symbol_table.define(
+                                n.clone(),
+                                inferred_ty.clone(),
+                                *visibility,
+                                is_const,
+                            );
+                        }
+                    }
+                } else {
+                    self.symbol_table
+                        .define(name.clone(), inferred_ty, *visibility, is_const);
+                }
                 Ok(())
             }
             _ => Ok(()),
