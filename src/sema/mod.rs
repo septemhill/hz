@@ -3,6 +3,7 @@
 
 pub mod error;
 pub mod global;
+pub mod infer;
 pub mod mutability;
 pub mod resolver;
 pub mod symbol;
@@ -14,6 +15,7 @@ mod tests;
 // Re-export for convenience
 pub use error::{AnalysisError, AnalysisResult};
 pub use global::GlobalDefinitionsAnalyzer;
+pub use infer::{TypedProgram, infer_types};
 pub use mutability::MutabilityAnalyzer;
 pub use resolver::SymbolResolver;
 pub use symbol::{Scope, Symbol, SymbolTable};
@@ -26,12 +28,14 @@ pub use types::TypeAnalyzer;
 
 pub struct SemanticAnalyzer {
     pub symbol_table: SymbolTable,
+    pub typed_program: Option<TypedProgram>,
 }
 
 impl SemanticAnalyzer {
     pub fn new() -> Self {
         SemanticAnalyzer {
             symbol_table: SymbolTable::new(),
+            typed_program: None,
         }
     }
 
@@ -51,7 +55,12 @@ impl SemanticAnalyzer {
             SymbolResolver::new(symbol_table, program.structs.clone(), program.enums.clone());
         symbol_resolver.analyze(program)?;
 
-        // Pass 4: Mutability analysis
+        // Pass 4: Type inference - produce type-annotated AST (must run before mutability)
+        let symbol_table = symbol_resolver.get_symbol_table().clone();
+        let typed_prog = infer_types(program, symbol_table)?;
+        self.typed_program = Some(typed_prog);
+
+        // Pass 5: Mutability analysis
         let symbol_table = symbol_resolver.get_symbol_table().clone();
         let mut mutability_analyzer = MutabilityAnalyzer::new(symbol_table);
         mutability_analyzer.analyze(program)?;
@@ -64,6 +73,10 @@ impl SemanticAnalyzer {
 
     pub fn get_symbol_table(&self) -> &SymbolTable {
         &self.symbol_table
+    }
+
+    pub fn get_typed_program(&self) -> Option<&TypedProgram> {
+        self.typed_program.as_ref()
     }
 }
 

@@ -1,0 +1,1044 @@
+//! # Type Inference Engine
+//!
+//! This module provides type inference for the AST, producing a type-annotated AST
+//! where every expression has its inferred type explicitly stored.
+
+use crate::ast::Visibility;
+use crate::ast::{BinaryOp, Expr, FnDef, FnParam, Program, Span, Stmt, Type, UnaryOp};
+use crate::sema::error::{AnalysisError, AnalysisResult};
+use crate::sema::symbol::SymbolTable;
+
+// ============================================================================
+// Type-Annotated AST Nodes
+// ============================================================================
+
+/// Type-annotated expression with its inferred type
+#[derive(Debug, Clone)]
+pub struct TypedExpr {
+    pub expr: TypedExprKind,
+    pub ty: Type,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum TypedExprKind {
+    /// Integer literal (i64)
+    Int(i64),
+    /// Boolean literal
+    Bool(bool),
+    /// String literal
+    String(String),
+    /// Character literal
+    Char(char),
+    /// Null literal
+    Null,
+    /// Tuple literal
+    Tuple(Vec<TypedExpr>),
+    /// Tuple index access
+    TupleIndex { tuple: Box<TypedExpr>, index: usize },
+    /// Variable identifier
+    Ident(String),
+    /// Array literal
+    Array(Vec<TypedExpr>),
+    /// Binary operation
+    Binary {
+        op: BinaryOp,
+        left: Box<TypedExpr>,
+        right: Box<TypedExpr>,
+    },
+    /// Unary operation
+    Unary { op: UnaryOp, expr: Box<TypedExpr> },
+    /// Function call
+    Call {
+        name: String,
+        namespace: Option<String>,
+        args: Vec<TypedExpr>,
+    },
+    /// If expression
+    If {
+        condition: Box<TypedExpr>,
+        /// Optional capture variable
+        capture: Option<String>,
+        then_branch: Box<TypedExpr>,
+        else_branch: Box<TypedExpr>,
+    },
+    /// Block expression
+    Block { stmts: Vec<TypedStmt> },
+    /// Member access
+    MemberAccess {
+        object: Box<TypedExpr>,
+        member: String,
+    },
+    /// Struct literal
+    Struct {
+        name: String,
+        fields: Vec<(String, TypedExpr)>,
+    },
+    /// Try expression
+    Try { expr: Box<TypedExpr> },
+    /// Catch expression
+    Catch {
+        expr: Box<TypedExpr>,
+        /// Optional capture variable for the error
+        error_var: Option<String>,
+        body: Box<TypedExpr>,
+    },
+}
+
+impl TypedExpr {
+    /// Create a typed expression from an AST expression
+    pub fn from_ast(expr: &Expr, inferrer: &mut TypeInferrer) -> AnalysisResult<TypedExpr> {
+        inferrer.infer_expr(expr)
+    }
+
+    /// Get the span of this expression
+    pub fn span(&self) -> Span {
+        self.span
+    }
+}
+
+/// Type-annotated statement
+#[derive(Debug, Clone)]
+pub struct TypedStmt {
+    pub stmt: TypedStmtKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum TypedStmtKind {
+    /// Expression statement
+    Expr { expr: TypedExpr },
+    /// Import statement
+    Import {
+        packages: Vec<(Option<String>, String)>,
+    },
+    /// Variable declaration
+    Let {
+        name: String,
+        names: Option<Vec<Option<String>>>,
+        ty: Type,
+        value: Option<TypedExpr>,
+        is_const: bool,
+    },
+    /// Assignment statement
+    Assign { target: String, value: TypedExpr },
+    /// Return statement
+    Return { value: Option<TypedExpr> },
+    /// Block statement
+    Block { stmts: Vec<TypedStmt> },
+    /// If statement
+    If {
+        condition: TypedExpr,
+        capture: Option<String>,
+        then_branch: Box<TypedStmt>,
+        else_branch: Option<Box<TypedStmt>>,
+    },
+    /// While loop
+    While {
+        condition: TypedExpr,
+        capture: Option<String>,
+        body: Box<TypedStmt>,
+    },
+    /// For loop
+    For {
+        var_name: Option<String>,
+        iterable: TypedExpr,
+        capture: Option<String>,
+        index_var: Option<String>,
+        body: Box<TypedStmt>,
+    },
+    /// Infinite loop
+    Loop { body: Box<TypedStmt> },
+    /// Switch statement
+    Switch {
+        condition: TypedExpr,
+        cases: Vec<TypedSwitchCase>,
+    },
+    /// Defer statement
+    Defer { stmt: Box<TypedStmt> },
+    /// Defer! statement
+    DeferBang { stmt: Box<TypedStmt> },
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedSwitchCase {
+    pub patterns: Vec<TypedExpr>,
+    pub capture: Option<String>,
+    pub body: TypedStmt,
+}
+
+/// Type-annotated function definition
+#[derive(Debug, Clone)]
+pub struct TypedFnDef {
+    pub name: String,
+    pub visibility: Visibility,
+    pub params: Vec<TypedFnParam>,
+    pub return_ty: Type,
+    pub body: Vec<TypedStmt>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedFnParam {
+    pub name: String,
+    pub ty: Type,
+}
+
+/// Type-annotated program
+#[derive(Debug, Clone)]
+pub struct TypedProgram {
+    pub functions: Vec<TypedFnDef>,
+    pub external_functions: Vec<TypedFnDef>,
+    pub structs: Vec<crate::ast::StructDef>,
+    pub enums: Vec<crate::ast::EnumDef>,
+    pub errors: Vec<crate::ast::ErrorDef>,
+    pub imports: Vec<(Option<String>, String)>,
+}
+
+// ============================================================================
+// Type Inference Engine
+// ============================================================================
+
+/// Type inference engine that traverses the AST and infers types
+pub struct TypeInferrer {
+    symbol_table: SymbolTable,
+}
+
+impl TypeInferrer {
+    /// Create a new type inferrer
+    pub fn new(symbol_table: SymbolTable) -> Self {
+        TypeInferrer { symbol_table }
+    }
+
+    /// Infer types for an entire program
+    pub fn infer_program(&mut self, program: &Program) -> AnalysisResult<TypedProgram> {
+        let mut functions = Vec::new();
+
+        for f in &program.functions {
+            let typed_fn = self.infer_fn(f)?;
+            functions.push(typed_fn);
+        }
+
+        Ok(TypedProgram {
+            functions,
+            external_functions: Vec::new(), // TODO: Handle external functions
+            structs: program.structs.clone(),
+            enums: program.enums.clone(),
+            errors: program.errors.clone(),
+            imports: program.imports.clone(),
+        })
+    }
+
+    /// Infer types for a function definition
+    fn infer_fn(&mut self, f: &FnDef) -> AnalysisResult<TypedFnDef> {
+        // Enter function scope and add parameters
+        self.symbol_table.enter_scope();
+
+        for param in &f.params {
+            self.symbol_table.define(
+                param.name.clone(),
+                param.ty.clone(),
+                Visibility::Private,
+                false,
+            );
+        }
+
+        // Infer types for the function body
+        let mut body = Vec::new();
+        for stmt in &f.body {
+            let typed_stmt = self.infer_stmt(stmt)?;
+            body.push(typed_stmt);
+        }
+
+        self.symbol_table.exit_scope();
+
+        Ok(TypedFnDef {
+            name: f.name.clone(),
+            visibility: f.visibility,
+            params: f
+                .params
+                .iter()
+                .map(|p| TypedFnParam {
+                    name: p.name.clone(),
+                    ty: p.ty.clone(),
+                })
+                .collect(),
+            return_ty: f.return_ty.clone(),
+            body,
+            span: f.span,
+        })
+    }
+
+    /// Infer types for a statement
+    fn infer_stmt(&mut self, stmt: &Stmt) -> AnalysisResult<TypedStmt> {
+        // Extract span from the statement
+        let span = match stmt {
+            Stmt::Expr { span, .. } => *span,
+            Stmt::Import { span, .. } => *span,
+            Stmt::Let { span, .. } => *span,
+            Stmt::Assign { span, .. } => *span,
+            Stmt::Return { span, .. } => *span,
+            Stmt::Block { span, .. } => *span,
+            Stmt::If { span, .. } => *span,
+            Stmt::While { span, .. } => *span,
+            Stmt::For { span, .. } => *span,
+            Stmt::Loop { span, .. } => *span,
+            Stmt::Switch { span, .. } => *span,
+            Stmt::Defer { span, .. } => *span,
+            Stmt::DeferBang { span, .. } => *span,
+        };
+
+        match stmt {
+            Stmt::Expr { expr, span: _ } => {
+                let typed_expr = self.infer_expr(expr)?;
+                Ok(TypedStmt {
+                    stmt: TypedStmtKind::Expr { expr: typed_expr },
+                    span,
+                })
+            }
+            Stmt::Import { packages, span: _ } => Ok(TypedStmt {
+                stmt: TypedStmtKind::Import {
+                    packages: packages.clone(),
+                },
+                span,
+            }),
+            Stmt::Let {
+                name,
+                names,
+                ty,
+                value,
+                visibility: _,
+                span,
+                mutability,
+            } => {
+                let inferred_ty = if let Some(val_expr) = value {
+                    let typed_val = self.infer_expr(val_expr)?;
+                    typed_val.ty.clone()
+                } else if let Some(explicit_ty) = ty {
+                    explicit_ty.clone()
+                } else {
+                    return Err(AnalysisError::new_with_span(
+                        "Variable must have either a type or an initial value",
+                        span,
+                    ));
+                };
+
+                // Define the variable in the symbol table
+                if let Some(ns) = names {
+                    for name_opt in ns {
+                        if let Some(n) = name_opt {
+                            self.symbol_table.define(
+                                n.clone(),
+                                inferred_ty.clone(),
+                                Visibility::Private,
+                                matches!(mutability, crate::ast::Mutability::Const),
+                            );
+                        }
+                    }
+                } else {
+                    self.symbol_table.define(
+                        name.clone(),
+                        inferred_ty.clone(),
+                        Visibility::Private,
+                        matches!(mutability, crate::ast::Mutability::Const),
+                    );
+                }
+
+                let typed_value = if let Some(val_expr) = value {
+                    Some(self.infer_expr(val_expr)?)
+                } else {
+                    None
+                };
+
+                Ok(TypedStmt {
+                    stmt: TypedStmtKind::Let {
+                        name: name.clone(),
+                        names: names.clone(),
+                        ty: inferred_ty,
+                        value: typed_value,
+                        is_const: matches!(mutability, crate::ast::Mutability::Const),
+                    },
+                    span: *span,
+                })
+            }
+            Stmt::Assign {
+                target,
+                value,
+                op: _,
+                span,
+            } => {
+                let typed_value = self.infer_expr(value)?;
+                Ok(TypedStmt {
+                    stmt: TypedStmtKind::Assign {
+                        target: target.clone(),
+                        value: typed_value,
+                    },
+                    span: *span,
+                })
+            }
+            Stmt::Return { value, span } => {
+                let typed_value = if let Some(val_expr) = value {
+                    Some(self.infer_expr(val_expr)?)
+                } else {
+                    None
+                };
+                Ok(TypedStmt {
+                    stmt: TypedStmtKind::Return { value: typed_value },
+                    span: *span,
+                })
+            }
+            Stmt::Block { stmts, span } => {
+                self.symbol_table.enter_scope();
+                let mut typed_stmts = Vec::new();
+                for s in stmts {
+                    typed_stmts.push(self.infer_stmt(s)?);
+                }
+                self.symbol_table.exit_scope();
+                Ok(TypedStmt {
+                    stmt: TypedStmtKind::Block { stmts: typed_stmts },
+                    span: *span,
+                })
+            }
+            Stmt::If {
+                condition,
+                capture,
+                then_branch,
+                else_branch,
+                span,
+            } => {
+                let typed_condition = self.infer_expr(condition)?;
+
+                // Handle capture variable
+                if let Some(cap) = capture {
+                    // If condition is an optional type, the capture gets the inner type
+                    if let Type::Option(inner_ty) = typed_condition.ty.clone() {
+                        self.symbol_table.define(
+                            cap.clone(),
+                            *inner_ty,
+                            Visibility::Private,
+                            false,
+                        );
+                    }
+                }
+
+                let typed_then = self.infer_stmt(then_branch)?;
+                let typed_else = if let Some(eb) = else_branch {
+                    Some(Box::new(self.infer_stmt(eb)?))
+                } else {
+                    None
+                };
+
+                Ok(TypedStmt {
+                    stmt: TypedStmtKind::If {
+                        condition: typed_condition,
+                        capture: capture.clone(),
+                        then_branch: Box::new(typed_then),
+                        else_branch: typed_else,
+                    },
+                    span: *span,
+                })
+            }
+            Stmt::While {
+                condition,
+                capture,
+                body,
+                span,
+            } => {
+                let typed_condition = self.infer_expr(condition)?;
+
+                // Handle capture variable
+                if let Some(cap) = capture {
+                    if let Type::Option(inner_ty) = typed_condition.ty.clone() {
+                        self.symbol_table.define(
+                            cap.clone(),
+                            *inner_ty,
+                            Visibility::Private,
+                            false,
+                        );
+                    }
+                }
+
+                let typed_body = self.infer_stmt(body)?;
+
+                Ok(TypedStmt {
+                    stmt: TypedStmtKind::While {
+                        condition: typed_condition,
+                        capture: capture.clone(),
+                        body: Box::new(typed_body),
+                    },
+                    span: *span,
+                })
+            }
+            Stmt::For {
+                var_name,
+                iterable,
+                capture,
+                index_var,
+                body,
+                span,
+            } => {
+                let typed_iterable = self.infer_expr(iterable)?;
+
+                self.symbol_table.enter_scope();
+
+                if let Some(vn) = var_name {
+                    self.symbol_table
+                        .define(vn.clone(), Type::I64, Visibility::Private, false);
+                }
+                if let Some(cv) = capture {
+                    self.symbol_table
+                        .define(cv.clone(), Type::I64, Visibility::Private, false);
+                }
+                if let Some(iv) = index_var {
+                    self.symbol_table
+                        .define(iv.clone(), Type::I64, Visibility::Private, false);
+                }
+
+                let typed_body = self.infer_stmt(body)?;
+                self.symbol_table.exit_scope();
+
+                Ok(TypedStmt {
+                    stmt: TypedStmtKind::For {
+                        var_name: var_name.clone(),
+                        iterable: typed_iterable,
+                        capture: capture.clone(),
+                        index_var: index_var.clone(),
+                        body: Box::new(typed_body),
+                    },
+                    span: *span,
+                })
+            }
+            Stmt::Loop { body, span } => {
+                let typed_body = self.infer_stmt(body)?;
+                Ok(TypedStmt {
+                    stmt: TypedStmtKind::Loop {
+                        body: Box::new(typed_body),
+                    },
+                    span: *span,
+                })
+            }
+            Stmt::Switch {
+                condition,
+                cases,
+                span,
+            } => {
+                let typed_condition = self.infer_expr(condition)?;
+                let mut typed_cases = Vec::new();
+
+                for case in cases {
+                    let mut typed_patterns = Vec::new();
+                    for pattern in &case.patterns {
+                        typed_patterns.push(self.infer_expr(pattern)?);
+                    }
+
+                    let typed_body = self.infer_stmt(&case.body)?;
+
+                    typed_cases.push(TypedSwitchCase {
+                        patterns: typed_patterns,
+                        capture: case.capture.clone(),
+                        body: typed_body,
+                    });
+                }
+
+                Ok(TypedStmt {
+                    stmt: TypedStmtKind::Switch {
+                        condition: typed_condition,
+                        cases: typed_cases,
+                    },
+                    span: *span,
+                })
+            }
+            Stmt::Defer { stmt, span } => {
+                let typed_stmt = self.infer_stmt(stmt)?;
+                Ok(TypedStmt {
+                    stmt: TypedStmtKind::Defer {
+                        stmt: Box::new(typed_stmt),
+                    },
+                    span: *span,
+                })
+            }
+            Stmt::DeferBang { stmt, span } => {
+                let typed_stmt = self.infer_stmt(stmt)?;
+                Ok(TypedStmt {
+                    stmt: TypedStmtKind::DeferBang {
+                        stmt: Box::new(typed_stmt),
+                    },
+                    span: *span,
+                })
+            }
+        }
+    }
+
+    /// Infer the type of an expression
+    fn infer_expr(&mut self, expr: &Expr) -> AnalysisResult<TypedExpr> {
+        // Extract span from the expression
+        let span = match expr {
+            Expr::Int(_, span) => *span,
+            Expr::Bool(_, span) => *span,
+            Expr::String(_, span) => *span,
+            Expr::Char(_, span) => *span,
+            Expr::Null(span) => *span,
+            Expr::Tuple(_, span) => *span,
+            Expr::TupleIndex { span, .. } => *span,
+            Expr::Ident(_, span) => *span,
+            Expr::Array(_, span) => *span,
+            Expr::Binary { span, .. } => *span,
+            Expr::Unary { span, .. } => *span,
+            Expr::Call { span, .. } => *span,
+            Expr::If { span, .. } => *span,
+            Expr::Block { span, .. } => *span,
+            Expr::MemberAccess { span, .. } => *span,
+            Expr::Struct { span, .. } => *span,
+            Expr::Try { span, .. } => *span,
+            Expr::Catch { span, .. } => *span,
+        };
+
+        match expr {
+            Expr::Int(value, _) => Ok(TypedExpr {
+                expr: TypedExprKind::Int(*value),
+                ty: Type::I64,
+                span,
+            }),
+            Expr::Bool(value, _) => Ok(TypedExpr {
+                expr: TypedExprKind::Bool(*value),
+                ty: Type::Bool,
+                span,
+            }),
+            Expr::String(value, _) => Ok(TypedExpr {
+                expr: TypedExprKind::String(value.clone()),
+                ty: Type::Custom {
+                    name: "String".to_string(),
+                    generic_args: vec![],
+                    is_exported: false,
+                },
+                span,
+            }),
+            Expr::Char(value, _) => Ok(TypedExpr {
+                expr: TypedExprKind::Char(*value),
+                ty: Type::I8,
+                span,
+            }),
+            Expr::Null(_) => Ok(TypedExpr {
+                expr: TypedExprKind::Null,
+                ty: Type::Option(Box::new(Type::I64)),
+                span,
+            }),
+            Expr::Tuple(elements, _) => {
+                let mut typed_elements = Vec::new();
+                for elem in elements {
+                    typed_elements.push(self.infer_expr(elem)?);
+                }
+                let ty = Type::Tuple(typed_elements.iter().map(|e| e.ty.clone()).collect());
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Tuple(typed_elements),
+                    ty,
+                    span,
+                })
+            }
+            Expr::TupleIndex { tuple, index, span } => {
+                let typed_tuple = self.infer_expr(tuple)?;
+                if let Type::Tuple(types) = &typed_tuple.ty {
+                    if *index < types.len() {
+                        let ty = types[*index].clone();
+                        Ok(TypedExpr {
+                            expr: TypedExprKind::TupleIndex {
+                                tuple: Box::new(typed_tuple),
+                                index: *index,
+                            },
+                            ty,
+                            span: *span,
+                        })
+                    } else {
+                        Err(AnalysisError::new_with_span(
+                            "Tuple index out of bounds",
+                            span,
+                        ))
+                    }
+                } else {
+                    Err(AnalysisError::new_with_span(
+                        "Tuple index on non-tuple type",
+                        span,
+                    ))
+                }
+            }
+            Expr::Ident(name, span) => {
+                if name == "_" {
+                    return Ok(TypedExpr {
+                        expr: TypedExprKind::Ident(name.clone()),
+                        ty: Type::I64,
+                        span: *span,
+                    });
+                }
+
+                let ty = self
+                    .symbol_table
+                    .resolve(name)
+                    .map(|s| s.ty.clone())
+                    .ok_or_else(|| {
+                        AnalysisError::new_with_span(
+                            &format!("Undefined variable '{}'", name),
+                            span,
+                        )
+                    })?;
+
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Ident(name.clone()),
+                    ty,
+                    span: *span,
+                })
+            }
+            Expr::Array(elements, _) => {
+                let mut typed_elements = Vec::new();
+                for elem in elements {
+                    typed_elements.push(self.infer_expr(elem)?);
+                }
+                // For now, default to i64 array
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Array(typed_elements),
+                    ty: Type::I64,
+                    span,
+                })
+            }
+            Expr::Binary {
+                op,
+                left,
+                right,
+                span,
+            } => {
+                let typed_left = self.infer_expr(left)?;
+                let typed_right = self.infer_expr(right)?;
+
+                let ty = self.infer_binary_op_type(op, &typed_left.ty, &typed_right.ty, span)?;
+
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Binary {
+                        op: *op,
+                        left: Box::new(typed_left),
+                        right: Box::new(typed_right),
+                    },
+                    ty,
+                    span: *span,
+                })
+            }
+            Expr::Unary { op, expr, span } => {
+                let typed_expr = self.infer_expr(expr)?;
+                let ty = self.infer_unary_op_type(op, &typed_expr.ty, span)?;
+
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Unary {
+                        op: *op,
+                        expr: Box::new(typed_expr),
+                    },
+                    ty,
+                    span: *span,
+                })
+            }
+            Expr::Call {
+                name,
+                namespace,
+                args,
+                span,
+            } => {
+                let mut typed_args = Vec::new();
+                for arg in args {
+                    typed_args.push(self.infer_expr(arg)?);
+                }
+
+                // Check for special cases
+                if namespace.as_deref() == Some("io") && name == "println" {
+                    return Ok(TypedExpr {
+                        expr: TypedExprKind::Call {
+                            name: name.clone(),
+                            namespace: namespace.clone(),
+                            args: typed_args,
+                        },
+                        ty: Type::Void,
+                        span: *span,
+                    });
+                }
+
+                // Try to resolve function return type
+                let fn_name = if let Some(ns) = namespace {
+                    format!("{}_{}", ns, name)
+                } else {
+                    name.clone()
+                };
+
+                let ty = self
+                    .symbol_table
+                    .resolve(&fn_name)
+                    .map(|s| s.ty.clone())
+                    .unwrap_or(Type::I64); // Default to i64 if not found
+
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Call {
+                        name: name.clone(),
+                        namespace: namespace.clone(),
+                        args: typed_args,
+                    },
+                    ty,
+                    span: *span,
+                })
+            }
+            Expr::If {
+                condition,
+                capture,
+                then_branch,
+                else_branch,
+                span,
+            } => {
+                let typed_condition = self.infer_expr(condition)?;
+                let typed_then = self.infer_expr(then_branch)?;
+                let typed_else = self.infer_expr(else_branch)?;
+
+                // The type of an if expression is the type of the then branch
+                // (or the else branch if they differ, but for now we use then_branch type)
+                let ty = typed_then.ty.clone();
+
+                Ok(TypedExpr {
+                    expr: TypedExprKind::If {
+                        condition: Box::new(typed_condition),
+                        capture: capture.clone(),
+                        then_branch: Box::new(typed_then),
+                        else_branch: Box::new(typed_else),
+                    },
+                    ty,
+                    span: *span,
+                })
+            }
+            Expr::Block { stmts, span } => {
+                self.symbol_table.enter_scope();
+                let mut typed_stmts = Vec::new();
+                for s in stmts {
+                    typed_stmts.push(self.infer_stmt(s)?);
+                }
+                self.symbol_table.exit_scope();
+
+                // Try to get the type from the last expression statement
+                let ty = typed_stmts
+                    .last()
+                    .and_then(|s| {
+                        if let TypedStmtKind::Expr { expr } = &s.stmt {
+                            Some(expr.ty.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(Type::Void);
+
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Block { stmts: typed_stmts },
+                    ty,
+                    span: *span,
+                })
+            }
+            Expr::MemberAccess {
+                object,
+                member,
+                span,
+            } => {
+                let typed_object = self.infer_expr(object)?;
+
+                // For now, default to i64
+                // In a full implementation, we would look up the struct field type
+                Ok(TypedExpr {
+                    expr: TypedExprKind::MemberAccess {
+                        object: Box::new(typed_object),
+                        member: member.clone(),
+                    },
+                    ty: Type::I64,
+                    span: *span,
+                })
+            }
+            Expr::Struct { name, fields, span } => {
+                let mut typed_fields = Vec::new();
+                for (field_name, field_expr) in fields {
+                    typed_fields.push((field_name.clone(), self.infer_expr(field_expr)?));
+                }
+
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Struct {
+                        name: name.clone(),
+                        fields: typed_fields,
+                    },
+                    ty: Type::Custom {
+                        name: name.clone(),
+                        generic_args: vec![],
+                        is_exported: false,
+                    },
+                    span: *span,
+                })
+            }
+            Expr::Try { expr, span } => {
+                let typed_expr = self.infer_expr(expr)?;
+
+                // Try unwraps the Result type to get the inner type
+                let ty = if let Type::Result(inner) = &typed_expr.ty {
+                    inner.as_ref().clone()
+                } else {
+                    typed_expr.ty.clone()
+                };
+
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Try {
+                        expr: Box::new(typed_expr),
+                    },
+                    ty,
+                    span: *span,
+                })
+            }
+            Expr::Catch {
+                expr,
+                error_var,
+                body,
+                span,
+            } => {
+                let typed_expr = self.infer_expr(expr)?;
+
+                // Handle error variable scope
+                let has_error_var = error_var.is_some();
+                if let Some(ev) = error_var {
+                    self.symbol_table
+                        .define(ev.clone(), Type::Error, Visibility::Private, false);
+                }
+
+                let typed_body = self.infer_expr(body)?;
+
+                // Remove error variable from scope
+                if has_error_var {
+                    self.symbol_table.exit_scope();
+                }
+
+                // Catch expression returns the body type
+                let body_ty = typed_body.ty.clone();
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Catch {
+                        expr: Box::new(typed_expr),
+                        error_var: error_var.clone(),
+                        body: Box::new(typed_body),
+                    },
+                    ty: body_ty,
+                    span: *span,
+                })
+            }
+        }
+    }
+
+    /// Infer the result type of a binary operation
+    fn infer_binary_op_type(
+        &self,
+        op: &BinaryOp,
+        left_ty: &Type,
+        right_ty: &Type,
+        span: &Span,
+    ) -> AnalysisResult<Type> {
+        match op {
+            BinaryOp::Add
+            | BinaryOp::Sub
+            | BinaryOp::Mul
+            | BinaryOp::Div
+            | BinaryOp::Mod
+            | BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => {
+                // Numeric operations return the left operand type (or numeric)
+                if self.is_numeric(left_ty) && self.is_numeric(right_ty) {
+                    Ok(left_ty.clone())
+                } else {
+                    Err(AnalysisError::new_with_span(
+                        "Binary operation requires numeric operands",
+                        span,
+                    ))
+                }
+            }
+            BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Gt
+            | BinaryOp::Le
+            | BinaryOp::Ge => {
+                // Comparison operations return bool
+                Ok(Type::Bool)
+            }
+            BinaryOp::And | BinaryOp::Or => {
+                // Logical operations require bool operands
+                if *left_ty == Type::Bool && *right_ty == Type::Bool {
+                    Ok(Type::Bool)
+                } else {
+                    Err(AnalysisError::new_with_span(
+                        "Logical operation requires boolean operands",
+                        span,
+                    ))
+                }
+            }
+            BinaryOp::Range => {
+                // Range operator - return a tuple or iterator type
+                Ok(Type::Tuple(vec![left_ty.clone(), right_ty.clone()]))
+            }
+        }
+    }
+
+    /// Infer the result type of a unary operation
+    fn infer_unary_op_type(
+        &self,
+        op: &UnaryOp,
+        expr_ty: &Type,
+        span: &Span,
+    ) -> AnalysisResult<Type> {
+        match op {
+            UnaryOp::Neg => {
+                // Negation requires numeric type
+                if self.is_numeric(expr_ty) {
+                    Ok(expr_ty.clone())
+                } else {
+                    Err(AnalysisError::new_with_span(
+                        "Negation requires numeric operand",
+                        span,
+                    ))
+                }
+            }
+            UnaryOp::Pos => {
+                // Positive sign - just pass through
+                Ok(expr_ty.clone())
+            }
+            UnaryOp::Not => {
+                // Logical not requires bool
+                if *expr_ty == Type::Bool {
+                    Ok(Type::Bool)
+                } else {
+                    Err(AnalysisError::new_with_span(
+                        "Logical not requires boolean operand",
+                        span,
+                    ))
+                }
+            }
+        }
+    }
+
+    /// Check if a type is numeric
+    fn is_numeric(&self, ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::I8
+                | Type::I16
+                | Type::I32
+                | Type::I64
+                | Type::U8
+                | Type::U16
+                | Type::U32
+                | Type::U64
+        )
+    }
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+/// Infer types for a program and produce a type-annotated AST
+pub fn infer_types(program: &Program, symbol_table: SymbolTable) -> AnalysisResult<TypedProgram> {
+    let mut inferrer = TypeInferrer::new(symbol_table);
+    inferrer.infer_program(program)
+}
