@@ -1,5 +1,6 @@
 use crate::ast::{Span, Visibility};
 use crate::sema::error::{AnalysisError, AnalysisResult};
+use crate::sema::infer::TypedProgram;
 use crate::sema::symbol::SymbolTable;
 
 // ============================================================================
@@ -9,11 +10,15 @@ use crate::sema::symbol::SymbolTable;
 
 pub struct MutabilityAnalyzer {
     symbol_table: SymbolTable,
+    typed_program: TypedProgram,
 }
 
 impl MutabilityAnalyzer {
-    pub fn new(symbol_table: SymbolTable) -> Self {
-        MutabilityAnalyzer { symbol_table }
+    pub fn new(symbol_table: SymbolTable, typed_program: TypedProgram) -> Self {
+        MutabilityAnalyzer {
+            symbol_table,
+            typed_program,
+        }
     }
 
     pub fn analyze(&mut self, program: &crate::ast::Program) -> AnalysisResult<()> {

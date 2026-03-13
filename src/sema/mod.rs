@@ -58,11 +58,11 @@ impl SemanticAnalyzer {
         // Pass 4: Type inference - produce type-annotated AST (must run before mutability)
         let symbol_table = symbol_resolver.get_symbol_table().clone();
         let typed_prog = infer_types(program, symbol_table)?;
-        self.typed_program = Some(typed_prog);
+        self.typed_program = Some(typed_prog.clone());
 
         // Pass 5: Mutability analysis
         let symbol_table = symbol_resolver.get_symbol_table().clone();
-        let mut mutability_analyzer = MutabilityAnalyzer::new(symbol_table);
+        let mut mutability_analyzer = MutabilityAnalyzer::new(symbol_table, typed_prog);
         mutability_analyzer.analyze(program)?;
 
         // Store final symbol table
