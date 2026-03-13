@@ -201,13 +201,36 @@ impl SymbolResolver {
                 span,
             } => {
                 if target != "_" {
-                    self.symbol_table.resolve(target).ok_or_else(|| {
-                        AnalysisError::new_with_span(
-                            &format!("Undefined variable '{}'", target),
-                            span,
-                        )
-                        .with_module("resolver")
-                    })?;
+                    // Check if this is a member access (contains a dot)
+                    if target.contains('.') {
+                        // For member access like "self.i", we need to handle it specially
+                        // Split by dot - the first part is the base identifier
+                        let parts: Vec<&str> = target.split('.').collect();
+                        if let Some(base) = parts.first() {
+                            // Check if the base identifier is in the symbol table
+                            // or if it's a special case like 'self' (method receiver)
+                            if *base != "self" {
+                                self.symbol_table.resolve(base).ok_or_else(|| {
+                                    AnalysisError::new_with_span(
+                                        &format!("Undefined variable '{}'", base),
+                                        span,
+                                    )
+                                    .with_module("resolver")
+                                })?;
+                            }
+                            // For now, we skip detailed member validation
+                            // The expression analyzer will handle proper member access validation
+                        }
+                    } else {
+                        // Regular variable assignment - resolve the identifier
+                        self.symbol_table.resolve(target).ok_or_else(|| {
+                            AnalysisError::new_with_span(
+                                &format!("Undefined variable '{}'", target),
+                                span,
+                            )
+                            .with_module("resolver")
+                        })?;
+                    }
                 }
                 self.analyze_expression(value)?;
                 Ok(())
@@ -328,7 +351,7 @@ impl SymbolResolver {
                     .map(|s| s.ty.clone())
                     .ok_or_else(|| {
                         AnalysisError::new_with_span(
-                            &format!("Undefined identifier '{}'", name),
+                            &format!("Undefined variable '{}'", name),
                             span,
                         )
                         .with_module("resolver")

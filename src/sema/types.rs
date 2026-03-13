@@ -20,6 +20,18 @@ impl TypeAnalyzer {
         for f in &program.functions {
             self.analyze_function(f)?;
         }
+        // Also analyze struct methods
+        for s in &program.structs {
+            for method in &s.methods {
+                self.analyze_function(method)?;
+            }
+        }
+        // Also analyze enum methods
+        for e in &program.enums {
+            for method in &e.methods {
+                self.analyze_function(method)?;
+            }
+        }
         Ok(())
     }
 
@@ -269,29 +281,52 @@ impl TypeAnalyzer {
                 span,
             } => {
                 if target != "_" {
-                    let symbol_ty = self
-                        .symbol_table
-                        .resolve(target)
-                        .map(|s| s.ty.clone())
-                        .ok_or_else(|| {
-                            AnalysisError::new_with_span(
-                                &format!("Undefined variable '{}'", target),
+                    // Check if this is a member access (contains a dot)
+                    if target.contains('.') {
+                        // For member access like "self.i", we need to handle it specially
+                        // Split by dot - the first part is the base identifier
+                        let parts: Vec<&str> = target.split('.').collect();
+                        if let Some(base) = parts.first() {
+                            // Check if the base identifier is in the symbol table
+                            // or if it's a special case like 'self' (method receiver)
+                            if *base != "self" {
+                                let _ = self.symbol_table.resolve(base).ok_or_else(|| {
+                                    AnalysisError::new_with_span(
+                                        &format!("Undefined variable '{}'", base),
+                                        span,
+                                    )
+                                })?;
+                            }
+                            // For now, we skip detailed type validation for member assignments
+                            // The type will be validated when analyzing the expression
+                        }
+                    } else {
+                        // Regular variable assignment - resolve the identifier
+                        let symbol_ty = self
+                            .symbol_table
+                            .resolve(target)
+                            .map(|s| s.ty.clone())
+                            .ok_or_else(|| {
+                                AnalysisError::new_with_span(
+                                    &format!("Undefined variable '{}'", target),
+                                    span,
+                                )
+                                .with_module("types")
+                            })?;
+                        let expr_ty = self.analyze_expression(value)?;
+                        if !self.types_compatible(&symbol_ty, &expr_ty) {
+                            return Err(AnalysisError::new_with_span(
+                                &format!(
+                                    "Type mismatch in assignment to '{}': expected {}, found {}",
+                                    target, symbol_ty, expr_ty
+                                ),
                                 span,
                             )
-                            .with_module("types")
-                        })?;
-                    let expr_ty = self.analyze_expression(value)?;
-                    if !self.types_compatible(&symbol_ty, &expr_ty) {
-                        return Err(AnalysisError::new_with_span(
-                            &format!(
-                                "Type mismatch in assignment to '{}': expected {}, found {}",
-                                target, symbol_ty, expr_ty
-                            ),
-                            span,
-                        )
-                        .with_module("types"));
+                            .with_module("types"));
+                        }
                     }
                 }
+                self.analyze_expression(value)?;
                 Ok(())
             }
             crate::ast::Stmt::Return { value, .. } => {

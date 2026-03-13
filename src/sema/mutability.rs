@@ -54,23 +54,57 @@ impl MutabilityAnalyzer {
                 span,
             } => {
                 if target != "_" {
-                    let is_const = self
-                        .symbol_table
-                        .resolve(target)
-                        .map(|s| s.is_const)
-                        .ok_or_else(|| {
-                            AnalysisError::new_with_span(
-                                &format!("Undefined variable '{}'", target),
+                    // Check if this is a member access (contains a dot)
+                    if target.contains('.') {
+                        // For member access like "self.i", we need to handle it specially
+                        // Split by dot - the first part is the base identifier
+                        let parts: Vec<&str> = target.split('.').collect();
+                        if let Some(base) = parts.first() {
+                            // Check if the base identifier is in the symbol table
+                            // or if it's a special case like 'self' (method receiver)
+                            if *base != "self" {
+                                let is_const = self
+                                    .symbol_table
+                                    .resolve(base)
+                                    .map(|s| s.is_const)
+                                    .ok_or_else(|| {
+                                        AnalysisError::new_with_span(
+                                            &format!("Undefined variable '{}'", base),
+                                            span,
+                                        )
+                                        .with_module("mutability")
+                                    })?;
+                                if is_const {
+                                    return Err(AnalysisError::new_with_span(
+                                        &format!("Cannot reassign constant variable '{}'", base),
+                                        span,
+                                    )
+                                    .with_module("mutability"));
+                                }
+                            }
+                            // For member assignments, we skip const check for now
+                            // The field mutability would need more complex handling
+                        }
+                    } else {
+                        // Regular variable assignment
+                        let is_const = self
+                            .symbol_table
+                            .resolve(target)
+                            .map(|s| s.is_const)
+                            .ok_or_else(|| {
+                                AnalysisError::new_with_span(
+                                    &format!("Undefined variable '{}'", target),
+                                    span,
+                                )
+                                .with_module("mutability")
+                            })?;
+                        if is_const {
+                            return Err(AnalysisError::new_with_span(
+                                &format!("Cannot reassign constant variable '{}'", target),
                                 span,
                             )
-                            .with_module("mutability")
-                        })?;
-                    if is_const {
-                        return Err(AnalysisError::new_with_span(
-                            &format!("Cannot reassign constant variable '{}'", target),
-                            span,
-                        )
-                        .with_module("mutability"));
+                            .with_module("mutability"));
+                        }
                     }
                 }
                 Ok(())

@@ -1681,6 +1681,7 @@ impl Parser {
     /// Parse for statement
     /// If a label is provided (e.g., from a preceding identifier:colon), use it
     fn parse_for_stmt(&mut self, label: Option<String>) -> Result<Stmt, ParseError> {
+        let start = self.current_token().map(|t| t.span.start).unwrap_or(0);
         self.advance(); // consume 'for'
 
         let mut var_name = None;
@@ -1778,7 +1779,10 @@ impl Parser {
             capture,
             index_var,
             body,
-            span: Span { start: 0, end: 0 },
+            span: Span {
+                start,
+                end: start + 3,
+            }, // 'for' is 3 characters
         })
     }
 

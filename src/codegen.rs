@@ -263,9 +263,9 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
 
         // For void functions, we need to handle implicit returns properly
-        // For main function, if return type is Void, treat it as i64 (return 0)
+        // For main function, if return type is Void, treat it as void (return nothing)
         // void! returns i64 (error code), so it's not void
-        let is_void = hir_fn.return_ty == Type::Void && hir_fn.name != "main";
+        let is_void = hir_fn.return_ty == Type::Void;
 
         // Track statements
         let stmt_count = hir_fn.body.len();
@@ -542,9 +542,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Check what type of iterable we have
                 match &iter_val {
                     BasicValueEnum::StructValue(sv) => {
-                        // This could be an optional type or a tuple/range
-                        // Structure for optional: { value, valid_flag }
-                        // Structure for tuple: { elem1, elem2, ... }
+                        // This is a range or tuple: { start, end } or { elem1, elem2, ... }
+                        // For ranges, we check if start < end
 
                         let cond_block = self.context.append_basic_block(function, "for_cond");
                         let body_block = self.context.append_basic_block(function, "for_body");
@@ -557,9 +556,32 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // Jump to condition block
                         self.builder.build_unconditional_branch(cond_block)?;
 
-                        // Condition block
+                        // Condition block - check if start < end for range
                         self.builder.position_at_end(cond_block);
-                        let is_some = self.condition_to_i1(iter_val, "for_is_some")?;
+
+                        // Check the LLVM type to determine if this is optional (i1 second field) or range (i64 second field)
+                        let struct_type = sv.get_type();
+                        let types = struct_type.get_field_types();
+                        let second_is_i1 = types
+                            .get(1)
+                            .map(|t| t.is_int_type() && t.into_int_type().get_bit_width() == 1)
+                            .unwrap_or(false);
+
+                        let is_some = if second_is_i1 {
+                            // Optional type: extract valid flag (second element) - it's i1
+                            let valid = self.builder.build_extract_value(*sv, 1, "is_valid")?;
+                            valid.into_int_value()
+                        } else {
+                            // Range/tuple: check if first element < second element
+                            let start = self.builder.build_extract_value(*sv, 0, "range_start")?;
+                            let end = self.builder.build_extract_value(*sv, 1, "range_end")?;
+                            self.builder.build_int_compare(
+                                inkwell::IntPredicate::SLT,
+                                start.into_int_value(),
+                                end.into_int_value(),
+                                "range_cmp",
+                            )?
+                        };
                         self.builder
                             .build_conditional_branch(is_some, body_block, end_block)?;
 
@@ -590,8 +612,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                             self.variable_types.insert(name.clone(), Type::I64);
                         }
 
+                        // Generate body - only add fallthrough branch if the block doesn't already have a terminator
+                        // This handles the case where body contains a break that exits to an outer loop
                         self.generate_hir_stmt(body)?;
-                        self.builder.build_unconditional_branch(cond_block)?;
+                        let current_block = self.builder.get_insert_block().unwrap();
+                        if current_block.get_terminator().is_none() {
+                            self.builder.build_unconditional_branch(cond_block)?;
+                        }
 
                         // Pop the end block from the loop stack
                         self.loop_end_blocks.pop();
@@ -652,8 +679,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                             self.variable_types.insert(name.clone(), Type::I64);
                         }
 
+                        // Generate body - only add fallthrough branch if the block doesn't already have a terminator
                         self.generate_hir_stmt(body)?;
-                        self.builder.build_unconditional_branch(cond_block)?;
+                        let current_block = self.builder.get_insert_block().unwrap();
+                        if current_block.get_terminator().is_none() {
+                            self.builder.build_unconditional_branch(cond_block)?;
+                        }
 
                         // Pop the end block from the loop stack
                         self.loop_end_blocks.pop();
@@ -721,77 +752,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                             self.variable_types.insert(name.clone(), Type::I64);
                         }
 
+                        // Generate body - only add fallthrough branch if the block doesn't already have a terminator
                         self.generate_hir_stmt(body)?;
-                        self.builder.build_unconditional_branch(cond_block)?;
-
-                        // Pop the end block from the loop stack
-                        self.loop_end_blocks.pop();
-
-                        // End block
-                        self.builder.position_at_end(end_block);
-
-                        // Clean up
-                        if let Some(name) = &var_name_for_body {
-                            self.variables.remove(name);
-                            self.variable_types.remove(name);
+                        let current_block = self.builder.get_insert_block().unwrap();
+                        if current_block.get_terminator().is_none() {
+                            self.builder.build_unconditional_branch(cond_block)?;
                         }
-                        if let Some(name) = &index_var_for_body {
-                            self.variables.remove(name);
-                            self.variable_types.remove(name);
-                        }
-
-                        Ok(())
-                    }
-                    _ => {
-                        // For boolean conditions or other types, treat as while loop
-                        // But if there's a var_name, we still need to handle it
-                        let function = self.current_function.unwrap();
-
-                        // Clone for use in the code
-                        let var_name_for_body = var_name.clone();
-                        let index_var_for_body = index_var.clone();
-
-                        let cond_block = self.context.append_basic_block(function, "for_cond");
-                        let body_block = self.context.append_basic_block(function, "for_body");
-                        let end_block = self.context.append_basic_block(function, "for_end");
-
-                        // Push the end block onto the loop stack
-                        self.loop_end_blocks
-                            .push(vec![(end_block, label_clone.clone())]);
-
-                        // Jump to condition block
-                        self.builder.build_unconditional_branch(cond_block)?;
-
-                        // Condition block
-                        self.builder.position_at_end(cond_block);
-                        let is_true = self.condition_to_i1(iter_val, "for_is_true")?;
-                        self.builder
-                            .build_conditional_branch(is_true, body_block, end_block)?;
-
-                        // Body block
-                        self.builder.position_at_end(body_block);
-
-                        // Handle capture variables even in the generic case
-                        if let Some(name) = &var_name_for_body {
-                            let alloca =
-                                self.builder.build_alloca(self.context.i64_type(), name)?;
-                            self.builder
-                                .build_store(alloca, self.context.i64_type().const_int(0, false))?;
-                            self.variables.insert(name.clone(), alloca);
-                            self.variable_types.insert(name.clone(), Type::I64);
-                        }
-
-                        if let Some(name) = &index_var_for_body {
-                            let alloca =
-                                self.builder.build_alloca(self.context.i64_type(), name)?;
-                            self.builder
-                                .build_store(alloca, self.context.i64_type().const_int(0, false))?;
-                            self.variables.insert(name.clone(), alloca);
-                            self.variable_types.insert(name.clone(), Type::I64);
-                        }
-
-                        self.generate_hir_stmt(body)?;
-                        self.builder.build_unconditional_branch(cond_block)?;
 
                         // Pop the end block from the loop stack
                         self.loop_end_blocks.pop();
@@ -1214,7 +1180,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 args,
                 ..
             } => {
-                let (mangled_name, _is_std) = if let Some(ns) = namespace.as_deref() {
+                let (mangled_name, _is_std, needs_self) = if let Some(ns) = namespace.as_deref() {
                     // First, check if the namespace is a variable with a struct type
                     // This handles method calls like "f.next()" where f is a struct instance
                     if let Some(var_type) = self.variable_types.get(ns) {
@@ -1226,10 +1192,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                             let mangled = format!("{}_{}", type_name, name);
                             // Try the mangled name first
                             if self.module.get_function(&mangled).is_some() {
-                                (mangled, false)
+                                (mangled, false, true)
                             } else {
                                 // Fallback to demangled name
-                                (name.clone(), false)
+                                (name.clone(), false, true)
                             }
                         } else {
                             // Not a custom type, use the namespace as-is
@@ -1243,7 +1209,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 return self.generate_hir_io_println(args);
                             }
 
-                            (format!("{}_{}", actual_package, name), true)
+                            (format!("{}_{}", actual_package, name), true, false)
                         }
                     } else {
                         // Namespace is not a known variable - treat as package namespace
@@ -1257,13 +1223,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                             return self.generate_hir_io_println(args);
                         }
 
-                        (format!("{}_{}", actual_package, name), true)
+                        (format!("{}_{}", actual_package, name), true, false)
                     }
                 } else {
                     if name == "main" {
-                        ("main".to_string(), false)
+                        ("main".to_string(), false, false)
                     } else {
-                        (format!("{}_{}", self.module_name, name), false)
+                        (format!("{}_{}", self.module_name, name), false, false)
                     }
                 };
 
@@ -1277,6 +1243,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                     ))?;
 
                 let mut llvm_args = Vec::new();
+
+                // If this is a method call on a struct instance, add self as first argument
+                if needs_self {
+                    if let Some(ns) = namespace.as_deref() {
+                        if let Some(ptr) = self.variables.get(ns) {
+                            let val = self.builder.build_load(self.context.i64_type(), *ptr, ns)?;
+                            llvm_args.push(BasicMetadataValueEnum::from(val));
+                        }
+                    }
+                }
+
                 for arg in args {
                     let val = self.generate_hir_expr(arg)?;
                     llvm_args.push(BasicMetadataValueEnum::from(val));
@@ -1602,12 +1579,23 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Methods are named as StructName_methodname
         // Always declare methods regardless of struct visibility
         for method in &struct_def.methods {
-            // For methods, we need to add the struct as a first parameter (self)
-            let mut param_types: Vec<Type> = vec![Type::Custom {
-                name: struct_name.clone(),
-                generic_args: vec![],
-                is_exported: true,
-            }];
+            // For methods, add the struct as a first parameter (self) only if not already present
+            // Check if the first parameter is 'self' (either named "self" or "Self")
+            let has_self_param = method
+                .params
+                .iter()
+                .any(|p| p.name == "self" || p.name == "Self");
+
+            let mut param_types: Vec<Type> = Vec::new();
+
+            // Only add struct type as first parameter if there's no explicit self parameter
+            if !has_self_param {
+                param_types.push(Type::Custom {
+                    name: struct_name.clone(),
+                    generic_args: vec![],
+                    is_exported: true,
+                });
+            }
             param_types.extend(method.params.iter().map(|p| p.ty.clone()));
 
             let fn_type = self.build_function_type(&method.return_ty, &param_types);
