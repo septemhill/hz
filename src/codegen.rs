@@ -51,6 +51,10 @@ pub struct CodeGenerator<'ctx> {
     // Return type of current function
     return_type: Option<Type>,
 
+    // Stack of loop end blocks for break statements
+    // Each entry is a vector of (end_block, label) pairs
+    loop_end_blocks: Vec<Vec<(inkwell::basic_block::BasicBlock<'ctx>, Option<String>)>>,
+
     // Standard library
     stdlib: StdLib,
 
@@ -84,6 +88,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             defer_stack: Vec::new(),
             defer_bang_stack: Vec::new(),
             return_type: None,
+            loop_end_blocks: Vec::new(),
             stdlib,
             imported_packages: HashMap::new(),
             module_name: module_name.to_string(),
@@ -515,6 +520,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(())
             }
             hir::HirStmt::For {
+                label: _,
                 var_name,
                 iterable,
                 body,
@@ -525,6 +531,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let cond_block = self.context.append_basic_block(function, "for_cond");
                 let body_block = self.context.append_basic_block(function, "for_body");
                 let end_block = self.context.append_basic_block(function, "for_end");
+
+                // Push the end block onto the loop stack
+                self.loop_end_blocks.push(vec![(end_block, None)]);
 
                 // Jump to condition block
                 self.builder.build_unconditional_branch(cond_block)?;
@@ -540,6 +549,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.position_at_end(body_block);
                 self.generate_hir_stmt(body)?;
                 self.builder.build_unconditional_branch(cond_block)?;
+
+                // Pop the end block from the loop stack
+                self.loop_end_blocks.pop();
 
                 // End block
                 self.builder.position_at_end(end_block);
@@ -601,6 +613,37 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Add the deferred! statement to the current scope's defer! list
                 // It will be executed only when an error occurs (try returns error but not caught)
                 self.add_defer_bang((**stmt).clone());
+                Ok(())
+            }
+            hir::HirStmt::Break { label, span } => {
+                // For now, break just branches to the end block
+                // In the future, we could use label to break out of specific loops
+                if let Some(loop_stack) = self.loop_end_blocks.last() {
+                    // Find the appropriate end block
+                    if let Some(target_block) = loop_stack.iter().find_map(|(block, l)| {
+                        if l.as_ref() == label.as_ref() {
+                            Some(*block)
+                        } else if label.is_none() {
+                            // If no label specified, use the innermost loop
+                            Some(*block)
+                        } else {
+                            None
+                        }
+                    }) {
+                        self.builder.build_unconditional_branch(target_block)?;
+                    } else {
+                        return Err(format!(
+                            "break statement with label '{}' not found in scope at span {:?}",
+                            label.as_deref().unwrap_or("none"),
+                            span
+                        )
+                        .into());
+                    }
+                } else {
+                    return Err(
+                        format!("break statement outside of loop at span {:?}", span).into(),
+                    );
+                }
                 Ok(())
             }
         }
@@ -1717,6 +1760,37 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // DeferBang is similar to Defer but only executes on error
                 // For now, just generate the deferred statement immediately
                 self.generate_stmt(stmt)?;
+                Ok(())
+            }
+            Stmt::Break { label, span } => {
+                // Break statement - similar handling as in HirStmt
+                // For now, break just branches to the end block
+                if let Some(loop_stack) = self.loop_end_blocks.last() {
+                    // Find the appropriate end block
+                    if let Some(target_block) = loop_stack.iter().find_map(|(block, l)| {
+                        if l.as_ref() == label.as_ref() {
+                            Some(*block)
+                        } else if label.is_none() {
+                            // If no label specified, use the innermost loop
+                            Some(*block)
+                        } else {
+                            None
+                        }
+                    }) {
+                        self.builder.build_unconditional_branch(target_block)?;
+                    } else {
+                        return Err(format!(
+                            "break statement with label '{}' not found in scope at span {:?}",
+                            label.as_deref().unwrap_or("none"),
+                            span
+                        )
+                        .into());
+                    }
+                } else {
+                    return Err(
+                        format!("break statement outside of loop at span {:?}", span).into(),
+                    );
+                }
                 Ok(())
             }
         }

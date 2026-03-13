@@ -579,12 +579,14 @@ impl LoweringContext {
                 })
             }
             ast::Stmt::For {
+                label,
                 var_name,
                 iterable,
                 body,
                 span,
                 ..
             } => hir::HirStmt::For {
+                label: label.clone(),
                 var_name: var_name.clone(),
                 iterable: self.lower_expr(iterable),
                 body: Box::new(self.lower_stmt(body)),
@@ -620,6 +622,10 @@ impl LoweringContext {
                     span: *span,
                 })
             }
+            ast::Stmt::Break { label, span } => hir::HirStmt::Break {
+                label: label.clone(),
+                span: *span,
+            },
         }
     }
 

@@ -423,6 +423,8 @@ pub enum Stmt {
     },
     /// For loop
     For {
+        /// Optional label (e.g., outer: for ...)
+        label: Option<String>,
         /// Optional index or element variable (e.g., for i in range)
         var_name: Option<String>,
         iterable: Expr,
@@ -443,6 +445,8 @@ pub enum Stmt {
     Defer { stmt: Box<Stmt>, span: Span },
     /// Defer! statement (executes only on error in try statement)
     DeferBang { stmt: Box<Stmt>, span: Span },
+    /// Break statement (exits a loop)
+    Break { label: Option<String>, span: Span },
 }
 
 /// Function definition AST node

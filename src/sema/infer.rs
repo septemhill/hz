@@ -141,6 +141,7 @@ pub enum TypedStmtKind {
     },
     /// For loop
     For {
+        label: Option<String>,
         var_name: Option<String>,
         iterable: TypedExpr,
         capture: Option<String>,
@@ -156,6 +157,8 @@ pub enum TypedStmtKind {
     Defer { stmt: Box<TypedStmt> },
     /// Defer! statement
     DeferBang { stmt: Box<TypedStmt> },
+    /// Break statement
+    Break { label: Option<String> },
 }
 
 #[derive(Debug, Clone)]
@@ -282,6 +285,7 @@ impl TypeInferrer {
             Stmt::Switch { span, .. } => *span,
             Stmt::Defer { span, .. } => *span,
             Stmt::DeferBang { span, .. } => *span,
+            Stmt::Break { span, .. } => *span,
         };
 
         match stmt {
@@ -436,6 +440,7 @@ impl TypeInferrer {
                 })
             }
             Stmt::For {
+                label,
                 var_name,
                 iterable,
                 capture,
@@ -465,6 +470,7 @@ impl TypeInferrer {
 
                 Ok(TypedStmt {
                     stmt: TypedStmtKind::For {
+                        label: label.clone(),
                         var_name: var_name.clone(),
                         iterable: typed_iterable,
                         capture: capture.clone(),
@@ -523,6 +529,12 @@ impl TypeInferrer {
                     span: *span,
                 })
             }
+            Stmt::Break { label, span } => Ok(TypedStmt {
+                stmt: TypedStmtKind::Break {
+                    label: label.clone(),
+                },
+                span: *span,
+            }),
         }
     }
 

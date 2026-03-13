@@ -116,6 +116,7 @@ pub enum HirStmt {
     },
     /// For loop
     For {
+        label: Option<String>,
         var_name: Option<String>,
         iterable: HirExpr,
         body: Box<HirStmt>,
@@ -129,6 +130,11 @@ pub enum HirStmt {
     /// DeferBang statement (executes only on error in try statement)
     DeferBang {
         stmt: Box<HirStmt>,
+        span: Span,
+    },
+    /// Break statement (exits a loop)
+    Break {
+        label: Option<String>,
         span: Span,
     },
 }

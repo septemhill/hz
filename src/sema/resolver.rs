@@ -254,6 +254,7 @@ impl SymbolResolver {
                 Ok(())
             }
             crate::ast::Stmt::For {
+                label,
                 var_name,
                 iterable,
                 capture,
@@ -307,6 +308,10 @@ impl SymbolResolver {
             crate::ast::Stmt::DeferBang { stmt, .. } => {
                 // DeferBang is similar to Defer but only executes on error
                 self.analyze_statement(stmt)?;
+                Ok(())
+            }
+            crate::ast::Stmt::Break { .. } => {
+                // Break statement - no special analysis needed at resolve phase
                 Ok(())
             }
         }

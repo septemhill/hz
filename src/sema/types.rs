@@ -112,6 +112,7 @@ impl TypeAnalyzer {
             }
             crate::ast::Stmt::Assign { value, .. } => self.expr_find_try(value),
             crate::ast::Stmt::Import { .. } => None,
+            crate::ast::Stmt::Break { .. } => None,
         }
     }
 
@@ -403,6 +404,7 @@ impl TypeAnalyzer {
                 self.analyze_statement(deferred_stmt)?;
                 Ok(())
             }
+            crate::ast::Stmt::Break { .. } => Ok(()),
         }
     }
 

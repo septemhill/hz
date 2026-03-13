@@ -149,6 +149,7 @@ fn get_token_type(token: &Token) -> Option<SemanticTokenType> {
         Token::ErrorKw => Some(SemanticTokenType::Keyword),
         Token::Try => Some(SemanticTokenType::Keyword),
         Token::Catch => Some(SemanticTokenType::Keyword),
+        Token::Break => Some(SemanticTokenType::Keyword),
 
         // Built-in types
         Token::Ident(id) => {

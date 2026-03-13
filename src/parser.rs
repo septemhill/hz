@@ -1145,6 +1145,24 @@ impl Parser {
 
     /// Parse a statement
     fn parse_statement(&mut self) -> Result<Stmt, ParseError> {
+        // Check for labeled for loop: ident: for ...
+        // Look ahead to detect this pattern before token matching
+        if let Token::Ident(label_name) = self.current().cloned().unwrap_or(Token::Eof) {
+            if let Some(next) = self.peek(1) {
+                if next.token == Token::Colon {
+                    if let Some(after_colon) = self.peek(2) {
+                        if after_colon.token == Token::For {
+                            // This is a labeled for loop
+                            self.advance(); // consume identifier
+                            self.advance(); // consume colon
+                            // Now parse for with the label
+                            return self.parse_for_stmt(Some(label_name));
+                        }
+                    }
+                }
+            }
+        }
+
         let token = self.current().cloned().ok_or_else(|| ParseError {
             message: "Unexpected end of input".to_string(),
             location: None,
@@ -1156,7 +1174,8 @@ impl Parser {
             Token::Var => self.parse_var_stmt(),
             Token::Const => self.parse_const_stmt(),
             Token::If => self.parse_if_stmt(),
-            Token::For => self.parse_for_stmt(),
+            Token::For => self.parse_for_stmt(None),
+            Token::Break => self.parse_break_stmt(),
             Token::LBrace => self.parse_block_stmt(),
             Token::Switch => self.parse_switch_stmt(),
             Token::Defer => self.parse_defer_stmt(),
@@ -1190,6 +1209,39 @@ impl Parser {
 
         Ok(Stmt::Return {
             value: Some(value),
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse break statement
+    fn parse_break_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'break'
+
+        self.skip_whitespace();
+
+        // Check for optional label (e.g., break outer;)
+        let label = if let Token::Ident(name) = self.current().cloned().unwrap_or(Token::Eof) {
+            // Check if it's followed by a semicolon (not part of an expression)
+            if let Some(next) = self.peek(1) {
+                if next.token == Token::Semicolon || next.token == Token::RBrace {
+                    let label = name;
+                    self.advance(); // consume label
+                    Some(label)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Consume optional semicolon
+        self.match_token(Token::Semicolon);
+
+        Ok(Stmt::Break {
+            label,
             span: Span { start: 0, end: 0 },
         })
     }
@@ -1627,30 +1679,33 @@ impl Parser {
     }
 
     /// Parse for statement
-    fn parse_for_stmt(&mut self) -> Result<Stmt, ParseError> {
+    /// If a label is provided (e.g., from a preceding identifier:colon), use it
+    fn parse_for_stmt(&mut self, label: Option<String>) -> Result<Stmt, ParseError> {
         self.advance(); // consume 'for'
 
         let mut var_name = None;
+        let iterable: Expr;
 
-        // Handle optional opening parenthesis
-        self.match_token(Token::LParen);
+        // Check if there's an opening parenthesis
+        let has_lparen = self.match_token(Token::LParen);
 
-        // Check if there's a loop variable: for i range iterable
-        if let Token::Ident(name) = self.current().cloned().unwrap_or(Token::Eof) {
-            if let Some(next) = self.peek(1) {
-                if next.token == Token::Range {
-                    var_name = Some(name);
-                    self.advance(); // consume name
-                    self.advance(); // consume 'range'
-                }
+        if has_lparen {
+            // Check if it's empty parentheses: for () { ... } - infinite loop
+            if self.match_token(Token::RParen) {
+                // Empty parentheses - infinite loop, use null as placeholder
+                iterable = Expr::Null(Span { start: 0, end: 0 });
+            } else {
+                // Parse the expression (could be range, array, condition, etc.)
+                iterable = self.parse_expression()?;
+                self.skip_whitespace();
+                // Check for closing parenthesis
+                self.match_token(Token::RParen);
             }
+        } else {
+            // No opening parenthesis - this is infinite loop: for { ... }
+            // Use null as placeholder for iterable
+            iterable = Expr::Null(Span { start: 0, end: 0 });
         }
-
-        let iterable = self.parse_expression()?;
-
-        self.skip_whitespace();
-        // Check for closing parenthesis
-        self.match_token(Token::RParen);
 
         self.skip_whitespace();
         // Check for capture: |e| or |k, v|
@@ -1717,6 +1772,7 @@ impl Parser {
         let body = Box::new(self.parse_statement()?);
 
         Ok(Stmt::For {
+            label,
             var_name,
             iterable,
             capture,

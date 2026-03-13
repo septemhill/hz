@@ -34,6 +34,7 @@ pub enum Token {
     ErrorKw,
     Try,
     Catch,
+    Break,
 
     // Identifiers
     Ident(String),
@@ -138,6 +139,7 @@ impl Token {
             Token::ErrorKw => "error",
             Token::Try => "try",
             Token::Catch => "catch",
+            Token::Break => "break",
             Token::FatArrow => "=>",
             Token::Assign => "=",
             Token::Plus => "+",

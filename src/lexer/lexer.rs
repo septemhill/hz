@@ -276,6 +276,7 @@ impl Lexer {
             }
             "try" => Token::Try,
             "catch" => Token::Catch,
+            "break" => Token::Break,
             "_" => Token::Underscore,
             _ => Token::Ident(ident.clone()),
         };
