@@ -118,6 +118,7 @@ pub enum HirStmt {
     For {
         label: Option<String>,
         var_name: Option<String>,
+        index_var: Option<String>,
         iterable: HirExpr,
         body: Box<HirStmt>,
         span: Span,

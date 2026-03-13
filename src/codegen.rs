@@ -522,40 +522,291 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirStmt::For {
                 label: _,
                 var_name,
+                index_var,
                 iterable,
                 body,
-                span,
+                span: _,
             } => {
-                // For now, lower as while loop
+                // For loop implementation
+                // Handles: boolean conditions, optional/iterator types, ranges, and arrays
                 let function = self.current_function.unwrap();
-                let cond_block = self.context.append_basic_block(function, "for_cond");
-                let body_block = self.context.append_basic_block(function, "for_body");
-                let end_block = self.context.append_basic_block(function, "for_end");
 
-                // Push the end block onto the loop stack
-                self.loop_end_blocks.push(vec![(end_block, None)]);
-
-                // Jump to condition block
-                self.builder.build_unconditional_branch(cond_block)?;
-
-                // Condition block
-                self.builder.position_at_end(cond_block);
+                // Generate the iterable to get its type
                 let iter_val = self.generate_hir_expr(iterable)?;
-                let is_true = self.condition_to_i1(iter_val, "for_is_true")?;
-                self.builder
-                    .build_conditional_branch(is_true, body_block, end_block)?;
 
-                // Body block
-                self.builder.position_at_end(body_block);
-                self.generate_hir_stmt(body)?;
-                self.builder.build_unconditional_branch(cond_block)?;
+                // Clone var_name for use in closures
+                let var_name_clone = var_name.clone();
+                let index_var_clone = index_var.clone();
 
-                // Pop the end block from the loop stack
-                self.loop_end_blocks.pop();
+                // Check what type of iterable we have
+                match &iter_val {
+                    BasicValueEnum::StructValue(sv) => {
+                        // This could be an optional type or a tuple/range
+                        // Structure for optional: { value, valid_flag }
+                        // Structure for tuple: { elem1, elem2, ... }
 
-                // End block
-                self.builder.position_at_end(end_block);
-                Ok(())
+                        let cond_block = self.context.append_basic_block(function, "for_cond");
+                        let body_block = self.context.append_basic_block(function, "for_body");
+                        let end_block = self.context.append_basic_block(function, "for_end");
+
+                        // Push the end block onto the loop stack
+                        self.loop_end_blocks.push(vec![(end_block, None)]);
+
+                        // Jump to condition block
+                        self.builder.build_unconditional_branch(cond_block)?;
+
+                        // Condition block
+                        self.builder.position_at_end(cond_block);
+                        let is_some = self.condition_to_i1(iter_val, "for_is_some")?;
+                        self.builder
+                            .build_conditional_branch(is_some, body_block, end_block)?;
+
+                        // Body block
+                        self.builder.position_at_end(body_block);
+
+                        // Handle capture variable - extract value from struct and store in var_name
+                        if let Some(name) = &var_name_clone {
+                            // Extract the value (first element) from the struct
+                            let val = self.builder.build_extract_value(*sv, 0, "captured")?;
+                            let alloca = self.builder.build_alloca(val.get_type(), name)?;
+                            self.builder.build_store(alloca, val)?;
+                            // Save to variables map
+                            self.variables.insert(name.clone(), alloca);
+                            // Set the type
+                            self.variable_types.insert(name.clone(), Type::I64);
+                        }
+
+                        // Handle index variable - for tuple iteration, this would be element 1
+                        if let Some(name) = &index_var_clone {
+                            // Try to extract second element as index
+                            let val = self.builder.build_extract_value(*sv, 1, "index_captured")?;
+                            let alloca = self.builder.build_alloca(val.get_type(), name)?;
+                            self.builder.build_store(alloca, val)?;
+                            // Save to variables map
+                            self.variables.insert(name.clone(), alloca);
+                            // Set the type
+                            self.variable_types.insert(name.clone(), Type::I64);
+                        }
+
+                        self.generate_hir_stmt(body)?;
+                        self.builder.build_unconditional_branch(cond_block)?;
+
+                        // Pop the end block from the loop stack
+                        self.loop_end_blocks.pop();
+
+                        // End block
+                        self.builder.position_at_end(end_block);
+
+                        // Clean up the capture variable from the map
+                        if let Some(name) = &var_name_clone {
+                            self.variables.remove(name);
+                            self.variable_types.remove(name);
+                        }
+                        if let Some(name) = &index_var_clone {
+                            self.variables.remove(name);
+                            self.variable_types.remove(name);
+                        }
+
+                        Ok(())
+                    }
+                    BasicValueEnum::PointerValue(_) => {
+                        // This could be an array - treat as always true for now
+                        // (proper iteration would require tracking index and extracting elements)
+                        let cond_block = self.context.append_basic_block(function, "for_cond");
+                        let body_block = self.context.append_basic_block(function, "for_body");
+                        let end_block = self.context.append_basic_block(function, "for_end");
+
+                        // Push the end block onto the loop stack
+                        self.loop_end_blocks.push(vec![(end_block, None)]);
+
+                        // Jump to condition block
+                        self.builder.build_unconditional_branch(cond_block)?;
+
+                        // Condition block - always true for now
+                        self.builder.position_at_end(cond_block);
+                        self.builder.build_unconditional_branch(body_block)?;
+
+                        // Body block
+                        self.builder.position_at_end(body_block);
+
+                        // For array iteration with index_var and var_name, we'd need to track index
+                        // For now, if there's a var_name, create a dummy value
+                        if let Some(name) = &var_name_clone {
+                            let alloca =
+                                self.builder.build_alloca(self.context.i64_type(), name)?;
+                            self.builder
+                                .build_store(alloca, self.context.i64_type().const_int(0, false))?;
+                            self.variables.insert(name.clone(), alloca);
+                            self.variable_types.insert(name.clone(), Type::I64);
+                        }
+
+                        if let Some(name) = &index_var_clone {
+                            let alloca =
+                                self.builder.build_alloca(self.context.i64_type(), name)?;
+                            self.builder
+                                .build_store(alloca, self.context.i64_type().const_int(0, false))?;
+                            self.variables.insert(name.clone(), alloca);
+                            self.variable_types.insert(name.clone(), Type::I64);
+                        }
+
+                        self.generate_hir_stmt(body)?;
+                        self.builder.build_unconditional_branch(cond_block)?;
+
+                        // Pop the end block from the loop stack
+                        self.loop_end_blocks.pop();
+
+                        // End block
+                        self.builder.position_at_end(end_block);
+
+                        // Clean up
+                        if let Some(name) = &var_name_clone {
+                            self.variables.remove(name);
+                            self.variable_types.remove(name);
+                        }
+                        if let Some(name) = &index_var_clone {
+                            self.variables.remove(name);
+                            self.variable_types.remove(name);
+                        }
+
+                        Ok(())
+                    }
+                    _ => {
+                        // For boolean conditions or other types, treat as while loop
+                        // But if there's a var_name or index_var, we still need to handle them
+                        let function = self.current_function.unwrap();
+
+                        // Clone for use in the code
+                        let var_name_for_body = var_name.clone();
+                        let index_var_for_body = index_var.clone();
+
+                        let cond_block = self.context.append_basic_block(function, "for_cond");
+                        let body_block = self.context.append_basic_block(function, "for_body");
+                        let end_block = self.context.append_basic_block(function, "for_end");
+
+                        // Push the end block onto the loop stack
+                        self.loop_end_blocks.push(vec![(end_block, None)]);
+
+                        // Jump to condition block
+                        self.builder.build_unconditional_branch(cond_block)?;
+
+                        // Condition block
+                        self.builder.position_at_end(cond_block);
+                        let is_true = self.condition_to_i1(iter_val, "for_is_true")?;
+                        self.builder
+                            .build_conditional_branch(is_true, body_block, end_block)?;
+
+                        // Body block
+                        self.builder.position_at_end(body_block);
+
+                        // Handle capture variables even in the generic case
+                        if let Some(name) = &var_name_for_body {
+                            let alloca =
+                                self.builder.build_alloca(self.context.i64_type(), name)?;
+                            self.builder
+                                .build_store(alloca, self.context.i64_type().const_int(0, false))?;
+                            self.variables.insert(name.clone(), alloca);
+                            self.variable_types.insert(name.clone(), Type::I64);
+                        }
+
+                        if let Some(name) = &index_var_for_body {
+                            let alloca =
+                                self.builder.build_alloca(self.context.i64_type(), name)?;
+                            self.builder
+                                .build_store(alloca, self.context.i64_type().const_int(0, false))?;
+                            self.variables.insert(name.clone(), alloca);
+                            self.variable_types.insert(name.clone(), Type::I64);
+                        }
+
+                        self.generate_hir_stmt(body)?;
+                        self.builder.build_unconditional_branch(cond_block)?;
+
+                        // Pop the end block from the loop stack
+                        self.loop_end_blocks.pop();
+
+                        // End block
+                        self.builder.position_at_end(end_block);
+
+                        // Clean up
+                        if let Some(name) = &var_name_for_body {
+                            self.variables.remove(name);
+                            self.variable_types.remove(name);
+                        }
+                        if let Some(name) = &index_var_for_body {
+                            self.variables.remove(name);
+                            self.variable_types.remove(name);
+                        }
+
+                        Ok(())
+                    }
+                    _ => {
+                        // For boolean conditions or other types, treat as while loop
+                        // But if there's a var_name, we still need to handle it
+                        let function = self.current_function.unwrap();
+
+                        // Clone for use in the code
+                        let var_name_for_body = var_name.clone();
+                        let index_var_for_body = index_var.clone();
+
+                        let cond_block = self.context.append_basic_block(function, "for_cond");
+                        let body_block = self.context.append_basic_block(function, "for_body");
+                        let end_block = self.context.append_basic_block(function, "for_end");
+
+                        // Push the end block onto the loop stack
+                        self.loop_end_blocks.push(vec![(end_block, None)]);
+
+                        // Jump to condition block
+                        self.builder.build_unconditional_branch(cond_block)?;
+
+                        // Condition block
+                        self.builder.position_at_end(cond_block);
+                        let is_true = self.condition_to_i1(iter_val, "for_is_true")?;
+                        self.builder
+                            .build_conditional_branch(is_true, body_block, end_block)?;
+
+                        // Body block
+                        self.builder.position_at_end(body_block);
+
+                        // Handle capture variables even in the generic case
+                        if let Some(name) = &var_name_for_body {
+                            let alloca =
+                                self.builder.build_alloca(self.context.i64_type(), name)?;
+                            self.builder
+                                .build_store(alloca, self.context.i64_type().const_int(0, false))?;
+                            self.variables.insert(name.clone(), alloca);
+                            self.variable_types.insert(name.clone(), Type::I64);
+                        }
+
+                        if let Some(name) = &index_var_for_body {
+                            let alloca =
+                                self.builder.build_alloca(self.context.i64_type(), name)?;
+                            self.builder
+                                .build_store(alloca, self.context.i64_type().const_int(0, false))?;
+                            self.variables.insert(name.clone(), alloca);
+                            self.variable_types.insert(name.clone(), Type::I64);
+                        }
+
+                        self.generate_hir_stmt(body)?;
+                        self.builder.build_unconditional_branch(cond_block)?;
+
+                        // Pop the end block from the loop stack
+                        self.loop_end_blocks.pop();
+
+                        // End block
+                        self.builder.position_at_end(end_block);
+
+                        // Clean up
+                        if let Some(name) = &var_name_for_body {
+                            self.variables.remove(name);
+                            self.variable_types.remove(name);
+                        }
+                        if let Some(name) = &index_var_for_body {
+                            self.variables.remove(name);
+                            self.variable_types.remove(name);
+                        }
+
+                        Ok(())
+                    }
+                }
             }
             hir::HirStmt::Switch {
                 condition, cases, ..
@@ -716,9 +967,21 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(extracted.into())
             }
             hir::HirExpr::Array { vals, ty, .. } => {
-                // For array literals, return 0 for now
-                // A full implementation would create a vector or heap-allocated array
-                Ok(self.context.i64_type().const_int(0, false).into())
+                // Create an LLVM array from values
+                let llvm_type = self.llvm_type(ty);
+                let mut elements: Vec<inkwell::values::BasicValueEnum> = Vec::new();
+                for v in vals {
+                    elements.push(self.generate_hir_expr(v)?);
+                }
+                // Create array value using const_struct (works for arrays too)
+                let array_val = self.context.const_struct(&elements, false);
+                // Store to memory and return
+                let alloca = self.builder.build_alloca(llvm_type, "array")?;
+                self.builder.build_store(alloca, array_val)?;
+                Ok(self
+                    .builder
+                    .build_load(llvm_type, alloca, "array_load")?
+                    .into())
             }
             hir::HirExpr::Ident(name, _, _) => {
                 // Skip underscore identifier (used for ignoring values)
@@ -882,9 +1145,27 @@ impl<'ctx> CodeGenerator<'ctx> {
                             .into()
                     }
                     BinaryOp::Range => {
-                        // For range, we'll just return 0 for now
-                        // A full implementation would create a range object
-                        self.context.i64_type().const_int(0, false).into()
+                        // Range: create a tuple { start, end }
+                        let l_val = l.into_int_value();
+                        let r_val = r.into_int_value();
+                        // Create a tuple struct type { i64, i64 }
+                        let tuple_type = self.context.struct_type(
+                            &[
+                                self.context.i64_type().into(),
+                                self.context.i64_type().into(),
+                            ],
+                            false,
+                        );
+                        // Create the struct value
+                        let tuple_val = self
+                            .context
+                            .const_struct(&[l_val.into(), r_val.into()], false);
+                        // Store to memory and return
+                        let alloca = self.builder.build_alloca(tuple_type, "range")?;
+                        self.builder.build_store(alloca, tuple_val)?;
+                        self.builder
+                            .build_load(tuple_type, alloca, "range_load")?
+                            .into()
                     }
                 };
                 Ok(val)

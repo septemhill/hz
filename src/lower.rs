@@ -581,13 +581,17 @@ impl LoweringContext {
             ast::Stmt::For {
                 label,
                 var_name,
+                capture,
+                index_var,
                 iterable,
                 body,
                 span,
                 ..
             } => hir::HirStmt::For {
                 label: label.clone(),
-                var_name: var_name.clone(),
+                // Use capture as the var_name (the loop variable)
+                var_name: capture.clone().or(var_name.clone()),
+                index_var: index_var.clone(),
                 iterable: self.lower_expr(iterable),
                 body: Box::new(self.lower_stmt(body)),
                 span: *span,
