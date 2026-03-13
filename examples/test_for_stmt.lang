@@ -22,7 +22,7 @@ fn main() void {
 
     var f = Iter { i: 0 };
 
-    for (iter.next()) |e| {
+    for (f.next()) |e| {
         io.println(e);
     }
 

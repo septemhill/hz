@@ -520,7 +520,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(())
             }
             hir::HirStmt::For {
-                label: _,
+                label,
                 var_name,
                 index_var,
                 iterable,
@@ -537,6 +537,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Clone var_name for use in closures
                 let var_name_clone = var_name.clone();
                 let index_var_clone = index_var.clone();
+                let label_clone = label.clone();
 
                 // Check what type of iterable we have
                 match &iter_val {
@@ -550,7 +551,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                         let end_block = self.context.append_basic_block(function, "for_end");
 
                         // Push the end block onto the loop stack
-                        self.loop_end_blocks.push(vec![(end_block, None)]);
+                        self.loop_end_blocks
+                            .push(vec![(end_block, label_clone.clone())]);
 
                         // Jump to condition block
                         self.builder.build_unconditional_branch(cond_block)?;
@@ -617,7 +619,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                         let end_block = self.context.append_basic_block(function, "for_end");
 
                         // Push the end block onto the loop stack
-                        self.loop_end_blocks.push(vec![(end_block, None)]);
+                        self.loop_end_blocks
+                            .push(vec![(end_block, label_clone.clone())]);
 
                         // Jump to condition block
                         self.builder.build_unconditional_branch(cond_block)?;
@@ -684,7 +687,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                         let end_block = self.context.append_basic_block(function, "for_end");
 
                         // Push the end block onto the loop stack
-                        self.loop_end_blocks.push(vec![(end_block, None)]);
+                        self.loop_end_blocks
+                            .push(vec![(end_block, label_clone.clone())]);
 
                         // Jump to condition block
                         self.builder.build_unconditional_branch(cond_block)?;
@@ -752,7 +756,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                         let end_block = self.context.append_basic_block(function, "for_end");
 
                         // Push the end block onto the loop stack
-                        self.loop_end_blocks.push(vec![(end_block, None)]);
+                        self.loop_end_blocks
+                            .push(vec![(end_block, label_clone.clone())]);
 
                         // Jump to condition block
                         self.builder.build_unconditional_branch(cond_block)?;
@@ -867,29 +872,37 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(())
             }
             hir::HirStmt::Break { label, span } => {
-                // For now, break just branches to the end block
-                // In the future, we could use label to break out of specific loops
-                if let Some(loop_stack) = self.loop_end_blocks.last() {
-                    // Find the appropriate end block
-                    if let Some(target_block) = loop_stack.iter().find_map(|(block, l)| {
+                // For labeled breaks, search through all loop levels
+                // For unlabeled breaks, use the innermost loop
+                let mut target_block = None;
+
+                // Iterate through all loop levels (from innermost to outermost)
+                for loop_stack in self.loop_end_blocks.iter().rev() {
+                    // Find the appropriate end block in this loop level
+                    if let Some(block) = loop_stack.iter().find_map(|(block, l)| {
                         if l.as_ref() == label.as_ref() {
                             Some(*block)
                         } else if label.is_none() {
-                            // If no label specified, use the innermost loop
+                            // If no label specified, use this loop
                             Some(*block)
                         } else {
                             None
                         }
                     }) {
-                        self.builder.build_unconditional_branch(target_block)?;
-                    } else {
-                        return Err(format!(
-                            "break statement with label '{}' not found in scope at span {:?}",
-                            label.as_deref().unwrap_or("none"),
-                            span
-                        )
-                        .into());
+                        target_block = Some(block);
+                        break;
                     }
+                }
+
+                if let Some(target_block) = target_block {
+                    self.builder.build_unconditional_branch(target_block)?;
+                } else if label.is_some() {
+                    return Err(format!(
+                        "break statement with label '{}' not found in scope at span {:?}",
+                        label.as_deref().unwrap(),
+                        span
+                    )
+                    .into());
                 } else {
                     return Err(
                         format!("break statement outside of loop at span {:?}", span).into(),
@@ -1202,17 +1215,50 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ..
             } => {
                 let (mangled_name, _is_std) = if let Some(ns) = namespace.as_deref() {
-                    let actual_package = self
-                        .imported_packages
-                        .get(ns)
-                        .map(|s| s.as_str())
-                        .unwrap_or(ns);
+                    // First, check if the namespace is a variable with a struct type
+                    // This handles method calls like "f.next()" where f is a struct instance
+                    if let Some(var_type) = self.variable_types.get(ns) {
+                        if let Type::Custom {
+                            name: type_name, ..
+                        } = var_type
+                        {
+                            // Use the struct type name for method mangling
+                            let mangled = format!("{}_{}", type_name, name);
+                            // Try the mangled name first
+                            if self.module.get_function(&mangled).is_some() {
+                                (mangled, false)
+                            } else {
+                                // Fallback to demangled name
+                                (name.clone(), false)
+                            }
+                        } else {
+                            // Not a custom type, use the namespace as-is
+                            let actual_package = self
+                                .imported_packages
+                                .get(ns)
+                                .map(|s| s.as_str())
+                                .unwrap_or(ns);
 
-                    if actual_package == "io" && name == "println" {
-                        return self.generate_hir_io_println(args);
+                            if actual_package == "io" && name == "println" {
+                                return self.generate_hir_io_println(args);
+                            }
+
+                            (format!("{}_{}", actual_package, name), true)
+                        }
+                    } else {
+                        // Namespace is not a known variable - treat as package namespace
+                        let actual_package = self
+                            .imported_packages
+                            .get(ns)
+                            .map(|s| s.as_str())
+                            .unwrap_or(ns);
+
+                        if actual_package == "io" && name == "println" {
+                            return self.generate_hir_io_println(args);
+                        }
+
+                        (format!("{}_{}", actual_package, name), true)
                     }
-
-                    (format!("{}_{}", actual_package, name), true)
                 } else {
                     if name == "main" {
                         ("main".to_string(), false)
