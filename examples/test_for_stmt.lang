@@ -1,6 +1,6 @@
 import "io"
 
-fn main() void {
+fn main() i64 {
     for (1..10) |v| {
         io.println(v);
     }
@@ -39,6 +39,8 @@ fn main() void {
     for (2 > 1) {
         io.println("true expression");
     }
+
+    return 0;
 }
 
 struct Iter {

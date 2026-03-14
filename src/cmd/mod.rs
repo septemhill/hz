@@ -2,6 +2,7 @@
 //!
 //! This module contains the implementation of each CLI subcommand.
 
+pub mod ast;
 pub mod build;
 pub mod hir;
 pub mod ir;
@@ -9,6 +10,7 @@ pub mod jit;
 pub mod lsp;
 pub mod run;
 
+pub use ast::dump_ast;
 pub use build::build;
 pub use hir::dump_hir;
 pub use ir::generate_ir;

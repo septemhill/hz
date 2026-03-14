@@ -1014,3 +1014,369 @@ pub fn infer_types(program: &Program, symbol_table: SymbolTable) -> AnalysisResu
     let mut inferrer = TypeInferrer::new(symbol_table);
     inferrer.infer_program(program)
 }
+
+// ============================================================================
+// Pretty-Printing for Typed AST
+// ============================================================================
+
+pub use crate::ast::{print_indent, AstDump};
+
+impl AstDump for TypedProgram {
+    fn dump(&self, indent: usize) {
+        print_indent(indent);
+        println!("TypedProgram");
+
+        if !self.imports.is_empty() {
+            print_indent(indent + 1);
+            println!("Imports:");
+            for (alias, pkg) in &self.imports {
+                print_indent(indent + 2);
+                if let Some(a) = alias {
+                    println!("{}: \"{}\"", a, pkg);
+                } else {
+                    println!("\"{}\"", pkg);
+                }
+            }
+        }
+
+        for s in &self.structs {
+            print_indent(indent + 1);
+            println!("StructDef: {}", s.name);
+        }
+        for e in &self.enums {
+            print_indent(indent + 1);
+            println!("EnumDef: {}", e.name);
+        }
+        for er in &self.errors {
+            print_indent(indent + 1);
+            println!("ErrorDef: {}", er.name);
+        }
+        for f in &self.external_functions {
+            f.dump(indent + 1);
+        }
+        for f in &self.functions {
+            f.dump(indent + 1);
+        }
+    }
+}
+
+impl AstDump for TypedFnDef {
+    fn dump(&self, indent: usize) {
+        print_indent(indent);
+        let vis = if self.visibility.is_public() {
+            "pub "
+        } else {
+            ""
+        };
+        println!("FnDef: {}{} -> {}", vis, self.name, self.return_ty);
+
+        if !self.params.is_empty() {
+            print_indent(indent + 1);
+            println!("Params:");
+            for p in &self.params {
+                print_indent(indent + 2);
+                println!("{}: {}", p.name, p.ty);
+            }
+        }
+
+        print_indent(indent + 1);
+        println!("Body:");
+        for s in &self.body {
+            s.dump(indent + 2);
+        }
+    }
+}
+
+impl AstDump for TypedStmt {
+    fn dump(&self, indent: usize) {
+        print_indent(indent);
+        match &self.stmt {
+            TypedStmtKind::Expr { expr } => {
+                println!("Stmt::Expr (ty: {})", expr.ty);
+                expr.dump(indent + 1);
+            }
+            TypedStmtKind::Import { packages } => {
+                println!("Stmt::Import: {:?}", packages);
+            }
+            TypedStmtKind::Let {
+                name,
+                names,
+                ty,
+                value,
+                is_const,
+            } => {
+                let mut_str = if *is_const { "const" } else { "var" };
+                let name_str = if let Some(ns) = names {
+                    format!("{:?}", ns)
+                } else {
+                    name.clone()
+                };
+                println!("Stmt::Let: {} {} (ty: {})", mut_str, name_str, ty);
+                if let Some(v) = value {
+                    print_indent(indent + 1);
+                    println!("Value:");
+                    v.dump(indent + 2);
+                }
+            }
+            TypedStmtKind::Assign { target, value } => {
+                println!("Stmt::Assign: {} (ty: {})", target, value.ty);
+                print_indent(indent + 1);
+                println!("Value:");
+                value.dump(indent + 2);
+            }
+            TypedStmtKind::Return { value } => {
+                println!("Stmt::Return");
+                if let Some(v) = value {
+                    print_indent(indent + 1);
+                    println!("Value (ty: {}):", v.ty);
+                    v.dump(indent + 2);
+                }
+            }
+            TypedStmtKind::Block { stmts } => {
+                println!("Stmt::Block");
+                for s in stmts {
+                    s.dump(indent + 1);
+                }
+            }
+            TypedStmtKind::If {
+                condition,
+                capture,
+                then_branch,
+                else_branch,
+            } => {
+                println!("Stmt::If");
+                if let Some(c) = capture {
+                    let cap_ty = if let Type::Option(inner) = &condition.ty {
+                        inner.as_ref().clone()
+                    } else {
+                        Type::I64
+                    };
+                    print_indent(indent + 1);
+                    println!("Capture: {} (ty: {})", c, cap_ty);
+                }
+                print_indent(indent + 1);
+                println!("Condition (ty: {}):", condition.ty);
+                condition.dump(indent + 2);
+                print_indent(indent + 1);
+                println!("Then:");
+                then_branch.dump(indent + 2);
+                if let Some(eb) = else_branch {
+                    print_indent(indent + 1);
+                    println!("Else:");
+                    eb.dump(indent + 2);
+                }
+            }
+            TypedStmtKind::While {
+                condition,
+                capture,
+                body,
+            } => {
+                println!("Stmt::While");
+                if let Some(c) = capture {
+                    let cap_ty = if let Type::Option(inner) = &condition.ty {
+                        inner.as_ref().clone()
+                    } else {
+                        Type::I64
+                    };
+                    print_indent(indent + 1);
+                    println!("Capture: {} (ty: {})", c, cap_ty);
+                }
+                print_indent(indent + 1);
+                println!("Condition (ty: {}):", condition.ty);
+                condition.dump(indent + 2);
+                print_indent(indent + 1);
+                println!("Body:");
+                body.dump(indent + 2);
+            }
+            TypedStmtKind::For {
+                label,
+                var_name,
+                iterable,
+                capture,
+                index_var,
+                body,
+            } => {
+                println!("Stmt::For");
+                if let Some(l) = label {
+                    print_indent(indent + 1);
+                    println!("Label: {}", l);
+                }
+                if let Some(v) = var_name {
+                    print_indent(indent + 1);
+                    println!("Var: {} (ty: i64)", v);
+                }
+                if let Some(i) = index_var {
+                    print_indent(indent + 1);
+                    println!("Index: {} (ty: i64)", i);
+                }
+                if let Some(c) = capture {
+                    print_indent(indent + 1);
+                    println!("Capture: {} (ty: i64)", c);
+                }
+                print_indent(indent + 1);
+                println!("Iterable (ty: {}):", iterable.ty);
+                iterable.dump(indent + 2);
+                print_indent(indent + 1);
+                println!("Body:");
+                body.dump(indent + 2);
+            }
+            TypedStmtKind::Switch { condition, cases } => {
+                println!("Stmt::Switch");
+                print_indent(indent + 1);
+                println!("Condition (ty: {}):", condition.ty);
+                condition.dump(indent + 2);
+                for (i, case) in cases.iter().enumerate() {
+                    print_indent(indent + 1);
+                    println!("Case {}:", i);
+                    if let Some(c) = &case.capture {
+                        print_indent(indent + 2);
+                        println!("Capture: {} (ty: {})", c, condition.ty);
+                    }
+                    print_indent(indent + 2);
+                    println!("Patterns:");
+                    for p in &case.patterns {
+                        p.dump(indent + 3);
+                    }
+                    print_indent(indent + 2);
+                    println!("Body:");
+                    case.body.dump(indent + 3);
+                }
+            }
+            TypedStmtKind::Defer { stmt } => {
+                println!("Stmt::Defer");
+                stmt.dump(indent + 1);
+            }
+            TypedStmtKind::DeferBang { stmt } => {
+                println!("Stmt::Defer!");
+                stmt.dump(indent + 1);
+            }
+            TypedStmtKind::Break { label } => {
+                let lbl = if let Some(l) = label {
+                    format!(" {}", l)
+                } else {
+                    "".to_string()
+                };
+                println!("Stmt::Break{}", lbl);
+            }
+        }
+    }
+}
+
+impl AstDump for TypedExpr {
+    fn dump(&self, indent: usize) {
+        print_indent(indent);
+        match &self.expr {
+            TypedExprKind::Int(val) => println!("Expr::Int({}) (ty: {})", val, self.ty),
+            TypedExprKind::Bool(val) => println!("Expr::Bool({}) (ty: {})", val, self.ty),
+            TypedExprKind::String(val) => println!("Expr::String(\"{}\") (ty: {})", val, self.ty),
+            TypedExprKind::Char(val) => println!("Expr::Char('{}') (ty: {})", val, self.ty),
+            TypedExprKind::Null => println!("Expr::Null (ty: {})", self.ty),
+            TypedExprKind::Tuple(exprs) => {
+                println!("Expr::Tuple (ty: {})", self.ty);
+                for e in exprs {
+                    e.dump(indent + 1);
+                }
+            }
+            TypedExprKind::TupleIndex { tuple, index } => {
+                println!("Expr::TupleIndex: .{} (ty: {})", index, self.ty);
+                tuple.dump(indent + 1);
+            }
+            TypedExprKind::Ident(name) => println!("Expr::Ident({}) (ty: {})", name, self.ty),
+            TypedExprKind::Array(exprs) => {
+                println!("Expr::Array (ty: {})", self.ty);
+                for e in exprs {
+                    e.dump(indent + 1);
+                }
+            }
+            TypedExprKind::Binary { op, left, right } => {
+                println!("Expr::Binary: {:?} (ty: {})", op, self.ty);
+                left.dump(indent + 1);
+                right.dump(indent + 1);
+            }
+            TypedExprKind::Unary { op, expr } => {
+                println!("Expr::Unary: {:?} (ty: {})", op, self.ty);
+                expr.dump(indent + 1);
+            }
+            TypedExprKind::Call {
+                name,
+                namespace,
+                args,
+            } => {
+                let ns = if let Some(n) = namespace {
+                    format!("{}::", n)
+                } else {
+                    "".to_string()
+                };
+                println!("Expr::Call: {}{} (ty: {})", ns, name, self.ty);
+                for a in args {
+                    a.dump(indent + 1);
+                }
+            }
+            TypedExprKind::If {
+                condition,
+                capture,
+                then_branch,
+                else_branch,
+            } => {
+                println!("Expr::If (ty: {})", self.ty);
+                if let Some(c) = capture {
+                    let cap_ty = if let Type::Option(inner) = &condition.ty {
+                        inner.as_ref().clone()
+                    } else {
+                        Type::I64
+                    };
+                    print_indent(indent + 1);
+                    println!("Capture: {} (ty: {})", c, cap_ty);
+                }
+                print_indent(indent + 1);
+                println!("Condition (ty: {}):", condition.ty);
+                condition.dump(indent + 2);
+                print_indent(indent + 1);
+                println!("Then (ty: {}):", then_branch.ty);
+                then_branch.dump(indent + 2);
+                print_indent(indent + 1);
+                println!("Else (ty: {}):", else_branch.ty);
+                else_branch.dump(indent + 2);
+            }
+            TypedExprKind::Block { stmts } => {
+                println!("Expr::Block (ty: {})", self.ty);
+                for s in stmts {
+                    s.dump(indent + 1);
+                }
+            }
+            TypedExprKind::MemberAccess { object, member } => {
+                println!("Expr::MemberAccess: .{} (ty: {})", member, self.ty);
+                object.dump(indent + 1);
+            }
+            TypedExprKind::Struct { name, fields } => {
+                println!("Expr::Struct: {} (ty: {})", name, self.ty);
+                for (fname, fval) in fields {
+                    print_indent(indent + 1);
+                    println!("Field: {}:", fname);
+                    fval.dump(indent + 2);
+                }
+            }
+            TypedExprKind::Try { expr } => {
+                println!("Expr::Try (ty: {})", self.ty);
+                expr.dump(indent + 1);
+            }
+            TypedExprKind::Catch {
+                expr,
+                error_var,
+                body,
+            } => {
+                println!("Expr::Catch (ty: {})", self.ty);
+                if let Some(v) = error_var {
+                    print_indent(indent + 1);
+                    println!("Capture: {} (ty: Error)", v);
+                }
+                print_indent(indent + 1);
+                println!("Value (ty: {}):", expr.ty);
+                expr.dump(indent + 2);
+                print_indent(indent + 1);
+                println!("Body (ty: {}):", body.ty);
+                body.dump(indent + 2);
+            }
+        }
+    }
+}

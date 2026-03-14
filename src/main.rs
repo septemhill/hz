@@ -82,6 +82,12 @@ enum Commands {
         #[arg(short = 'o', long = "output", value_name = "OUTPUT")]
         output: Option<std::path::PathBuf>,
     },
+    /// Dump AST (Abstract Syntax Tree)
+    Ast {
+        /// Source file to dump AST from
+        #[arg(value_name = "FILE")]
+        source: std::path::PathBuf,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -125,6 +131,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let source_content = fs::read_to_string(&source)?;
             let output_path = output.map(|p| p.to_string_lossy().to_string());
             cmd::dump_hir(&source_content, output_path)?;
+        }
+        Commands::Ast { source } => {
+            let source_content = fs::read_to_string(&source)?;
+            cmd::dump_ast(&source_content)?;
         }
         Commands::Lsp { verbose } => {
             cmd::run_lsp(verbose);
