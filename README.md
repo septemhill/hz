@@ -18,17 +18,21 @@ TBD
 
 ## Features
 
-- **Strong Type System**: Integer types (i8-i64, u8-u64), booleans, void, and optional types
-- **Optional Types**: Nullable types using `?` prefix (e.g., `?i32`, `?bool`)
+- **Strong Type System**: Integer types (i8-i64, u8-u64), booleans, void, strings, and optional types
+- **Optional Types**: Nullable types using `?` prefix (e.g., `?i32`, `?bool`) with `if/else` pattern matching
+- **Error Handling**: Result types with `!` suffix (e.g., `i64!`), `try` and `catch` operators
+- **Error Types**: Algebraic error types with `error` keyword and union types using `|`
 - **Structs**: User-defined data types with methods
 - **Interfaces**: Polymorphism through trait-like interfaces
-- **Enums**: Algebraic data types with generic parameters
-- **Arrays**: Fixed-size arrays (e.g., `[3]u8`)
+- **Enums**: Algebraic data types with generic parameters (e.g., `enum<T>`)
+- **Arrays**: Fixed-size arrays (e.g., `[3]u8`, `[3]u8{1, 2, 3}`)
 - **Functions**: First-class functions with typed parameters and return values
-- **Control Flow**: `if/else`, `while`, `loop`, `for` (range and iterator), `switch`
+- **Control Flow**: `if/else`, `while`, `for` (range, array, iterator, infinite, conditional), `switch`
 - **Method Syntax**: Object-oriented programming with `self` parameter
 - **Modules**: Import system for code organization
-- **Visibility**: `pub` keyword for public functions and fields
+- **Visibility**: `pub` keyword for public functions, fields, and types
+- **Operators**: Arithmetic (+, -, *, /, %), bitwise (<<, >>, &, |, ^), comparison, logical (&&, ||, !)
+- **Testing**: Built-in testing assertions
 
 ## Language Syntax
 
@@ -37,7 +41,7 @@ TBD
 ```lang
 import "io"
 
-fn main() {
+fn main() void {
     io.println("Hello, World!");
 }
 ```
@@ -58,6 +62,11 @@ count += 1;
 ```lang
 fn add(a: i32, b: i32) i32 {
     return a + b;
+}
+
+// Function with error return type
+fn maybeFail() i64! {
+    return 1;
 }
 
 fn main() i64 {
@@ -82,38 +91,131 @@ struct Person {
     }
 }
 
-fn main() {
+fn main() void {
     const person = Person.new("Alice", 30);
     person.greet();
+}
+```
+
+### Interfaces
+
+```lang
+pub interface Printable {
+    fn print();
+    fn getValue() i32;
+}
+
+pub struct Widget {
+    value: i32,
+
+    pub fn new(value: i32) Widget {
+        return Widget{ value };
+    }
+
+    pub fn print(self: &Self) {
+        io.println(self.value);
+    }
+
+    pub fn getValue(self: &Self) i32 {
+        return self.value;
+    }
 }
 ```
 
 ### Enums
 
 ```lang
-enum Status<T> {
+pub enum<T> Status {
     Todo,
     WIP,
     Done,
     Error(T),
 };
 
-fn main() {
+fn main() void {
     const s = Status.Todo;
     const e = Status.Error("something wrong");
+}
+```
+
+### Error Types
+
+```lang
+pub error FileError {
+    NotFound(String),
+    PermissionDenied,
+}
+
+error UnionError = FileError | StatusError;
+
+fn readFile() i64! {
+    return 1;
+}
+
+fn main() i64! {
+    const result = try readFile();
+    
+    // Catch error with block
+    const handled = readFile() catch |e| {
+        io.println("error occurred");
+        0
+    };
+    
+    // Catch error with expression
+    const defaultVal = readFile() catch |_| 10;
+    
+    return result + handled + defaultVal;
+}
+```
+
+### Optional Types
+
+```lang
+fn main() void {
+    const g: ?i32 = 432;
+    const z = if (g) |v| v else 10;
+    
+    const h: ?i32 = null;
+    const w = if (h) |v| v * 2 else {
+        var c = 3;
+        c + 1
+    };
 }
 ```
 
 ### Switch Statement
 
 ```lang
-fn main() {
+fn main() void {
     const value = 42;
 
     switch (value) {
         1 => io.println("one"),
         42 => io.println("answer"),
+        100..200 => io.println("range"),
         _ => io.println("default"),
+    }
+
+    // Multiple cases
+    switch (value) {
+        1, 2, 3 => io.println("one two three"),
+        _ => io.println("other"),
+    }
+
+    // Character cases
+    const c = 'a';
+    switch (c) {
+        'a'..'z' => io.println("lowercase"),
+        'A'..'Z' => io.println("uppercase"),
+        _ => io.println("other"),
+    }
+
+    // Enum with pattern capture
+    const status = Status.Todo;
+    switch (status) {
+        Status.Todo => io.println("todo"),
+        Status.Error => |e| io.println("error"),
+        _ => io.println("other"),
     }
 }
 ```
@@ -121,22 +223,45 @@ fn main() {
 ### For Loop
 
 ```lang
-fn main() {
+fn main() void {
     // Range-based (exclusive end)
     for (1..10) |v| {
         io.println(v);
     }
 
-    // Array iteration
+    // Array iteration with index and value
     const arr = [3]u8{1, 2, 3};
-    for (arr) |item| {
-        io.println(item);
+    for (arr) |index, value| {
+        io.println(index, value);
     }
+
+    // Ignore index or value
+    for (arr) |_, v| { io.println(v); }
+    for (arr) |i, _| { io.println(i); }
 
     // Iterator-based (with custom struct)
     var f = Iter { i: 0 };
     for (f.next()) |e| {
         io.println(e);
+    }
+
+    // Infinite loop
+    for {
+        io.println("once");
+        break;
+    }
+
+    // Conditional loop
+    for (true) {
+        io.println("runs once");
+        break;
+    }
+
+    // Labeled loop with break
+    outer: for (1..10) |v| {
+        for (1..10) |b| {
+            break outer;
+        }
     }
 }
 
@@ -151,6 +276,64 @@ struct Iter {
         }
         return null;
     }
+}
+```
+
+### Arrays
+
+```lang
+fn main() void {
+    const arr1: [3]u8 = {1, 3, 4};
+    var arr2 = [3]u8{1, 2, 3};
+    arr2[0] = 5;
+}
+```
+
+### Operators
+
+```lang
+fn main() void {
+    // Arithmetic
+    const a: i32 = 1 + 3;
+    const b: i32 = 1 - 3;
+    const c: i32 = 1 * 3;
+    const d: i32 = 1 / 3;
+    const e: i32 = 1 % 3;
+
+    // Bitwise
+    const f: i32 = 1 << 3;
+    const g: i32 = 1 >> 3;
+    const h: i32 = 1 & 3;
+    const i: i32 = 1 | 3;
+    const j: i32 = 1 ^ 3;
+
+    // Comparison
+    const k: bool = 1 == 3;
+    const l: bool = 1 != 3;
+    const m: bool = 1 < 3;
+    const n: bool = 1 > 3;
+    const o: bool = 1 <= 3;
+    const p: bool = 1 >= 3;
+
+    // Logical
+    const q: bool = true && false;
+    const r: bool = true || false;
+    const s: bool = !true;
+}
+```
+
+### Testing
+
+```lang
+import "testing"
+
+fn main() i64 {
+    testing.assert(true, "This should pass");
+    testing.assert_eq_i64(1, 1, "1 should equal 1");
+    testing.assert_ne_i64(1, 2, "1 should not equal 2");
+    testing.assert_eq_bool(true, true, "true should equal true");
+    testing.assert_eq_string("hello", "hello", "strings should match");
+    return 0;
 }
 ```
 
@@ -207,7 +390,7 @@ lang ir examples/test_struct.lang
 ```lang
 import "io"
 
-fn main() {
+fn main() void {
     io.println("Print with newline");
     io.print("Print without newline");
 }
@@ -218,10 +401,22 @@ fn main() {
 ```lang
 import "math"
 
-fn main() {
+fn main() void {
     const abs_val = math.abs(-5);
     const max_val = math.max(10, 20);
     const min_val = math.min(10, 20);
+}
+```
+
+### testing
+
+```lang
+import "testing"
+
+fn main() i64 {
+    testing.assert(true, "Test message");
+    testing.assert_eq_i64(1, 1, "Values should be equal");
+    return 0;
 }
 ```
 
@@ -244,7 +439,8 @@ lang/
 ├── std/
 │   ├── io.lang        # I/O standard library
 │   ├── math.lang      # Math standard library
-│   └── http.lang      # HTTP standard library
+│   ├── http.lang      # HTTP standard library
+│   └── testing.lang   # Testing library
 ├── examples/          # Example programs
 └── Cargo.toml         # Project manifest
 ```
@@ -258,40 +454,40 @@ Source Code (.lang)
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │    Lexer    │────▶│   Parser    │────▶│     AST     │
 └─────────────┘     └─────────────┘     └─────────────┘
-                                               │
-                                               ▼
-                                        ┌─────────────┐
-                                        │    Sema     │
-                                        │  (Semantic  │
-                                        │  Analysis)  │
-                                        └─────────────┘
-                                               │
-                                               ▼
-                                        ┌─────────────┐
-                                        │  Lowering   │
-                                        │    (HIR)    │
-                                        └─────────────┘
-                                               │
-                                               ▼
-                                        ┌─────────────┐
-                                        │  Optimizer  │
-                                        └─────────────┘
-                                               │
-                                               ▼
-                                        ┌─────────────┐
-                                        │   Codegen   │
-                                        │  (LLVM IR)  │
-                                        └─────────────┘
-                                               │
-                    ┌─────────────┐            │
-                    │    Clang    │◀───────────┘
-                    │   (Linker)  │
-                    └─────────────┘
-                          │
-                          ▼
-                    ┌─────────────┐
-                    │ Executable  │
-                    └─────────────┘
+                                              │
+                                              ▼
+                                       ┌─────────────┐
+                                       │    Sema     │
+                                       │  (Semantic  │
+                                       │  Analysis)  │
+                                       └─────────────┘
+                                              │
+                                              ▼
+                                       ┌─────────────┐
+                                       │  Lowering   │
+                                       │    (HIR)    │
+                                       └─────────────┘
+                                              │
+                                              ▼
+                                       ┌─────────────┐
+                                       │  Optimizer  │
+                                       └─────────────┘
+                                              │
+                                              ▼
+                                       ┌─────────────┐
+                                       │   Codegen   │
+                                       │  (LLVM IR)  │
+                                       └─────────────┘
+                                              │
+                      ┌─────────────┐            │
+                      │    Clang    │◀───────────┘
+                      │   (Linker)  │
+                      └─────────────┘
+                            │
+                            ▼
+                      ┌─────────────┐
+                      │ Executable  │
+                      └─────────────┘
 ```
 
 ### Compilation Pipeline
@@ -310,4 +506,3 @@ Source Code (.lang)
 - [ ] Interface Generic Support
 - [ ] Generic Constraints (Methods)
 - [ ] Type Definitions
-
