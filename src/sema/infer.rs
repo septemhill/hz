@@ -662,10 +662,22 @@ impl TypeInferrer {
                 for elem in elements {
                     typed_elements.push(self.infer_expr(elem)?);
                 }
-                // For now, default to i64 array
+                // Determine the element type from the typed elements
+                let element_type = if typed_elements.is_empty() {
+                    // Empty array - default to i8
+                    Type::I8
+                } else {
+                    // Use the type of the first element (assuming all elements have the same type)
+                    typed_elements[0].ty.clone()
+                };
+                // Create array type with size and element type
+                let array_ty = Type::Array {
+                    size: Some(typed_elements.len()),
+                    element_type: Box::new(element_type),
+                };
                 Ok(TypedExpr {
                     expr: TypedExprKind::Array(typed_elements),
-                    ty: Type::I64,
+                    ty: array_ty,
                     span,
                 })
             }
@@ -1019,7 +1031,7 @@ pub fn infer_types(program: &Program, symbol_table: SymbolTable) -> AnalysisResu
 // Pretty-Printing for Typed AST
 // ============================================================================
 
-pub use crate::ast::{print_indent, AstDump};
+pub use crate::ast::{AstDump, print_indent};
 
 impl AstDump for TypedProgram {
     fn dump(&self, indent: usize) {
