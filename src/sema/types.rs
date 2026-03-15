@@ -599,8 +599,13 @@ impl TypeAnalyzer {
                     }
                     return Ok(crate::ast::Type::Void);
                 }
-                let symbol_ty = if namespace.is_some() {
-                    crate::ast::Type::I64
+                let symbol_ty = if let Some(ns) = namespace {
+                    // Try to resolve as a struct/enum method: StructName_methodname
+                    let fn_name = format!("{}_{}", ns, name);
+                    self.symbol_table
+                        .resolve(&fn_name)
+                        .map(|s| s.ty.clone())
+                        .unwrap_or(crate::ast::Type::I64)
                 } else {
                     self.symbol_table
                         .resolve(name)
@@ -644,9 +649,16 @@ impl TypeAnalyzer {
                 self.symbol_table.exit_scope();
                 Ok(crate::ast::Type::I64)
             }
-            crate::ast::Expr::MemberAccess { object, .. } => {
-                self.analyze_expression(object)?;
-                Ok(crate::ast::Type::I64)
+            crate::ast::Expr::MemberAccess { object, member, .. } => {
+                let obj_ty = self.analyze_expression(object)?;
+                if let crate::ast::Type::Custom { name, .. } = &obj_ty {
+                    // Try to find if it's a field
+                    // We need more info to resolve fields, for now return I64 if it's custom
+                    // But if we have the struct info we should check
+                    Ok(crate::ast::Type::I64)
+                } else {
+                    Ok(crate::ast::Type::I64)
+                }
             }
             crate::ast::Expr::Struct { name, fields, span } => {
                 self.symbol_table

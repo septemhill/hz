@@ -380,17 +380,12 @@ impl SymbolResolver {
                     // Check method visibility
                     self.check_method_visibility(&ns, name, *span)?;
 
-                    // The return type would be the function's return type
-                    // For now, we'll need to look this up
-                    // Return a placeholder - the actual type should come from the function definition
-
-                    // Try to find the function in the program
-                    // This is a simplified version - ideally we'd have a symbol table
-                    // For struct methods, return a Result type based on convention
-
-                    // Since we can't easily look up the function, we'll return a default type
-                    // The codegen will need to handle this properly
-                    Ok(crate::ast::Type::I64)
+                    // Try to resolve as a struct/enum method: StructName_methodname
+                    let fn_name = format!("{}_{}", ns, name);
+                    Ok(self.symbol_table
+                        .resolve(&fn_name)
+                        .map(|s| s.ty.clone())
+                        .unwrap_or(crate::ast::Type::I64))
                 } else {
                     // Regular function call
                     // Try to resolve the function
@@ -448,8 +443,10 @@ impl SymbolResolver {
                 self.analyze_expression(expr)?;
                 Ok(crate::ast::Type::I64)
             }
-            crate::ast::Expr::MemberAccess { object, .. } => {
-                self.analyze_expression(object)?;
+            crate::ast::Expr::MemberAccess { object, member, .. } => {
+                let obj_ty = self.analyze_expression(object)?;
+                // For resolver, we mainly just check that the object is valid
+                // Detailed member resolution usually happens in infer_types
                 Ok(crate::ast::Type::I64)
             }
             crate::ast::Expr::If {

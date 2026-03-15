@@ -895,41 +895,43 @@ impl TypeInferrer {
 
                 let typed_object = self.infer_expr(object)?;
                 
-                // For now, default to StructField if object is a custom type
-                let kind = if let Type::Custom { name, .. } = &typed_object.ty {
+                let (kind, ty) = if let Type::Custom { name, .. } = &typed_object.ty {
                     if let Some(struct_def) = self.structs.get(name) {
-                        if struct_def.methods.iter().any(|m| &m.name == member) {
-                            crate::ast::MemberAccessKind::StructMethod
+                        if let Some(method) = struct_def.methods.iter().find(|m| &m.name == member) {
+                            (crate::ast::MemberAccessKind::StructMethod, method.return_ty.clone())
+                        } else if let Some(field) = struct_def.fields.iter().find(|f| &f.name == member) {
+                            (crate::ast::MemberAccessKind::StructField, field.ty.clone())
                         } else {
-                            crate::ast::MemberAccessKind::StructField
+                            (crate::ast::MemberAccessKind::StructField, Type::I64)
                         }
                     } else if let Some(enum_def) = self.enums.get(name) {
-                        if enum_def.methods.iter().any(|m| &m.name == member) {
-                             crate::ast::MemberAccessKind::StructMethod
+                        if let Some(method) = enum_def.methods.iter().find(|m| &m.name == member) {
+                             (crate::ast::MemberAccessKind::StructMethod, method.return_ty.clone())
+                        } else if enum_def.variants.iter().any(|v| &v.name == member) {
+                             (crate::ast::MemberAccessKind::EnumMember, typed_object.ty.clone())
                         } else {
-                             crate::ast::MemberAccessKind::EnumMember
+                             (crate::ast::MemberAccessKind::EnumMember, Type::I64)
                         }
                     } else if let Some(error_def) = self.errors.get(name) {
                         if error_def.variants.iter().any(|v| &v.name == member) {
-                            crate::ast::MemberAccessKind::ErrorMember
+                            (crate::ast::MemberAccessKind::ErrorMember, Type::Error)
                         } else {
-                             crate::ast::MemberAccessKind::Unknown
+                             (crate::ast::MemberAccessKind::Unknown, Type::I64)
                         }
                     } else {
-                        crate::ast::MemberAccessKind::StructField
+                        (crate::ast::MemberAccessKind::StructField, Type::I64)
                     }
                 } else {
-                    crate::ast::MemberAccessKind::Unknown
+                    (crate::ast::MemberAccessKind::Unknown, Type::I64)
                 };
 
-                // For now, default to i64
                 Ok(TypedExpr {
                     expr: TypedExprKind::MemberAccess {
                         object: Box::new(typed_object),
                         member: member.clone(),
                         kind,
                     },
-                    ty: Type::I64,
+                    ty,
                     span: *span,
                 })
             }
