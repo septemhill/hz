@@ -25,6 +25,8 @@ pub struct TypedExpr {
 pub enum TypedExprKind {
     /// Integer literal (i64)
     Int(i64),
+    /// Float literal (f64)
+    Float(f64),
     /// Boolean literal
     Bool(bool),
     /// String literal
@@ -663,6 +665,7 @@ impl TypeInferrer {
         // Extract span from the expression
         let span = match expr {
             Expr::Int(_, span) => *span,
+            Expr::Float(_, span) => *span,
             Expr::Bool(_, span) => *span,
             Expr::String(_, span) => *span,
             Expr::Char(_, span) => *span,
@@ -686,6 +689,11 @@ impl TypeInferrer {
             Expr::Int(value, _) => Ok(TypedExpr {
                 expr: TypedExprKind::Int(*value),
                 ty: Type::I64,
+                span,
+            }),
+            Expr::Float(value, _) => Ok(TypedExpr {
+                expr: TypedExprKind::Float(*value),
+                ty: Type::F64,
                 span,
             }),
             Expr::Bool(value, _) => Ok(TypedExpr {
@@ -989,9 +997,9 @@ impl TypeInferrer {
                 // Try to resolve as package access
                 if let Expr::Ident(obj_name, _) = object.as_ref() {
                     // Check if obj_name is an imported package
-                    let is_package = self.symbol_table.resolve(obj_name).is_none() && 
-                                   (obj_name == "std" || obj_name == "io" || obj_name == "os"); // Simple check for now
-                    
+                    let is_package = self.symbol_table.resolve(obj_name).is_none()
+                        && (obj_name == "std" || obj_name == "io" || obj_name == "os"); // Simple check for now
+
                     if is_package {
                         return Ok(TypedExpr {
                             expr: TypedExprKind::MemberAccess {
@@ -1010,29 +1018,41 @@ impl TypeInferrer {
                 }
 
                 let typed_object = self.infer_expr(object)?;
-                
+
                 let (kind, ty) = if let Type::Custom { name, .. } = &typed_object.ty {
                     if let Some(struct_def) = self.structs.get(name) {
-                        if let Some(method) = struct_def.methods.iter().find(|m| &m.name == member) {
-                            (crate::ast::MemberAccessKind::StructMethod, method.return_ty.clone())
-                        } else if let Some(field) = struct_def.fields.iter().find(|f| &f.name == member) {
+                        if let Some(method) = struct_def.methods.iter().find(|m| &m.name == member)
+                        {
+                            (
+                                crate::ast::MemberAccessKind::StructMethod,
+                                method.return_ty.clone(),
+                            )
+                        } else if let Some(field) =
+                            struct_def.fields.iter().find(|f| &f.name == member)
+                        {
                             (crate::ast::MemberAccessKind::StructField, field.ty.clone())
                         } else {
                             (crate::ast::MemberAccessKind::StructField, Type::I64)
                         }
                     } else if let Some(enum_def) = self.enums.get(name) {
                         if let Some(method) = enum_def.methods.iter().find(|m| &m.name == member) {
-                             (crate::ast::MemberAccessKind::StructMethod, method.return_ty.clone())
+                            (
+                                crate::ast::MemberAccessKind::StructMethod,
+                                method.return_ty.clone(),
+                            )
                         } else if enum_def.variants.iter().any(|v| &v.name == member) {
-                             (crate::ast::MemberAccessKind::EnumMember, typed_object.ty.clone())
+                            (
+                                crate::ast::MemberAccessKind::EnumMember,
+                                typed_object.ty.clone(),
+                            )
                         } else {
-                             (crate::ast::MemberAccessKind::EnumMember, Type::I64)
+                            (crate::ast::MemberAccessKind::EnumMember, Type::I64)
                         }
                     } else if let Some(error_def) = self.errors.get(name) {
                         if error_def.variants.iter().any(|v| &v.name == member) {
                             (crate::ast::MemberAccessKind::ErrorMember, Type::Error)
                         } else {
-                             (crate::ast::MemberAccessKind::Unknown, Type::I64)
+                            (crate::ast::MemberAccessKind::Unknown, Type::I64)
                         }
                     } else {
                         (crate::ast::MemberAccessKind::StructField, Type::I64)
@@ -1270,7 +1290,11 @@ impl TypeInferrer {
                 if has_true && has_false {
                     Ok(())
                 } else {
-                    Err(AnalysisError::new_with_span("Switch statement on bool is not exhaustive", span).with_module("infer"))
+                    Err(AnalysisError::new_with_span(
+                        "Switch statement on bool is not exhaustive",
+                        span,
+                    )
+                    .with_module("infer"))
                 }
             }
             Type::Custom { name, .. } => {
@@ -1286,36 +1310,57 @@ impl TypeInferrer {
                     if covered_variants.len() == enum_def.variants.len() {
                         Ok(())
                     } else {
-                        let missing: Vec<_> = enum_def.variants.iter()
+                        let missing: Vec<_> = enum_def
+                            .variants
+                            .iter()
                             .filter(|v| !covered_variants.contains(&v.name))
                             .map(|v| v.name.clone())
                             .collect();
-                        Err(AnalysisError::new_with_span(format!("Switch statement on enum {} is not exhaustive. Missing: {}", name, missing.join(", ")).as_str(), span).with_module("infer"))
+                        Err(AnalysisError::new_with_span(
+                            format!(
+                                "Switch statement on enum {} is not exhaustive. Missing: {}",
+                                name,
+                                missing.join(", ")
+                            )
+                            .as_str(),
+                            span,
+                        )
+                        .with_module("infer"))
                     }
                 } else {
                     Err(AnalysisError::new_with_span(format!("Switch statement on type {} requires a wildcard case '_' for exhaustiveness", condition_ty).as_str(), span).with_module("infer"))
                 }
             }
             Type::Error => {
-                 let mut covered_variants = HashSet::new();
-                 for case in cases {
-                     for pattern in &case.patterns {
-                         if let TypedExprKind::MemberAccess { member, .. } = &pattern.expr {
-                             covered_variants.insert(member.clone());
-                         }
-                     }
-                 }
-                 
-                 let total_variants: usize = self.errors.values().map(|e| e.variants.len()).sum();
-                 if covered_variants.len() == total_variants {
-                     Ok(())
-                 } else {
-                     Err(AnalysisError::new_with_span("Switch statement on error is not exhaustive", span).with_module("infer"))
-                 }
+                let mut covered_variants = HashSet::new();
+                for case in cases {
+                    for pattern in &case.patterns {
+                        if let TypedExprKind::MemberAccess { member, .. } = &pattern.expr {
+                            covered_variants.insert(member.clone());
+                        }
+                    }
+                }
+
+                let total_variants: usize = self.errors.values().map(|e| e.variants.len()).sum();
+                if covered_variants.len() == total_variants {
+                    Ok(())
+                } else {
+                    Err(AnalysisError::new_with_span(
+                        "Switch statement on error is not exhaustive",
+                        span,
+                    )
+                    .with_module("infer"))
+                }
             }
-            _ => {
-                Err(AnalysisError::new_with_span(format!("Switch statement on type {} requires a wildcard case '_' for exhaustiveness", condition_ty).as_str(), span).with_module("infer"))
-            }
+            _ => Err(AnalysisError::new_with_span(
+                format!(
+                    "Switch statement on type {} requires a wildcard case '_' for exhaustiveness",
+                    condition_ty
+                )
+                .as_str(),
+                span,
+            )
+            .with_module("infer")),
         }
     }
 }
@@ -1339,7 +1384,11 @@ pub use crate::ast::{AstDump, print_indent};
 impl AstDump for TypedStructDef {
     fn dump(&self, indent: usize) {
         print_indent(indent);
-        let vis = if self.visibility.is_public() { "pub " } else { "" };
+        let vis = if self.visibility.is_public() {
+            "pub "
+        } else {
+            ""
+        };
         let generics = if self.generic_params.is_empty() {
             "".to_string()
         } else {
@@ -1362,7 +1411,11 @@ impl AstDump for TypedStructDef {
 impl AstDump for TypedEnumDef {
     fn dump(&self, indent: usize) {
         print_indent(indent);
-        let vis = if self.visibility.is_public() { "pub " } else { "" };
+        let vis = if self.visibility.is_public() {
+            "pub "
+        } else {
+            ""
+        };
         let generics = if self.generic_params.is_empty() {
             "".to_string()
         } else {
@@ -1390,7 +1443,11 @@ impl AstDump for TypedEnumDef {
 impl AstDump for TypedErrorDef {
     fn dump(&self, indent: usize) {
         print_indent(indent);
-        let vis = if self.visibility.is_public() { "pub " } else { "" };
+        let vis = if self.visibility.is_public() {
+            "pub "
+        } else {
+            ""
+        };
         println!("ErrorDef: {}{}", vis, self.name);
 
         if let Some(union) = &self.union_types {
@@ -1654,6 +1711,7 @@ impl AstDump for TypedExpr {
         print_indent(indent);
         match &self.expr {
             TypedExprKind::Int(val) => println!("Expr::Int({}) (ty: {})", val, self.ty),
+            TypedExprKind::Float(val) => println!("Expr::Float({}) (ty: {})", val, self.ty),
             TypedExprKind::Bool(val) => println!("Expr::Bool({}) (ty: {})", val, self.ty),
             TypedExprKind::String(val) => println!("Expr::String(\"{}\") (ty: {})", val, self.ty),
             TypedExprKind::Char(val) => println!("Expr::Char('{}') (ty: {})", val, self.ty),
@@ -1731,7 +1789,11 @@ impl AstDump for TypedExpr {
                     s.dump(indent + 1);
                 }
             }
-            TypedExprKind::MemberAccess { object, member, kind } => {
+            TypedExprKind::MemberAccess {
+                object,
+                member,
+                kind,
+            } => {
                 let kind_str = match kind {
                     crate::ast::MemberAccessKind::Unknown => "",
                     crate::ast::MemberAccessKind::Package => " (package)",
@@ -1740,7 +1802,10 @@ impl AstDump for TypedExpr {
                     crate::ast::MemberAccessKind::EnumMember => " (enum)",
                     crate::ast::MemberAccessKind::ErrorMember => " (error)",
                 };
-                println!("Expr::MemberAccess: .{}{} (ty: {})", member, kind_str, self.ty);
+                println!(
+                    "Expr::MemberAccess: .{}{} (ty: {})",
+                    member, kind_str, self.ty
+                );
                 object.dump(indent + 1);
             }
             TypedExprKind::Struct { name, fields } => {

@@ -3,6 +3,7 @@ use crate::ast::{BinaryOp, Mutability, Span, Type, UnaryOp, Visibility};
 #[derive(Debug, Clone)]
 pub enum HirExpr {
     Int(i64, Type, Span),
+    Float(f64, Type, Span),
     Bool(bool, Type, Span),
     String(String, Type, Span),
     Char(char, Type, Span),

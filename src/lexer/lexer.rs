@@ -288,20 +288,58 @@ impl Lexer {
     fn read_number(&mut self) -> Result<Token, LexerError> {
         let start = self.pos;
 
+        // Read integer part
         while self.pos < self.source.len() && self.source[self.pos].is_ascii_digit() {
             self.pos += 1;
         }
 
-        let num_str: String = self.source[start..self.pos].iter().collect();
+        // Check for floating point
+        if self.pos < self.source.len() && self.source[self.pos] == '.' {
+            let dot_pos = self.pos;
+            self.pos += 1; // consume the dot
 
-        match num_str.parse::<i64>() {
-            Ok(value) => Ok(Token::Int(value)),
-            Err(_) => Err(LexerError::new(
-                &format!("Invalid number: {}", num_str),
-                start,
-                file!(),
-                line!(),
-            )),
+            // Check if there's a fractional part
+            if self.pos < self.source.len() && self.source[self.pos].is_ascii_digit() {
+                // Read fractional part
+                while self.pos < self.source.len() && self.source[self.pos].is_ascii_digit() {
+                    self.pos += 1;
+                }
+
+                let num_str: String = self.source[start..self.pos].iter().collect();
+                match num_str.parse::<f64>() {
+                    Ok(value) => Ok(Token::Float(value)),
+                    Err(_) => Err(LexerError::new(
+                        &format!("Invalid float: {}", num_str),
+                        start,
+                        file!(),
+                        line!(),
+                    )),
+                }
+            } else {
+                // It's just a dot, not a float - back up
+                self.pos = dot_pos;
+                let num_str: String = self.source[start..self.pos].iter().collect();
+                match num_str.parse::<i64>() {
+                    Ok(value) => Ok(Token::Int(value)),
+                    Err(_) => Err(LexerError::new(
+                        &format!("Invalid number: {}", num_str),
+                        start,
+                        file!(),
+                        line!(),
+                    )),
+                }
+            }
+        } else {
+            let num_str: String = self.source[start..self.pos].iter().collect();
+            match num_str.parse::<i64>() {
+                Ok(value) => Ok(Token::Int(value)),
+                Err(_) => Err(LexerError::new(
+                    &format!("Invalid number: {}", num_str),
+                    start,
+                    file!(),
+                    line!(),
+                )),
+            }
         }
     }
 

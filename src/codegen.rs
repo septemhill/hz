@@ -780,9 +780,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             hir::HirStmt::Switch {
-                condition,
-                cases,
-                ..
+                condition, cases, ..
             } => {
                 let function = self.current_function.unwrap();
                 let end_block = self.context.append_basic_block(function, "switch_end");
@@ -837,7 +835,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                     // Case body
                     self.builder.position_at_end(body_block);
                     self.generate_hir_stmt(&case.body)?;
-                    if self.builder.get_insert_block().unwrap().get_terminator().is_none() {
+                    if self
+                        .builder
+                        .get_insert_block()
+                        .unwrap()
+                        .get_terminator()
+                        .is_none()
+                    {
                         self.builder.build_unconditional_branch(end_block)?;
                     }
 
@@ -846,7 +850,13 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
 
                 // Final fallthrough (if no case matches)
-                if self.builder.get_insert_block().unwrap().get_terminator().is_none() {
+                if self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_terminator()
+                    .is_none()
+                {
                     self.builder.build_unconditional_branch(end_block)?;
                 }
 
@@ -913,6 +923,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::Int(v, _, _) => {
                 Ok(self.context.i64_type().const_int(*v as u64, false).into())
             }
+            hir::HirExpr::Float(v, _, _) => Ok(self.context.f64_type().const_float(*v).into()),
             hir::HirExpr::Bool(v, _, _) => Ok(self
                 .context
                 .bool_type()
@@ -2147,6 +2158,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let i64_type = self.context.i64_type();
                 Ok(i64_type.const_int(*value as u64, false).into())
             }
+            Expr::Float(value, _) => {
+                let f64_type = self.context.f64_type();
+                Ok(f64_type.const_float(*value).into())
+            }
             Expr::Bool(value, _) => {
                 let i1_type = self.context.bool_type();
                 Ok(i1_type.const_int(if *value { 1 } else { 0 }, false).into())
@@ -2822,6 +2837,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::U16 => self.context.i16_type().into(),
             Type::U32 => self.context.i32_type().into(),
             Type::U64 => self.context.i64_type().into(),
+            Type::F64 => self.context.f64_type().into(),
             Type::Bool => self.context.bool_type().into(),
             Type::SelfType => self.context.i64_type().into(), // TODO: Resolve to actual struct type
             Type::Pointer(_) => self.context.i64_type().into(), // TODO: Implement pointer types
@@ -2842,6 +2858,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Type::U16 => self.context.i16_type().into(),
                     Type::U32 => self.context.i32_type().into(),
                     Type::U64 => self.context.i64_type().into(),
+                    Type::F64 => self.context.f64_type().into(),
                     Type::Bool => self.context.bool_type().into(),
                     _ => self.context.i64_type().into(), // Default for custom/generic types
                 };

@@ -188,6 +188,7 @@ impl TypeAnalyzer {
             crate::ast::Expr::TupleIndex { tuple, .. } => self.expr_find_try(tuple),
             // Base cases - no try expression
             crate::ast::Expr::Int(_, _)
+            | crate::ast::Expr::Float(_, _)
             | crate::ast::Expr::Bool(_, _)
             | crate::ast::Expr::String(_, _)
             | crate::ast::Expr::Char(_, _)
@@ -453,6 +454,7 @@ impl TypeAnalyzer {
     fn analyze_expression(&mut self, expr: &crate::ast::Expr) -> AnalysisResult<crate::ast::Type> {
         match expr {
             crate::ast::Expr::Int(_, _) => Ok(crate::ast::Type::I64),
+            crate::ast::Expr::Float(_, _) => Ok(crate::ast::Type::F64),
             crate::ast::Expr::Bool(_, _) => Ok(crate::ast::Type::Bool),
             crate::ast::Expr::String(_, _) => Ok(crate::ast::Type::Custom {
                 name: "String".to_string(),
@@ -667,7 +669,11 @@ impl TypeAnalyzer {
                     Ok(then_ty)
                 } else {
                     Err(AnalysisError::new_with_span(
-                        "If expression branches must have compatible types",
+                        format!(
+                            "if and else branches must have the same type, found '{}' and '{}'",
+                            then_ty, else_ty
+                        )
+                        .as_str(),
                         span,
                     )
                     .with_module("types"))

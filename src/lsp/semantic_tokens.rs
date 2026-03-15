@@ -164,6 +164,7 @@ fn get_token_type(token: &Token) -> Option<SemanticTokenType> {
 
         // Literals
         Token::Int(_) => Some(SemanticTokenType::Number),
+        Token::Float(_) => Some(SemanticTokenType::Number),
         Token::String(_) => Some(SemanticTokenType::String),
         Token::Char(_) => Some(SemanticTokenType::String),
 

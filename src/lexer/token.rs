@@ -41,6 +41,7 @@ pub enum Token {
 
     // Literals
     Int(i64),
+    Float(f64),
     String(String),
     Char(char),
 
@@ -113,6 +114,7 @@ impl Token {
             Token::Null => "null",
             Token::Ident(_) => "ident",
             Token::Int(_) => "int",
+            Token::Float(_) => "float",
             Token::String(_) => "string",
             Token::Char(_) => "char",
             Token::LParen => "(",

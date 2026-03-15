@@ -16,6 +16,7 @@ pub enum Type {
     U16,
     U32,
     U64,
+    F64,
     Bool,
     Void,
     /// Self type (for struct methods)
@@ -107,6 +108,7 @@ impl fmt::Display for Type {
             Type::U16 => write!(f, "u16"),
             Type::U32 => write!(f, "u32"),
             Type::U64 => write!(f, "u64"),
+            Type::F64 => write!(f, "f64"),
             Type::Bool => write!(f, "bool"),
             Type::Void => write!(f, "void"),
             Type::SelfType => write!(f, "Self"),
@@ -312,6 +314,8 @@ pub struct Span {
 pub enum Expr {
     /// Integer literal (i64)
     Int(i64, Span),
+    /// Float literal (f64)
+    Float(f64, Span),
     /// Boolean literal
     Bool(bool, Span),
     /// String literal
@@ -527,7 +531,7 @@ impl AstDump for Program {
     fn dump(&self, indent: usize) {
         print_indent(indent);
         println!("Program");
-        
+
         if !self.imports.is_empty() {
             print_indent(indent + 1);
             println!("Imports:");
@@ -562,9 +566,13 @@ impl AstDump for Program {
 impl AstDump for FnDef {
     fn dump(&self, indent: usize) {
         print_indent(indent);
-        let vis = if self.visibility.is_public() { "pub " } else { "" };
+        let vis = if self.visibility.is_public() {
+            "pub "
+        } else {
+            ""
+        };
         println!("FnDef: {}{} -> {}", vis, self.name, self.return_ty);
-        
+
         if !self.params.is_empty() {
             print_indent(indent + 1);
             println!("Params:");
@@ -573,7 +581,7 @@ impl AstDump for FnDef {
                 println!("{}: {}", p.name, p.ty);
             }
         }
-        
+
         print_indent(indent + 1);
         println!("Body:");
         for s in &self.body {
@@ -585,9 +593,13 @@ impl AstDump for FnDef {
 impl AstDump for ExternalFnDef {
     fn dump(&self, indent: usize) {
         print_indent(indent);
-        let vis = if self.visibility.is_public() { "pub " } else { "" };
+        let vis = if self.visibility.is_public() {
+            "pub "
+        } else {
+            ""
+        };
         println!("ExternalFnDef: {}{} -> {}", vis, self.name, self.return_ty);
-        
+
         if !self.params.is_empty() {
             print_indent(indent + 1);
             println!("Params:");
@@ -602,20 +614,24 @@ impl AstDump for ExternalFnDef {
 impl AstDump for StructDef {
     fn dump(&self, indent: usize) {
         print_indent(indent);
-        let vis = if self.visibility.is_public() { "pub " } else { "" };
+        let vis = if self.visibility.is_public() {
+            "pub "
+        } else {
+            ""
+        };
         let generics = if self.generic_params.is_empty() {
             "".to_string()
         } else {
             format!("<{}>", self.generic_params.join(", "))
         };
         println!("StructDef: {}{}{}", vis, self.name, generics);
-        
+
         for f in &self.fields {
             print_indent(indent + 1);
             let fvis = if f.visibility.is_public() { "pub " } else { "" };
             println!("Field: {}{}: {}", fvis, f.name, f.ty);
         }
-        
+
         for m in &self.methods {
             m.dump(indent + 1);
         }
@@ -625,14 +641,18 @@ impl AstDump for StructDef {
 impl AstDump for EnumDef {
     fn dump(&self, indent: usize) {
         print_indent(indent);
-        let vis = if self.visibility.is_public() { "pub " } else { "" };
+        let vis = if self.visibility.is_public() {
+            "pub "
+        } else {
+            ""
+        };
         let generics = if self.generic_params.is_empty() {
             "".to_string()
         } else {
             format!("<{}>", self.generic_params.join(", "))
         };
         println!("EnumDef: {}{}{}", vis, self.name, generics);
-        
+
         for v in &self.variants {
             print_indent(indent + 1);
             let vvis = if v.visibility.is_public() { "pub " } else { "" };
@@ -643,7 +663,7 @@ impl AstDump for EnumDef {
             };
             println!("Variant: {}{}{}", vvis, v.name, types);
         }
-        
+
         for m in &self.methods {
             m.dump(indent + 1);
         }
@@ -653,9 +673,13 @@ impl AstDump for EnumDef {
 impl AstDump for ErrorDef {
     fn dump(&self, indent: usize) {
         print_indent(indent);
-        let vis = if self.visibility.is_public() { "pub " } else { "" };
+        let vis = if self.visibility.is_public() {
+            "pub "
+        } else {
+            ""
+        };
         println!("ErrorDef: {}{}", vis, self.name);
-        
+
         if let Some(union) = &self.union_types {
             print_indent(indent + 1);
             println!("Union: {:?}", union);
@@ -685,7 +709,15 @@ impl AstDump for Stmt {
             Stmt::Import { packages, .. } => {
                 println!("Stmt::Import: {:?}", packages);
             }
-            Stmt::Let { mutability, name, names, ty, value, visibility, .. } => {
+            Stmt::Let {
+                mutability,
+                name,
+                names,
+                ty,
+                value,
+                visibility,
+                ..
+            } => {
                 let mut_str = match mutability {
                     Mutability::Var => "var",
                     Mutability::Const => "const",
@@ -696,7 +728,11 @@ impl AstDump for Stmt {
                 } else {
                     name.clone()
                 };
-                let ty_str = if let Some(t) = ty { format!(": {}", t) } else { "".to_string() };
+                let ty_str = if let Some(t) = ty {
+                    format!(": {}", t)
+                } else {
+                    "".to_string()
+                };
                 println!("Stmt::Let: {}{} {}{}", vis, mut_str, name_str, ty_str);
                 if let Some(v) = value {
                     print_indent(indent + 1);
@@ -704,7 +740,9 @@ impl AstDump for Stmt {
                     v.dump(indent + 2);
                 }
             }
-            Stmt::Assign { target, op, value, .. } => {
+            Stmt::Assign {
+                target, op, value, ..
+            } => {
                 println!("Stmt::Assign: {} {:?}", target, op);
                 print_indent(indent + 1);
                 println!("Value:");
@@ -724,7 +762,13 @@ impl AstDump for Stmt {
                     s.dump(indent + 1);
                 }
             }
-            Stmt::If { condition, capture, then_branch, else_branch, .. } => {
+            Stmt::If {
+                condition,
+                capture,
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 println!("Stmt::If");
                 if let Some(c) = capture {
                     print_indent(indent + 1);
@@ -742,7 +786,15 @@ impl AstDump for Stmt {
                     eb.dump(indent + 2);
                 }
             }
-            Stmt::For { label, var_name, iterable, capture, index_var, body, .. } => {
+            Stmt::For {
+                label,
+                var_name,
+                iterable,
+                capture,
+                index_var,
+                body,
+                ..
+            } => {
                 println!("Stmt::For");
                 if let Some(l) = label {
                     print_indent(indent + 1);
@@ -767,7 +819,9 @@ impl AstDump for Stmt {
                 println!("Body:");
                 body.dump(indent + 2);
             }
-            Stmt::Switch { condition, cases, .. } => {
+            Stmt::Switch {
+                condition, cases, ..
+            } => {
                 println!("Stmt::Switch");
                 print_indent(indent + 1);
                 println!("Condition:");
@@ -798,7 +852,11 @@ impl AstDump for Stmt {
                 stmt.dump(indent + 1);
             }
             Stmt::Break { label, .. } => {
-                let lbl = if let Some(l) = label { format!(" {}", l) } else { "".to_string() };
+                let lbl = if let Some(l) = label {
+                    format!(" {}", l)
+                } else {
+                    "".to_string()
+                };
                 println!("Stmt::Break{}", lbl);
             }
         }
@@ -809,8 +867,9 @@ impl AstDump for Expr {
     fn dump(&self, indent: usize) {
         print_indent(indent);
         match self {
-            Expr::Int(val, _) => println!("Expr::Int({})", val),
-            Expr::Bool(val, _) => println!("Expr::Bool({})", val),
+            Expr::Int(val, _) => println!("Expr::{}({})", "Int", val),
+            Expr::Float(val, _) => println!("Expr::{}({})", "Float", val),
+            Expr::Bool(val, _) => println!("Expr::{}({})", "Bool", val),
             Expr::String(val, _) => println!("Expr::String(\"{}\")", val),
             Expr::Char(val, _) => println!("Expr::Char('{}')", val),
             Expr::Null(_) => println!("Expr::Null"),
@@ -831,7 +890,9 @@ impl AstDump for Expr {
                     e.dump(indent + 1);
                 }
             }
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 println!("Expr::Binary: {:?}", op);
                 left.dump(indent + 1);
                 right.dump(indent + 1);
@@ -840,14 +901,29 @@ impl AstDump for Expr {
                 println!("Expr::Unary: {:?}", op);
                 expr.dump(indent + 1);
             }
-            Expr::Call { name, namespace, args, .. } => {
-                let ns = if let Some(n) = namespace { format!("{}::", n) } else { "".to_string() };
+            Expr::Call {
+                name,
+                namespace,
+                args,
+                ..
+            } => {
+                let ns = if let Some(n) = namespace {
+                    format!("{}::", n)
+                } else {
+                    "".to_string()
+                };
                 println!("Expr::Call: {}{}", ns, name);
                 for a in args {
                     a.dump(indent + 1);
                 }
             }
-            Expr::If { condition, capture, then_branch, else_branch, .. } => {
+            Expr::If {
+                condition,
+                capture,
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 println!("Expr::If");
                 if let Some(c) = capture {
                     print_indent(indent + 1);
@@ -869,7 +945,12 @@ impl AstDump for Expr {
                     s.dump(indent + 1);
                 }
             }
-            Expr::MemberAccess { object, member, kind, .. } => {
+            Expr::MemberAccess {
+                object,
+                member,
+                kind,
+                ..
+            } => {
                 let kind_str = match kind {
                     MemberAccessKind::Unknown => "",
                     MemberAccessKind::Package => " (package)",
@@ -893,7 +974,12 @@ impl AstDump for Expr {
                 println!("Expr::Try");
                 expr.dump(indent + 1);
             }
-            Expr::Catch { expr, error_var, body, .. } => {
+            Expr::Catch {
+                expr,
+                error_var,
+                body,
+                ..
+            } => {
                 println!("Expr::Catch");
                 if let Some(v) = error_var {
                     print_indent(indent + 1);

@@ -197,6 +197,7 @@ impl Parser {
     fn get_expr_span(&self, expr: &Expr) -> usize {
         match expr {
             Expr::Int(_, span) => span.end,
+            Expr::Float(_, span) => span.end,
             Expr::Bool(_, span) => span.end,
             Expr::String(_, span) => span.end,
             Expr::Char(_, span) => span.end,
@@ -1940,7 +1941,12 @@ impl Parser {
                     fn format_target(expr: &Expr) -> String {
                         match expr {
                             Expr::Ident(name, _) => name.clone(),
-                            Expr::MemberAccess { object, member, kind, .. } => {
+                            Expr::MemberAccess {
+                                object,
+                                member,
+                                kind,
+                                ..
+                            } => {
                                 format!("{}.{}", format_target(object.as_ref()), member)
                             }
                             _ => "".to_string(),
@@ -2526,6 +2532,10 @@ impl Parser {
             Token::Int(n) => {
                 self.advance();
                 Ok(Expr::Int(n, Span { start: 0, end: 0 }))
+            }
+            Token::Float(n) => {
+                self.advance();
+                Ok(Expr::Float(n, Span { start: 0, end: 0 }))
             }
             Token::String(s) => {
                 self.advance();

@@ -637,6 +637,7 @@ impl LoweringContext {
     fn lower_expr(&mut self, e: &ast::Expr) -> hir::HirExpr {
         match e {
             ast::Expr::Int(v, span) => hir::HirExpr::Int(*v, ast::Type::I64, *span),
+            ast::Expr::Float(v, span) => hir::HirExpr::Float(*v, ast::Type::F64, *span),
             ast::Expr::Bool(v, span) => hir::HirExpr::Bool(*v, ast::Type::Bool, *span),
             ast::Expr::String(v, span) => hir::HirExpr::String(
                 v.clone(),
