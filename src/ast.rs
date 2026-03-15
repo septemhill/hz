@@ -220,6 +220,17 @@ pub enum Mutability {
     Const, // immutable constant
 }
 
+/// Kind of member access
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberAccessKind {
+    Unknown,
+    Package,      // io.println, std.SomeType
+    StructField,  // point.x
+    StructMethod, // point.move()
+    EnumMember,   // Color.Red
+    ErrorMember,  // Fail.NotFound
+}
+
 /// Struct field definition
 #[derive(Debug, Clone)]
 pub struct StructField {
@@ -358,6 +369,7 @@ pub enum Expr {
     MemberAccess {
         object: Box<Expr>,
         member: String,
+        kind: MemberAccessKind,
         span: Span,
     },
     /// Struct literal (e.g., Base{ name, age, married })
@@ -857,8 +869,16 @@ impl AstDump for Expr {
                     s.dump(indent + 1);
                 }
             }
-            Expr::MemberAccess { object, member, .. } => {
-                println!("Expr::MemberAccess: .{}", member);
+            Expr::MemberAccess { object, member, kind, .. } => {
+                let kind_str = match kind {
+                    MemberAccessKind::Unknown => "",
+                    MemberAccessKind::Package => " (package)",
+                    MemberAccessKind::StructField => " (field)",
+                    MemberAccessKind::StructMethod => " (method)",
+                    MemberAccessKind::EnumMember => " (enum)",
+                    MemberAccessKind::ErrorMember => " (error)",
+                };
+                println!("Expr::MemberAccess: .{}{}", member, kind_str);
                 object.dump(indent + 1);
             }
             Expr::Struct { name, fields, .. } => {

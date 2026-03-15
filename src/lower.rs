@@ -282,6 +282,7 @@ mod tests {
         let expr = Expr::MemberAccess {
             object: Box::new(Expr::Ident("obj".to_string(), dummy_span())),
             member: "field".to_string(),
+            kind: MemberAccessKind::Unknown,
             span: dummy_span(),
         };
         let hir_expr = ctx.lower_expr(&expr);
@@ -750,6 +751,7 @@ impl LoweringContext {
             ast::Expr::MemberAccess {
                 object,
                 member,
+                kind: _,
                 span,
             } => {
                 hir::HirExpr::MemberAccess {

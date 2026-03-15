@@ -486,6 +486,10 @@ impl TypeAnalyzer {
                 if name == "_" {
                     return Ok(crate::ast::Type::I64);
                 }
+                // Check if it's a known package
+                if name == "std" || name == "io" || name == "os" {
+                    return Ok(crate::ast::Type::I64); // Return placeholder for package
+                }
                 self.symbol_table
                     .resolve(name)
                     .map(|s| s.ty.clone())

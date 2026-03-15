@@ -69,6 +69,7 @@ pub enum TypedExprKind {
     MemberAccess {
         object: Box<TypedExpr>,
         member: String,
+        kind: crate::ast::MemberAccessKind,
     },
     /// Struct literal
     Struct {
@@ -204,6 +205,7 @@ pub struct TypedProgram {
 /// Type inference engine that traverses the AST and infers types
 pub struct TypeInferrer {
     symbol_table: SymbolTable,
+    structs: HashMap<String, crate::ast::StructDef>,
     enums: HashMap<String, crate::ast::EnumDef>,
     errors: HashMap<String, crate::ast::ErrorDef>,
 }
@@ -213,6 +215,7 @@ impl TypeInferrer {
     pub fn new(symbol_table: SymbolTable) -> Self {
         TypeInferrer {
             symbol_table,
+            structs: HashMap::new(),
             enums: HashMap::new(),
             errors: HashMap::new(),
         }
@@ -220,7 +223,10 @@ impl TypeInferrer {
 
     /// Infer types for an entire program
     pub fn infer_program(&mut self, program: &Program) -> AnalysisResult<TypedProgram> {
-        // Populate enums and errors maps for exhaustiveness checking
+        // Populate structs, enums and errors maps for exhaustiveness checking and member access refinement
+        for s in &program.structs {
+            self.structs.insert(s.name.clone(), s.clone());
+        }
         for e in &program.enums {
             self.enums.insert(e.name.clone(), e.clone());
         }
@@ -836,16 +842,27 @@ impl TypeInferrer {
                 object,
                 member,
                 span,
+                kind: _,
             } => {
                 // Try to resolve as an enum/error variant first (Type.Variant)
                 if let Expr::Ident(obj_name, _) = object.as_ref() {
                     let full_name = format!("{}.{}", obj_name, member);
                     let found_ty = self.symbol_table.resolve(&full_name).map(|s| s.ty.clone());
                     if let Some(ty) = found_ty {
+                        // Determine if it's enum or error member
+                        let kind = if self.enums.contains_key(obj_name) {
+                            crate::ast::MemberAccessKind::EnumMember
+                        } else if self.errors.contains_key(obj_name) {
+                            crate::ast::MemberAccessKind::ErrorMember
+                        } else {
+                            crate::ast::MemberAccessKind::Unknown
+                        };
+
                         return Ok(TypedExpr {
                             expr: TypedExprKind::MemberAccess {
                                 object: Box::new(self.infer_expr(object)?),
                                 member: member.clone(),
+                                kind,
                             },
                             ty,
                             span: *span,
@@ -853,12 +870,64 @@ impl TypeInferrer {
                     }
                 }
 
+                // Try to resolve as package access
+                if let Expr::Ident(obj_name, _) = object.as_ref() {
+                    // Check if obj_name is an imported package
+                    let is_package = self.symbol_table.resolve(obj_name).is_none() && 
+                                   (obj_name == "std" || obj_name == "io" || obj_name == "os"); // Simple check for now
+                    
+                    if is_package {
+                        return Ok(TypedExpr {
+                            expr: TypedExprKind::MemberAccess {
+                                object: Box::new(TypedExpr {
+                                    expr: TypedExprKind::Ident(obj_name.clone()),
+                                    ty: Type::I64, // Placeholder for package "type"
+                                    span: Span { start: 0, end: 0 },
+                                }),
+                                member: member.clone(),
+                                kind: crate::ast::MemberAccessKind::Package,
+                            },
+                            ty: Type::I64, // Placeholder
+                            span: *span,
+                        });
+                    }
+                }
+
                 let typed_object = self.infer_expr(object)?;
+                
+                // For now, default to StructField if object is a custom type
+                let kind = if let Type::Custom { name, .. } = &typed_object.ty {
+                    if let Some(struct_def) = self.structs.get(name) {
+                        if struct_def.methods.iter().any(|m| &m.name == member) {
+                            crate::ast::MemberAccessKind::StructMethod
+                        } else {
+                            crate::ast::MemberAccessKind::StructField
+                        }
+                    } else if let Some(enum_def) = self.enums.get(name) {
+                        if enum_def.methods.iter().any(|m| &m.name == member) {
+                             crate::ast::MemberAccessKind::StructMethod
+                        } else {
+                             crate::ast::MemberAccessKind::EnumMember
+                        }
+                    } else if let Some(error_def) = self.errors.get(name) {
+                        if error_def.variants.iter().any(|v| &v.name == member) {
+                            crate::ast::MemberAccessKind::ErrorMember
+                        } else {
+                             crate::ast::MemberAccessKind::Unknown
+                        }
+                    } else {
+                        crate::ast::MemberAccessKind::StructField
+                    }
+                } else {
+                    crate::ast::MemberAccessKind::Unknown
+                };
+
                 // For now, default to i64
                 Ok(TypedExpr {
                     expr: TypedExprKind::MemberAccess {
                         object: Box::new(typed_object),
                         member: member.clone(),
+                        kind,
                     },
                     ty: Type::I64,
                     span: *span,
@@ -1472,8 +1541,16 @@ impl AstDump for TypedExpr {
                     s.dump(indent + 1);
                 }
             }
-            TypedExprKind::MemberAccess { object, member } => {
-                println!("Expr::MemberAccess: .{} (ty: {})", member, self.ty);
+            TypedExprKind::MemberAccess { object, member, kind } => {
+                let kind_str = match kind {
+                    crate::ast::MemberAccessKind::Unknown => "",
+                    crate::ast::MemberAccessKind::Package => " (package)",
+                    crate::ast::MemberAccessKind::StructField => " (field)",
+                    crate::ast::MemberAccessKind::StructMethod => " (method)",
+                    crate::ast::MemberAccessKind::EnumMember => " (enum)",
+                    crate::ast::MemberAccessKind::ErrorMember => " (error)",
+                };
+                println!("Expr::MemberAccess: .{}{} (ty: {})", member, kind_str, self.ty);
                 object.dump(indent + 1);
             }
             TypedExprKind::Struct { name, fields } => {

@@ -1922,9 +1922,10 @@ impl Parser {
                 }
             }
             Expr::MemberAccess {
-                object: member_expr,
+                object,
                 member,
-                span: member_span,
+                kind,
+                span,
             } => {
                 // Handle member assignment like self.i += 1
                 if let Some(op) = self.match_assign_op() {
@@ -1939,19 +1940,19 @@ impl Parser {
                     fn format_target(expr: &Expr) -> String {
                         match expr {
                             Expr::Ident(name, _) => name.clone(),
-                            Expr::MemberAccess { object, member, .. } => {
+                            Expr::MemberAccess { object, member, kind, .. } => {
                                 format!("{}.{}", format_target(object.as_ref()), member)
                             }
                             _ => "".to_string(),
                         }
                     }
-                    let target = format!("{}.{}", format_target(member_expr.as_ref()), member);
+                    let target = format!("{}.{}", format_target(object.as_ref()), member);
                     return Ok(Stmt::Assign {
                         target,
                         op,
                         value,
                         span: Span {
-                            start: member_span.start,
+                            start: span.start,
                             end: span_end,
                         },
                     });
@@ -2429,6 +2430,7 @@ impl Parser {
                         expr = Expr::MemberAccess {
                             object: Box::new(expr),
                             member: id,
+                            kind: MemberAccessKind::Unknown,
                             span: Span { start: 0, end: 0 },
                         };
                         continue;
