@@ -422,11 +422,11 @@ impl TypeInferrer {
                 span,
                 mutability,
             } => {
-                let inferred_ty = if let Some(val_expr) = value {
+                let inferred_ty = if let Some(explicit_ty) = ty {
+                    explicit_ty.clone()
+                } else if let Some(val_expr) = value {
                     let typed_val = self.infer_expr(val_expr)?;
                     typed_val.ty.clone()
-                } else if let Some(explicit_ty) = ty {
-                    explicit_ty.clone()
                 } else {
                     return Err(AnalysisError::new_with_span(
                         "Variable must have either a type or an initial value",
@@ -522,6 +522,7 @@ impl TypeInferrer {
 
                 // Handle capture variable
                 if let Some(cap) = capture {
+                    self.symbol_table.enter_scope();
                     // If condition is an optional type, the capture gets the inner type
                     if let Type::Option(inner_ty) = typed_condition.ty.clone() {
                         self.symbol_table.define(
@@ -534,6 +535,11 @@ impl TypeInferrer {
                 }
 
                 let typed_then = self.infer_stmt(then_branch)?;
+
+                if capture.is_some() {
+                    self.symbol_table.exit_scope();
+                }
+
                 let typed_else = if let Some(eb) = else_branch {
                     Some(Box::new(self.infer_stmt(eb)?))
                 } else {
@@ -884,7 +890,27 @@ impl TypeInferrer {
                 span,
             } => {
                 let typed_condition = self.infer_expr(condition)?;
+
+                // Handle capture variable
+                if let Some(cap) = capture {
+                    self.symbol_table.enter_scope();
+                    // If condition is an optional type, the capture gets the inner type
+                    if let Type::Option(inner_ty) = typed_condition.ty.clone() {
+                        self.symbol_table.define(
+                            cap.clone(),
+                            *inner_ty,
+                            Visibility::Private,
+                            false,
+                        );
+                    }
+                }
+
                 let typed_then = self.infer_expr(then_branch)?;
+
+                if capture.is_some() {
+                    self.symbol_table.exit_scope();
+                }
+
                 let typed_else = self.infer_expr(else_branch)?;
 
                 // The type of an if expression is the type of the then branch

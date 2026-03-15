@@ -38,4 +38,9 @@ fn main () void {
             c
         };
     }
+
+    {
+        const d: ?u8 = 'a';
+        const z = if (d) |v| v else '_';
+    }
 }

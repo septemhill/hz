@@ -453,10 +453,23 @@ impl SymbolResolver {
                 condition,
                 then_branch,
                 else_branch,
+                capture,
                 ..
             } => {
                 self.analyze_expression(condition)?;
-                self.analyze_expression(then_branch)?;
+                if let Some(cap) = capture {
+                    self.symbol_table.enter_scope();
+                    self.symbol_table.define(
+                        cap.clone(),
+                        crate::ast::Type::I64,
+                        Visibility::Private,
+                        false,
+                    );
+                    self.analyze_expression(then_branch)?;
+                    self.symbol_table.exit_scope();
+                } else {
+                    self.analyze_expression(then_branch)?;
+                }
                 self.analyze_expression(else_branch)?;
                 Ok(crate::ast::Type::I64)
             }

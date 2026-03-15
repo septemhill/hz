@@ -71,13 +71,8 @@ struct Config {
     }
 }
 
-// Separate function to create config - avoids type inference issues
-fn create_config() Config {
-    return Config.parse("config.json");
-}
-
 fn main() i64! {
-    const config = create_config();
+    const config = Config.parse("./config.json");
 
     io.println(config.postgres.host);
 

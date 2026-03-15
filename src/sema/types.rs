@@ -212,9 +212,9 @@ impl TypeAnalyzer {
                 visibility: _,
                 span,
             } => {
-                let inferred_ty = if let Some(val_expr) = value {
-                    let v_ty = self.analyze_expression(val_expr)?;
-                    if let Some(explicit_ty) = ty {
+                let inferred_ty = if let Some(explicit_ty) = ty {
+                    if let Some(val_expr) = value {
+                        let v_ty = self.analyze_expression(val_expr)?;
                         if !self.types_compatible(explicit_ty, &v_ty) {
                             return Err(AnalysisError::new_with_span(
                                 &format!(
@@ -226,9 +226,9 @@ impl TypeAnalyzer {
                             .with_module("types"));
                         }
                     }
-                    v_ty
-                } else if let Some(explicit_ty) = ty {
                     explicit_ty.clone()
+                } else if let Some(val_expr) = value {
+                    self.analyze_expression(val_expr)?
                 } else {
                     return Err(AnalysisError::new_with_span(
                         "Variable must have either a type or an initial value",
@@ -354,6 +354,8 @@ impl TypeAnalyzer {
 
                 // Handle capture variable if present
                 if let Some(cap) = capture {
+                    // Enter a new scope for the capture variable
+                    self.symbol_table.enter_scope();
                     // If condition is an optional type, the capture gets the inner type
                     if let crate::ast::Type::Option(inner_ty) = cond_ty {
                         self.symbol_table.define(
@@ -372,6 +374,11 @@ impl TypeAnalyzer {
                 }
 
                 self.analyze_statement(then_branch)?;
+
+                // Exit the scope if a capture variable was present
+                if capture.is_some() {
+                    self.symbol_table.exit_scope();
+                }
                 if let Some(eb) = else_branch {
                     self.analyze_statement(eb)?;
                 }
@@ -626,11 +633,35 @@ impl TypeAnalyzer {
                 condition,
                 then_branch,
                 else_branch,
-                capture: _,
+                capture,
                 span,
             } => {
-                self.analyze_expression(condition)?;
+                let cond_ty = self.analyze_expression(condition)?;
+
+                if let Some(cap) = capture {
+                    self.symbol_table.enter_scope();
+                    if let crate::ast::Type::Option(inner_ty) = cond_ty {
+                        self.symbol_table.define(
+                            cap.clone(),
+                            *inner_ty,
+                            Visibility::Private,
+                            false,
+                        );
+                    } else {
+                        return Err(AnalysisError::new_with_span(
+                            "Capture variable requires an optional type",
+                            span,
+                        )
+                        .with_module("types"));
+                    }
+                }
+
                 let then_ty = self.analyze_expression(then_branch)?;
+
+                if capture.is_some() {
+                    self.symbol_table.exit_scope();
+                }
+
                 let else_ty = self.analyze_expression(else_branch)?;
                 if self.types_compatible(&then_ty, &else_ty) {
                     Ok(then_ty)
@@ -638,7 +669,8 @@ impl TypeAnalyzer {
                     Err(AnalysisError::new_with_span(
                         "If expression branches must have compatible types",
                         span,
-                    ))
+                    )
+                    .with_module("types"))
                 }
             }
             crate::ast::Expr::Block { stmts, .. } => {
@@ -738,19 +770,24 @@ impl TypeAnalyzer {
     }
 
     fn types_compatible(&self, left: &crate::ast::Type, right: &crate::ast::Type) -> bool {
-        // Check if left is an Option and right is the inner type
+        if left == right {
+            return true;
+        }
+
+        // Check if left is an Option and right is compatible with inner type
         if let crate::ast::Type::Option(inner) = left {
-            if **inner == *right {
+            if self.types_compatible(inner, right) {
                 return true;
             }
         }
-        // Check if right is an Option and left is the inner type
+        // Check if right is an Option and left is compatible with inner type
         if let crate::ast::Type::Option(inner) = right {
-            if **inner == *left {
+            if self.types_compatible(left, inner) {
                 return true;
             }
         }
-        left == right || (self.is_numeric(left) && self.is_numeric(right))
+
+        self.is_numeric(left) && self.is_numeric(right)
     }
 
     pub fn get_symbol_table(&self) -> &SymbolTable {
