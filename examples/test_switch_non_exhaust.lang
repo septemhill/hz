@@ -37,5 +37,14 @@ fn main() i64 {
         }
     }
 
+    const f = 'a';
+
+    // Non-Exhaustive Switch, SHOULD compile success
+    switch (f) {
+        'a' => {
+            io.println("a");
+        }
+    }
+
     return 0;
 }

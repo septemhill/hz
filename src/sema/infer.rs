@@ -187,14 +187,46 @@ pub struct TypedFnParam {
     pub ty: Type,
 }
 
+/// Type-annotated struct definition
+#[derive(Debug, Clone)]
+pub struct TypedStructDef {
+    pub name: String,
+    pub fields: Vec<crate::ast::StructField>,
+    pub methods: Vec<TypedFnDef>,
+    pub visibility: Visibility,
+    pub generic_params: Vec<String>,
+    pub span: Span,
+}
+
+/// Type-annotated enum definition
+#[derive(Debug, Clone)]
+pub struct TypedEnumDef {
+    pub name: String,
+    pub variants: Vec<crate::ast::EnumVariant>,
+    pub methods: Vec<TypedFnDef>,
+    pub visibility: Visibility,
+    pub generic_params: Vec<String>,
+    pub span: Span,
+}
+
+/// Type-annotated error definition
+#[derive(Debug, Clone)]
+pub struct TypedErrorDef {
+    pub name: String,
+    pub variants: Vec<crate::ast::ErrorVariant>,
+    pub union_types: Option<Vec<Type>>,
+    pub visibility: Visibility,
+    pub span: Span,
+}
+
 /// Type-annotated program
 #[derive(Debug, Clone)]
 pub struct TypedProgram {
     pub functions: Vec<TypedFnDef>,
     pub external_functions: Vec<TypedFnDef>,
-    pub structs: Vec<crate::ast::StructDef>,
-    pub enums: Vec<crate::ast::EnumDef>,
-    pub errors: Vec<crate::ast::ErrorDef>,
+    pub structs: Vec<TypedStructDef>,
+    pub enums: Vec<TypedEnumDef>,
+    pub errors: Vec<TypedErrorDef>,
     pub imports: Vec<(Option<String>, String)>,
 }
 
@@ -235,19 +267,77 @@ impl TypeInferrer {
         }
 
         let mut functions = Vec::new();
-
         for f in &program.functions {
-            let typed_fn = self.infer_fn(f)?;
-            functions.push(typed_fn);
+            functions.push(self.infer_fn(f)?);
+        }
+
+        let mut structs = Vec::new();
+        for s in &program.structs {
+            structs.push(self.infer_struct(s)?);
+        }
+
+        let mut enums = Vec::new();
+        for e in &program.enums {
+            enums.push(self.infer_enum(e)?);
+        }
+
+        let mut errors = Vec::new();
+        for e in &program.errors {
+            errors.push(self.infer_error(e)?);
         }
 
         Ok(TypedProgram {
             functions,
             external_functions: Vec::new(), // TODO: Handle external functions
-            structs: program.structs.clone(),
-            enums: program.enums.clone(),
-            errors: program.errors.clone(),
+            structs,
+            enums,
+            errors,
             imports: program.imports.clone(),
+        })
+    }
+
+    /// Infer types for a struct definition
+    fn infer_struct(&mut self, s: &crate::ast::StructDef) -> AnalysisResult<TypedStructDef> {
+        let mut methods = Vec::new();
+        for m in &s.methods {
+            methods.push(self.infer_fn(m)?);
+        }
+
+        Ok(TypedStructDef {
+            name: s.name.clone(),
+            fields: s.fields.clone(),
+            methods,
+            visibility: s.visibility,
+            generic_params: s.generic_params.clone(),
+            span: s.span,
+        })
+    }
+
+    /// Infer types for an enum definition
+    fn infer_enum(&mut self, e: &crate::ast::EnumDef) -> AnalysisResult<TypedEnumDef> {
+        let mut methods = Vec::new();
+        for m in &e.methods {
+            methods.push(self.infer_fn(m)?);
+        }
+
+        Ok(TypedEnumDef {
+            name: e.name.clone(),
+            variants: e.variants.clone(),
+            methods,
+            visibility: e.visibility,
+            generic_params: e.generic_params.clone(),
+            span: e.span,
+        })
+    }
+
+    /// Infer types for an error definition
+    fn infer_error(&mut self, e: &crate::ast::ErrorDef) -> AnalysisResult<TypedErrorDef> {
+        Ok(TypedErrorDef {
+            name: e.name.clone(),
+            variants: e.variants.clone(),
+            union_types: e.union_types.clone(),
+            visibility: e.visibility,
+            span: e.span,
         })
     }
 
@@ -1220,6 +1310,81 @@ pub fn infer_types(program: &Program, symbol_table: SymbolTable) -> AnalysisResu
 
 pub use crate::ast::{AstDump, print_indent};
 
+impl AstDump for TypedStructDef {
+    fn dump(&self, indent: usize) {
+        print_indent(indent);
+        let vis = if self.visibility.is_public() { "pub " } else { "" };
+        let generics = if self.generic_params.is_empty() {
+            "".to_string()
+        } else {
+            format!("<{}>", self.generic_params.join(", "))
+        };
+        println!("StructDef: {}{}{}", vis, self.name, generics);
+
+        for f in &self.fields {
+            print_indent(indent + 1);
+            let fvis = if f.visibility.is_public() { "pub " } else { "" };
+            println!("Field: {}{}: {}", fvis, f.name, f.ty);
+        }
+
+        for m in &self.methods {
+            m.dump(indent + 1);
+        }
+    }
+}
+
+impl AstDump for TypedEnumDef {
+    fn dump(&self, indent: usize) {
+        print_indent(indent);
+        let vis = if self.visibility.is_public() { "pub " } else { "" };
+        let generics = if self.generic_params.is_empty() {
+            "".to_string()
+        } else {
+            format!("<{}>", self.generic_params.join(", "))
+        };
+        println!("EnumDef: {}{}{}", vis, self.name, generics);
+
+        for v in &self.variants {
+            print_indent(indent + 1);
+            let vvis = if v.visibility.is_public() { "pub " } else { "" };
+            let types = if v.associated_types.is_empty() {
+                "".to_string()
+            } else {
+                format!("({:?})", v.associated_types)
+            };
+            println!("Variant: {}{}{}", vvis, v.name, types);
+        }
+
+        for m in &self.methods {
+            m.dump(indent + 1);
+        }
+    }
+}
+
+impl AstDump for TypedErrorDef {
+    fn dump(&self, indent: usize) {
+        print_indent(indent);
+        let vis = if self.visibility.is_public() { "pub " } else { "" };
+        println!("ErrorDef: {}{}", vis, self.name);
+
+        if let Some(union) = &self.union_types {
+            print_indent(indent + 1);
+            println!("Union: {:?}", union);
+        } else {
+            for v in &self.variants {
+                print_indent(indent + 1);
+                let vvis = if v.visibility.is_public() { "pub " } else { "" };
+                let types = if v.associated_types.is_empty() {
+                    "".to_string()
+                } else {
+                    format!("({:?})", v.associated_types)
+                };
+                println!("Variant: {}{}{}", vvis, v.name, types);
+            }
+        }
+    }
+}
+
 impl AstDump for TypedProgram {
     fn dump(&self, indent: usize) {
         print_indent(indent);
@@ -1239,16 +1404,13 @@ impl AstDump for TypedProgram {
         }
 
         for s in &self.structs {
-            print_indent(indent + 1);
-            println!("StructDef: {}", s.name);
+            s.dump(indent + 1);
         }
         for e in &self.enums {
-            print_indent(indent + 1);
-            println!("EnumDef: {}", e.name);
+            e.dump(indent + 1);
         }
         for er in &self.errors {
-            print_indent(indent + 1);
-            println!("ErrorDef: {}", er.name);
+            er.dump(indent + 1);
         }
         for f in &self.external_functions {
             f.dump(indent + 1);

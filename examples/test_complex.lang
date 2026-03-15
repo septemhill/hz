@@ -11,6 +11,41 @@ struct RedisConfig {
     port: i16,
 }
 
+enum Status {
+    Todo,
+    InProgress,
+    Review,
+    Verify,
+    Done,
+}
+
+error ParseError {
+    InvalidStatus,
+}
+
+enum ActiveStatus {
+    InProgress,
+    Review,
+    Verify,
+
+    fn parse(s: Status) ActiveStatus! {
+        switch (s) {
+            Status.InProgress => {
+                return ActiveStatus.InProgress;
+            }
+            Status.Review => {
+                return ActiveStatus.Review;
+            }
+            Status.Verify => {
+                return ActiveStatus.Verify;
+            }
+            _ => {
+                return ParseError.InvalidStatus;
+            }
+        }
+    }
+}
+
 struct Config {
     postgres: PostgresConfig,
     redis: RedisConfig,
