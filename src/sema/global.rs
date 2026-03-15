@@ -130,6 +130,22 @@ impl GlobalDefinitionsAnalyzer {
                 true,
             );
 
+            // Also register enum variants in the symbol table
+            for variant in &e.variants {
+                // Register variant with fully qualified name: EnumName.VariantName
+                let variant_name = format!("{}.{}", e.name, variant.name);
+                self.symbol_table.define(
+                    variant_name,
+                    Type::Custom {
+                        name: e.name.clone(),
+                        generic_args: vec![],
+                        is_exported: e.visibility.is_public(),
+                    },
+                    variant.visibility,
+                    true,
+                );
+            }
+
             // Also register enum methods in the symbol table
             for method in &e.methods {
                 let method_name = format!("{}_{}", e.name, method.name);

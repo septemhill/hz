@@ -1,0 +1,41 @@
+enum Status {
+    Todo,
+    Doing,
+    Done,
+}
+
+error SampleError {
+    NotFound,
+    ArgMissed,
+}
+
+fn main() i64 {
+    const c = 123;
+
+    // Non-Exhaustive Switch, SHOULD compile error
+    switch (c) {
+        123 => {
+            io.println("123");
+        }
+    }
+
+    const b = Status.Todo;
+
+    // Non-Exhaustive Switch, SHOULD compile error
+    switch (b) {
+        Status.Todo => {
+            io.println("Todo");
+        }
+    }
+
+    const e = SampleError.NotFound;
+
+    // Non-Exhaustive Switch, SHOULD compile error
+    switch (e) {
+        SampleError.NotFound => {
+            io.println("NotFound");
+        }
+    }
+
+    return 0;
+}

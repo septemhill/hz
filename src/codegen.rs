@@ -780,44 +780,73 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             hir::HirStmt::Switch {
-                condition, cases, ..
+                condition,
+                cases,
+                ..
             } => {
-                // For switch statements, generate a series of if-else branches
                 let function = self.current_function.unwrap();
                 let end_block = self.context.append_basic_block(function, "switch_end");
-
                 let cond_val = self.generate_hir_expr(condition)?;
 
-                // Generate conditions for each case
                 for case in cases {
-                    let case_block = self.context.append_basic_block(function, "case");
+                    let body_block = self.context.append_basic_block(function, "case_body");
+                    let next_case_block = self.context.append_basic_block(function, "next_case");
 
-                    // For each pattern in the case
+                    // Check if wildcard case
+                    let mut is_wildcard = false;
                     for pattern in &case.patterns {
-                        // Compare pattern with condition
-                        let pattern_val = self.generate_hir_expr(pattern)?;
-                        let is_eq = self.builder.build_int_compare(
-                            inkwell::IntPredicate::EQ,
-                            cond_val.into_int_value(),
-                            pattern_val.into_int_value(),
-                            "case_cmp",
-                        )?;
-
-                        // Create a block for this pattern
-                        let pattern_block = self.context.append_basic_block(function, "pattern");
-                        self.builder.build_conditional_branch(
-                            is_eq,
-                            pattern_block,
-                            pattern_block,
-                        )?;
-
-                        // Pattern block
-                        self.builder.position_at_end(pattern_block);
+                        if let hir::HirExpr::Ident(name, ..) = pattern {
+                            if name == "_" {
+                                is_wildcard = true;
+                                break;
+                            }
+                        }
                     }
 
-                    // Case block
-                    self.builder.position_at_end(case_block);
+                    if is_wildcard {
+                        self.builder.build_unconditional_branch(body_block)?;
+                    } else {
+                        // Create comparison for each pattern in the case (OR-ed together)
+                        let mut combined_cond: Option<inkwell::values::IntValue> = None;
+                        for pattern in &case.patterns {
+                            let pattern_val = self.generate_hir_expr(pattern)?;
+                            let cmp = self.builder.build_int_compare(
+                                inkwell::IntPredicate::EQ,
+                                cond_val.into_int_value(),
+                                pattern_val.into_int_value(),
+                                "case_cmp",
+                            )?;
+                            combined_cond = if let Some(c) = combined_cond {
+                                Some(self.builder.build_or(c, cmp, "or")?)
+                            } else {
+                                Some(cmp)
+                            };
+                        }
+
+                        if let Some(cond) = combined_cond {
+                            self.builder.build_conditional_branch(
+                                cond,
+                                body_block,
+                                next_case_block,
+                            )?;
+                        } else {
+                            self.builder.build_unconditional_branch(next_case_block)?;
+                        }
+                    }
+
+                    // Case body
+                    self.builder.position_at_end(body_block);
                     self.generate_hir_stmt(&case.body)?;
+                    if self.builder.get_insert_block().unwrap().get_terminator().is_none() {
+                        self.builder.build_unconditional_branch(end_block)?;
+                    }
+
+                    // Position builder for the next case check
+                    self.builder.position_at_end(next_case_block);
+                }
+
+                // Final fallthrough (if no case matches)
+                if self.builder.get_insert_block().unwrap().get_terminator().is_none() {
                     self.builder.build_unconditional_branch(end_block)?;
                 }
 

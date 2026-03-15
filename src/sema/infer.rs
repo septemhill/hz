@@ -7,6 +7,7 @@ use crate::ast::Visibility;
 use crate::ast::{BinaryOp, Expr, FnDef, FnParam, Program, Span, Stmt, Type, UnaryOp};
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::SymbolTable;
+use std::collections::{HashMap, HashSet};
 
 // ============================================================================
 // Type-Annotated AST Nodes
@@ -203,16 +204,30 @@ pub struct TypedProgram {
 /// Type inference engine that traverses the AST and infers types
 pub struct TypeInferrer {
     symbol_table: SymbolTable,
+    enums: HashMap<String, crate::ast::EnumDef>,
+    errors: HashMap<String, crate::ast::ErrorDef>,
 }
 
 impl TypeInferrer {
     /// Create a new type inferrer
     pub fn new(symbol_table: SymbolTable) -> Self {
-        TypeInferrer { symbol_table }
+        TypeInferrer {
+            symbol_table,
+            enums: HashMap::new(),
+            errors: HashMap::new(),
+        }
     }
 
     /// Infer types for an entire program
     pub fn infer_program(&mut self, program: &Program) -> AnalysisResult<TypedProgram> {
+        // Populate enums and errors maps for exhaustiveness checking
+        for e in &program.enums {
+            self.enums.insert(e.name.clone(), e.clone());
+        }
+        for e in &program.errors {
+            self.errors.insert(e.name.clone(), e.clone());
+        }
+
         let mut functions = Vec::new();
 
         for f in &program.functions {
@@ -502,6 +517,9 @@ impl TypeInferrer {
                         body: typed_body,
                     });
                 }
+
+                // Check exhaustiveness
+                self.check_switch_exhaustiveness(&typed_condition.ty, &typed_cases, span)?;
 
                 Ok(TypedStmt {
                     stmt: TypedStmtKind::Switch {
@@ -819,10 +837,24 @@ impl TypeInferrer {
                 member,
                 span,
             } => {
-                let typed_object = self.infer_expr(object)?;
+                // Try to resolve as an enum/error variant first (Type.Variant)
+                if let Expr::Ident(obj_name, _) = object.as_ref() {
+                    let full_name = format!("{}.{}", obj_name, member);
+                    let found_ty = self.symbol_table.resolve(&full_name).map(|s| s.ty.clone());
+                    if let Some(ty) = found_ty {
+                        return Ok(TypedExpr {
+                            expr: TypedExprKind::MemberAccess {
+                                object: Box::new(self.infer_expr(object)?),
+                                member: member.clone(),
+                            },
+                            ty,
+                            span: *span,
+                        });
+                    }
+                }
 
+                let typed_object = self.infer_expr(object)?;
                 // For now, default to i64
-                // In a full implementation, we would look up the struct field type
                 Ok(TypedExpr {
                     expr: TypedExprKind::MemberAccess {
                         object: Box::new(typed_object),
@@ -1014,6 +1046,90 @@ impl TypeInferrer {
                 | Type::U32
                 | Type::U64
         )
+    }
+
+    fn check_switch_exhaustiveness(
+        &self,
+        condition_ty: &Type,
+        cases: &[TypedSwitchCase],
+        span: &Span,
+    ) -> AnalysisResult<()> {
+        // If any case is a wildcard, it's exhaustive
+        for case in cases {
+            for pattern in &case.patterns {
+                if let TypedExprKind::Ident(name) = &pattern.expr {
+                    if name == "_" {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        match condition_ty {
+            Type::Bool => {
+                let mut has_true = false;
+                let mut has_false = false;
+                for case in cases {
+                    for pattern in &case.patterns {
+                        if let TypedExprKind::Bool(v) = &pattern.expr {
+                            if *v {
+                                has_true = true;
+                            } else {
+                                has_false = true;
+                            }
+                        }
+                    }
+                }
+                if has_true && has_false {
+                    Ok(())
+                } else {
+                    Err(AnalysisError::new_with_span("Switch statement on bool is not exhaustive", span).with_module("infer"))
+                }
+            }
+            Type::Custom { name, .. } => {
+                if let Some(enum_def) = self.enums.get(name) {
+                    let mut covered_variants = HashSet::new();
+                    for case in cases {
+                        for pattern in &case.patterns {
+                            if let TypedExprKind::MemberAccess { member, .. } = &pattern.expr {
+                                covered_variants.insert(member.clone());
+                            }
+                        }
+                    }
+                    if covered_variants.len() == enum_def.variants.len() {
+                        Ok(())
+                    } else {
+                        let missing: Vec<_> = enum_def.variants.iter()
+                            .filter(|v| !covered_variants.contains(&v.name))
+                            .map(|v| v.name.clone())
+                            .collect();
+                        Err(AnalysisError::new_with_span(format!("Switch statement on enum {} is not exhaustive. Missing: {}", name, missing.join(", ")).as_str(), span).with_module("infer"))
+                    }
+                } else {
+                    Err(AnalysisError::new_with_span(format!("Switch statement on type {} requires a wildcard case '_' for exhaustiveness", condition_ty).as_str(), span).with_module("infer"))
+                }
+            }
+            Type::Error => {
+                 let mut covered_variants = HashSet::new();
+                 for case in cases {
+                     for pattern in &case.patterns {
+                         if let TypedExprKind::MemberAccess { member, .. } = &pattern.expr {
+                             covered_variants.insert(member.clone());
+                         }
+                     }
+                 }
+                 
+                 let total_variants: usize = self.errors.values().map(|e| e.variants.len()).sum();
+                 if covered_variants.len() == total_variants {
+                     Ok(())
+                 } else {
+                     Err(AnalysisError::new_with_span("Switch statement on error is not exhaustive", span).with_module("infer"))
+                 }
+            }
+            _ => {
+                Err(AnalysisError::new_with_span(format!("Switch statement on type {} requires a wildcard case '_' for exhaustiveness", condition_ty).as_str(), span).with_module("infer"))
+            }
+        }
     }
 }
 
