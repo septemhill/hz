@@ -205,7 +205,7 @@ impl Parser {
             Expr::Tuple(_, span) => span.end,
             Expr::TupleIndex { span, .. } => span.end,
             Expr::Ident(_, span) => span.end,
-            Expr::Array(_, span) => span.end,
+            Expr::Array(_, _, span) => span.end,
             Expr::Binary { span, .. } => span.end,
             Expr::Unary { span, .. } => span.end,
             Expr::Call { span, .. } => span.end,
@@ -2629,7 +2629,7 @@ impl Parser {
 
                 // Empty array
                 if self.match_token(Token::RBracket) {
-                    return Ok(Expr::Array(vec![], Span { start: 0, end: 0 }));
+                    return Ok(Expr::Array(vec![], None, Span { start: 0, end: 0 }));
                 }
 
                 // Check for typed array: [size]Type{elements} or [size]Type
@@ -2647,8 +2647,8 @@ impl Parser {
                         // Now check if next is a type (identifier)
                         let token_after_bracket = self.peek(0).map(|t| t.token.clone());
                         if let Some(Token::Ident(_)) = token_after_bracket {
-                            // This is [size]Type - consume the type
-                            self.advance(); // consume the type name
+                            // This is [size]Type - parse the type
+                            let element_type = self.parse_type()?;
 
                             self.skip_whitespace();
 
@@ -2679,11 +2679,19 @@ impl Parser {
                                         });
                                     }
                                 }
-                                return Ok(Expr::Array(elements, Span { start: 0, end: 0 }));
+                                return Ok(Expr::Array(
+                                    elements,
+                                    Some(element_type),
+                                    Span { start: 0, end: 0 },
+                                ));
                             }
 
                             // Just typed array without elements
-                            return Ok(Expr::Array(vec![], Span { start: 0, end: 0 }));
+                            return Ok(Expr::Array(
+                                vec![],
+                                Some(element_type),
+                                Span { start: 0, end: 0 },
+                            ));
                         }
 
                         // If no type follows, we have [number] - treat as single element array
@@ -2706,7 +2714,7 @@ impl Parser {
                     }
                 }
 
-                Ok(Expr::Array(elements, Span { start: 0, end: 0 }))
+                Ok(Expr::Array(elements, None, Span { start: 0, end: 0 }))
             }
             // Handle array literals with curly braces: {1, 2, 3}
             Token::LBrace => {
@@ -2715,7 +2723,7 @@ impl Parser {
 
                 // Empty array
                 if self.match_token(Token::RBrace) {
-                    return Ok(Expr::Array(vec![], Span { start: 0, end: 0 }));
+                    return Ok(Expr::Array(vec![], None, Span { start: 0, end: 0 }));
                 }
 
                 // Parse array elements
@@ -2734,7 +2742,7 @@ impl Parser {
                     }
                 }
 
-                Ok(Expr::Array(elements, Span { start: 0, end: 0 }))
+                Ok(Expr::Array(elements, None, Span { start: 0, end: 0 }))
             }
             Token::Ident(name) => {
                 // Get span from current token before advancing
@@ -3074,6 +3082,14 @@ impl Parser {
         }
 
         self.match_token(Token::Semicolon);
+
+        // Replace SelfType and Custom("Self") in method signatures with the struct name
+        for method in &mut methods {
+            method.return_ty.replace_self(&name);
+            for param in &mut method.params {
+                param.ty.replace_self(&name);
+            }
+        }
 
         Ok(StructDef {
             name,

@@ -354,7 +354,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let llvm_type = self.llvm_type(ty);
                 let alloca = self.builder.build_alloca(llvm_type, name)?;
                 if let Some(val) = value {
-                    let llvm_val = self.generate_hir_expr(val)?;
+                    let mut llvm_val = self.generate_hir_expr(val)?;
+                    llvm_val = self.coerce_type(llvm_val, ty)?;
                     self.builder.build_store(alloca, llvm_val)?;
                 }
                 self.variables.insert(name.clone(), alloca);
@@ -371,8 +372,87 @@ impl<'ctx> CodeGenerator<'ctx> {
                     // Just evaluate and discard
                     return Ok(());
                 }
+
+                if target.contains('.') {
+                    let parts: Vec<&str> = target.split('.').collect();
+                    let obj_name = parts[0];
+                    let member = parts[1];
+
+                    let ptr = self.variables.get(obj_name).ok_or("Var not found")?.clone();
+                    let var_ty = self.variable_types.get(obj_name).unwrap();
+
+                    let field_idx: u32 = member.parse().unwrap_or(0);
+
+                    // Determine struct_ptr and struct_type based on whether the variable is a pointer to a struct or the struct itself
+                    let (struct_ptr, struct_type) = if let Type::Pointer(inner) = var_ty {
+                        if let Type::Custom {
+                            name: struct_name, ..
+                        } = &**inner
+                        {
+                            let st =
+                                self.context
+                                    .get_struct_type(struct_name)
+                                    .unwrap_or_else(|| {
+                                        panic!("Struct lookup failed for: {}", struct_name)
+                                    });
+                            // The alloca holds a pointer to the struct. Load it using the generic pointer type.
+                            let opaque_ptr_type =
+                                self.context.ptr_type(inkwell::AddressSpace::default());
+                            let loaded_ptr = self
+                                .builder
+                                .build_load(opaque_ptr_type, ptr, "obj_ptr")?
+                                .into_pointer_value();
+                            (loaded_ptr, st)
+                        } else {
+                            return Err("Member assignment on non-custom pointer type".into());
+                        }
+                    } else if let Type::Custom {
+                        name: struct_name, ..
+                    } = var_ty
+                    {
+                        let st = self
+                            .context
+                            .get_struct_type(struct_name)
+                            .unwrap_or_else(|| panic!("Struct lookup failed for: {}", struct_name));
+                        // ptr is alloca to struct
+                        (ptr, st)
+                    } else {
+                        return Err("Member assignment on non-struct type".into());
+                    };
+
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(struct_type, struct_ptr, field_idx, "field_ptr")
+                        .map_err(|e| e.to_string())?;
+
+                    // Get the exact field type to coerce the assigned value
+                    let field_type = struct_type.get_field_type_at_index(field_idx).unwrap();
+                    let mut llvm_val = self.generate_hir_expr(value)?;
+
+                    // Simple int casting for assignment coercion if needed
+                    if field_type.is_int_type() && llvm_val.is_int_value() {
+                        llvm_val = self
+                            .builder
+                            .build_int_cast(
+                                llvm_val.into_int_value(),
+                                field_type.into_int_type(),
+                                "assign_cast",
+                            )?
+                            .into();
+                    }
+
+                    self.builder.build_store(field_ptr, llvm_val)?;
+                    return Ok(());
+                }
+
                 let ptr = self.variables.get(target).ok_or("Var not found")?.clone();
-                let llvm_val = self.generate_hir_expr(value)?;
+                let expected_t = self
+                    .variable_types
+                    .get(target)
+                    .ok_or("Var type not found")?
+                    .clone();
+                let mut llvm_val = self.generate_hir_expr(value)?;
+                llvm_val = self.coerce_type(llvm_val, &expected_t)?;
                 self.builder.build_store(ptr, llvm_val)?;
                 Ok(())
             }
@@ -381,20 +461,22 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.pop_defer_scope()?;
 
                 if let Some(val) = value {
-                    let llvm_val = self.generate_hir_expr(val)?;
+                    let mut llvm_val = self.generate_hir_expr(val)?;
+
+                    if let Some(ret_ty) = &self.return_type {
+                        llvm_val = self.coerce_type(llvm_val, ret_ty)?;
+                    }
+
                     // Check if the return type is void! (Result where inner is Void)
                     // In this case, we need to return the error code (i64) and call defer!
-                    let is_void_result = self
-                        .return_type
-                        .as_ref()
-                        .map(|t| t.is_void_result())
-                        .unwrap_or(false);
-                    if is_void_result {
-                        // For void! return type, check if the value is an error (non-zero)
-                        // If non-zero, it's an error - execute defer! handlers before returning
-                        // Convert llvm_val to int value for comparison
-                        let int_val = llvm_val.into_int_value();
-                        let zero = self.context.i64_type().const_int(0, false);
+                    if let Some(Type::Result(inner)) = &self.return_type {
+                        let int_val = if llvm_val.is_int_value() {
+                            llvm_val.into_int_value()
+                        } else {
+                            // If it's a struct (Option), extract the valid flag as the "value" for success/error check
+                            self.context.i64_type().const_int(0, false)
+                        };
+                        let zero = self.llvm_type(inner).into_int_type().const_zero();
                         let is_error = self.builder.build_int_compare(
                             inkwell::IntPredicate::NE,
                             int_val,
@@ -527,329 +609,392 @@ impl<'ctx> CodeGenerator<'ctx> {
                 body,
                 span: _,
             } => {
-                // For loop implementation
-                // Handles: boolean conditions, optional/iterator types, ranges, and arrays
                 let function = self.current_function.unwrap();
 
-                // Generate the iterable to get its type
+                // Create blocks
+                let eval_start_block = self.context.append_basic_block(function, "for_eval");
+                let cond_block = self.context.append_basic_block(function, "for_cond");
+                let body_block = self.context.append_basic_block(function, "for_body");
+                let end_block = self.context.append_basic_block(function, "for_end");
+
+                self.builder.build_unconditional_branch(eval_start_block)?;
+                self.builder.position_at_end(eval_start_block);
+
+                // Generate expression
                 let iter_val = self.generate_hir_expr(iterable)?;
+                let iter_type = iter_val.get_type();
 
-                // Clone var_name for use in closures
-                let var_name_clone = var_name.clone();
-                let index_var_clone = index_var.clone();
-                let label_clone = label.clone();
+                // Get the Lang type from the HIR expression to check if it's an array
+                let iter_lang_type = match iterable {
+                    hir::HirExpr::Int(_, ty, _) => Some(ty),
+                    hir::HirExpr::Float(_, ty, _) => Some(ty),
+                    hir::HirExpr::Bool(_, ty, _) => Some(ty),
+                    hir::HirExpr::String(_, ty, _) => Some(ty),
+                    hir::HirExpr::Char(_, ty, _) => Some(ty),
+                    hir::HirExpr::Null(ty, _) => Some(ty),
+                    hir::HirExpr::Ident(_, ty, _) => Some(ty),
+                    hir::HirExpr::Tuple { ty, .. } => Some(ty),
+                    hir::HirExpr::TupleIndex { ty, .. } => Some(ty),
+                    hir::HirExpr::Array { ty, .. } => Some(ty),
+                    hir::HirExpr::Binary { ty, .. } => Some(ty),
+                    hir::HirExpr::Unary { ty, .. } => Some(ty),
+                    hir::HirExpr::Call { return_ty, .. } => Some(return_ty),
+                    hir::HirExpr::If { ty, .. } => Some(ty),
+                    hir::HirExpr::Block { ty, .. } => Some(ty),
+                    hir::HirExpr::MemberAccess { ty, .. } => Some(ty),
+                    hir::HirExpr::Struct { ty, .. } => Some(ty),
+                    hir::HirExpr::Try { .. } => None,
+                    hir::HirExpr::Catch { .. } => None,
+                };
 
-                // Check what type of iterable we have
-                match &iter_val {
-                    BasicValueEnum::StructValue(sv) => {
-                        // This is a range or tuple: { start, end } or { elem1, elem2, ... }
-                        // For ranges, we check if start < end
+                // Analyze type
+                let mut is_option = false;
+                let mut is_bool = false;
+                let mut is_array = false;
 
-                        let cond_block = self.context.append_basic_block(function, "for_cond");
-                        let body_block = self.context.append_basic_block(function, "for_body");
-                        let end_block = self.context.append_basic_block(function, "for_end");
-
-                        // Create an alloca to store the iteration variable so it can be updated
-                        let iter_type = sv.get_type();
-                        let iter_alloca = self.builder.build_alloca(iter_type, "iter_var")?;
-                        self.builder.build_store(iter_alloca, *sv)?;
-
-                        // Push the end block onto the loop stack
-                        self.loop_end_blocks
-                            .push(vec![(end_block, label_clone.clone())]);
-
-                        // Jump to condition block
-                        self.builder.build_unconditional_branch(cond_block)?;
-
-                        // Condition block - check if start < end for range
-                        self.builder.position_at_end(cond_block);
-
-                        // Load the current iteration value
-                        let iter_val_load =
-                            self.builder
-                                .build_load(iter_type, iter_alloca, "iter_load")?;
-                        let iter_struct = iter_val_load.into_struct_value();
-
-                        // Check the LLVM type to determine if this is optional (i1 second field) or range (i64 second field)
-                        let struct_type = iter_struct.get_type();
-                        let types = struct_type.get_field_types();
-                        let second_is_i1 = types
-                            .get(1)
-                            .map(|t| t.is_int_type() && t.into_int_type().get_bit_width() == 1)
-                            .unwrap_or(false);
-
-                        let is_some = if second_is_i1 {
-                            // Optional type: extract valid flag (second element) - it's i1
-                            let valid =
-                                self.builder
-                                    .build_extract_value(iter_struct, 1, "is_valid")?;
-                            valid.into_int_value()
-                        } else {
-                            // Range/tuple: check if first element < second element
-                            let start =
-                                self.builder
-                                    .build_extract_value(iter_struct, 0, "range_start")?;
-                            let end =
-                                self.builder
-                                    .build_extract_value(iter_struct, 1, "range_end")?;
-                            self.builder.build_int_compare(
-                                inkwell::IntPredicate::SLT,
-                                start.into_int_value(),
-                                end.into_int_value(),
-                                "range_cmp",
-                            )?
-                        };
-                        self.builder
-                            .build_conditional_branch(is_some, body_block, end_block)?;
-
-                        // Body block
-                        self.builder.position_at_end(body_block);
-
-                        // Handle capture variable - extract value from struct and store in var_name
-                        if let Some(name) = &var_name_clone {
-                            // Extract the value (first element) from the struct
-                            let val =
-                                self.builder
-                                    .build_extract_value(iter_struct, 0, "captured")?;
-                            let alloca = self.builder.build_alloca(val.get_type(), name)?;
-                            self.builder.build_store(alloca, val)?;
-                            // Save to variables map
-                            self.variables.insert(name.clone(), alloca);
-                            // Set the type
-                            self.variable_types.insert(name.clone(), Type::I64);
-                        }
-
-                        // Handle index variable - for tuple iteration, this would be element 1
-                        if let Some(name) = &index_var_clone {
-                            // Try to extract second element as index
-                            let val = self.builder.build_extract_value(
-                                iter_struct,
-                                1,
-                                "index_captured",
-                            )?;
-                            let alloca = self.builder.build_alloca(val.get_type(), name)?;
-                            self.builder.build_store(alloca, val)?;
-                            // Save to variables map
-                            self.variables.insert(name.clone(), alloca);
-                            // Set the type
-                            self.variable_types.insert(name.clone(), Type::I64);
-                        }
-
-                        // Generate body - only add fallthrough branch if the block doesn't already have a terminator
-                        // This handles the case where body contains a break that exits to an outer loop
-                        self.generate_hir_stmt(body)?;
-                        let current_block = self.builder.get_insert_block().unwrap();
-                        if current_block.get_terminator().is_none() {
-                            // Increment the iteration variable for the next iteration
-                            // Load current value
-                            let iter_val_load =
-                                self.builder
-                                    .build_load(iter_type, iter_alloca, "iter_next")?;
-                            let iter_struct = iter_val_load.into_struct_value();
-
-                            if !second_is_i1 {
-                                // For range: increment the start value
-                                let start = self.builder.build_extract_value(
-                                    iter_struct,
-                                    0,
-                                    "next_start",
-                                )?;
-                                let end =
-                                    self.builder
-                                        .build_extract_value(iter_struct, 1, "next_end")?;
-                                let incremented_start = self.builder.build_int_add(
-                                    start.into_int_value(),
-                                    self.context.i64_type().const_int(1, false),
-                                    "start_inc",
-                                )?;
-                                // Create new struct with incremented start
-                                let mut new_struct: inkwell::values::AggregateValueEnum =
-                                    iter_type.const_zero().into();
-                                new_struct = self
-                                    .builder
-                                    .build_insert_value(
-                                        new_struct.into_struct_value(),
-                                        incremented_start,
-                                        0,
-                                        "new_iter",
-                                    )?
-                                    .into();
-                                new_struct = self
-                                    .builder
-                                    .build_insert_value(
-                                        new_struct.into_struct_value(),
-                                        end,
-                                        1,
-                                        "new_iter_final",
-                                    )?
-                                    .into();
-                                // Store back to the alloca
-                                self.builder
-                                    .build_store(iter_alloca, new_struct.as_basic_value_enum())?;
-                            }
-
-                            // Branch back to condition block
-                            self.builder.build_unconditional_branch(cond_block)?;
-                        }
-
-                        // Pop the end block from the loop stack
-                        self.loop_end_blocks.pop();
-
-                        // End block
-                        self.builder.position_at_end(end_block);
-
-                        // Clean up the capture variable from the map
-                        if let Some(name) = &var_name_clone {
-                            self.variables.remove(name);
-                            self.variable_types.remove(name);
-                        }
-                        if let Some(name) = &index_var_clone {
-                            self.variables.remove(name);
-                            self.variable_types.remove(name);
-                        }
-
-                        Ok(())
-                    }
-                    BasicValueEnum::PointerValue(_) => {
-                        // This could be an array - treat as always true for now
-                        // (proper iteration would require tracking index and extracting elements)
-                        let cond_block = self.context.append_basic_block(function, "for_cond");
-                        let body_block = self.context.append_basic_block(function, "for_body");
-                        let end_block = self.context.append_basic_block(function, "for_end");
-
-                        // Push the end block onto the loop stack
-                        self.loop_end_blocks
-                            .push(vec![(end_block, label_clone.clone())]);
-
-                        // Jump to condition block
-                        self.builder.build_unconditional_branch(cond_block)?;
-
-                        // Condition block - always true for now
-                        self.builder.position_at_end(cond_block);
-                        self.builder.build_unconditional_branch(body_block)?;
-
-                        // Body block
-                        self.builder.position_at_end(body_block);
-
-                        // For array iteration with index_var and var_name, we'd need to track index
-                        // For now, if there's a var_name, create a dummy value
-                        if let Some(name) = &var_name_clone {
-                            let alloca =
-                                self.builder.build_alloca(self.context.i64_type(), name)?;
-                            self.builder
-                                .build_store(alloca, self.context.i64_type().const_int(0, false))?;
-                            self.variables.insert(name.clone(), alloca);
-                            self.variable_types.insert(name.clone(), Type::I64);
-                        }
-
-                        if let Some(name) = &index_var_clone {
-                            let alloca =
-                                self.builder.build_alloca(self.context.i64_type(), name)?;
-                            self.builder
-                                .build_store(alloca, self.context.i64_type().const_int(0, false))?;
-                            self.variables.insert(name.clone(), alloca);
-                            self.variable_types.insert(name.clone(), Type::I64);
-                        }
-
-                        // Generate body - only add fallthrough branch if the block doesn't already have a terminator
-                        self.generate_hir_stmt(body)?;
-                        let current_block = self.builder.get_insert_block().unwrap();
-                        if current_block.get_terminator().is_none() {
-                            self.builder.build_unconditional_branch(cond_block)?;
-                        }
-
-                        // Pop the end block from the loop stack
-                        self.loop_end_blocks.pop();
-
-                        // End block
-                        self.builder.position_at_end(end_block);
-
-                        // Clean up
-                        if let Some(name) = &var_name_clone {
-                            self.variables.remove(name);
-                            self.variable_types.remove(name);
-                        }
-                        if let Some(name) = &index_var_clone {
-                            self.variables.remove(name);
-                            self.variable_types.remove(name);
-                        }
-
-                        Ok(())
-                    }
-                    _ => {
-                        // For boolean conditions or other types, treat as while loop
-                        // But if there's a var_name or index_var, we still need to handle them
-                        let function = self.current_function.unwrap();
-
-                        // Clone for use in the code
-                        let var_name_for_body = var_name.clone();
-                        let index_var_for_body = index_var.clone();
-
-                        let cond_block = self.context.append_basic_block(function, "for_cond");
-                        let body_block = self.context.append_basic_block(function, "for_body");
-                        let end_block = self.context.append_basic_block(function, "for_end");
-
-                        // Push the end block onto the loop stack
-                        self.loop_end_blocks
-                            .push(vec![(end_block, label_clone.clone())]);
-
-                        // Jump to condition block
-                        self.builder.build_unconditional_branch(cond_block)?;
-
-                        // Condition block
-                        self.builder.position_at_end(cond_block);
-                        let is_true = self.condition_to_i1(iter_val, "for_is_true")?;
-                        self.builder
-                            .build_conditional_branch(is_true, body_block, end_block)?;
-
-                        // Body block
-                        self.builder.position_at_end(body_block);
-
-                        // Handle capture variables even in the generic case
-                        if let Some(name) = &var_name_for_body {
-                            let alloca =
-                                self.builder.build_alloca(self.context.i64_type(), name)?;
-                            self.builder
-                                .build_store(alloca, self.context.i64_type().const_int(0, false))?;
-                            self.variables.insert(name.clone(), alloca);
-                            self.variable_types.insert(name.clone(), Type::I64);
-                        }
-
-                        if let Some(name) = &index_var_for_body {
-                            let alloca =
-                                self.builder.build_alloca(self.context.i64_type(), name)?;
-                            self.builder
-                                .build_store(alloca, self.context.i64_type().const_int(0, false))?;
-                            self.variables.insert(name.clone(), alloca);
-                            self.variable_types.insert(name.clone(), Type::I64);
-                        }
-
-                        // Generate body - only add fallthrough branch if the block doesn't already have a terminator
-                        self.generate_hir_stmt(body)?;
-                        let current_block = self.builder.get_insert_block().unwrap();
-                        if current_block.get_terminator().is_none() {
-                            self.builder.build_unconditional_branch(cond_block)?;
-                        }
-
-                        // Pop the end block from the loop stack
-                        self.loop_end_blocks.pop();
-
-                        // End block
-                        self.builder.position_at_end(end_block);
-
-                        // Clean up
-                        if let Some(name) = &var_name_for_body {
-                            self.variables.remove(name);
-                            self.variable_types.remove(name);
-                        }
-                        if let Some(name) = &index_var_for_body {
-                            self.variables.remove(name);
-                            self.variable_types.remove(name);
-                        }
-
-                        Ok(())
+                // Check using Lang type first
+                if let Some(lang_ty) = iter_lang_type {
+                    if let Type::Array { .. } = lang_ty {
+                        is_array = true;
                     }
                 }
+
+                // Also check LLVM type
+                if !is_array {
+                    if iter_type.is_struct_type() {
+                        let struct_type = iter_type.into_struct_type();
+                        let types = struct_type.get_field_types();
+                        if types.len() == 2 {
+                            if let Some(t) = types.get(1) {
+                                if t.is_int_type() && t.into_int_type().get_bit_width() == 1 {
+                                    is_option = true;
+                                }
+                            }
+                        }
+                    } else if iter_type.is_int_type()
+                        && iter_type.into_int_type().get_bit_width() == 1
+                    {
+                        is_bool = true;
+                    } else if iter_type.is_array_type() {
+                        is_array = true;
+                    } else if iter_type.is_pointer_type() {
+                        // Arrays can be passed as pointers - try to handle this case too
+                        // For now, treat as unsupported/infinite loop
+                    }
+                }
+
+                // Allocate variable to store iteration state or option value
+                let iter_alloca = self.builder.build_alloca(iter_type, "iter_var")?;
+
+                // For arrays, we need an index variable
+                let array_index_alloca = if is_array {
+                    let idx = self
+                        .builder
+                        .build_alloca(self.context.i64_type(), "array_index")?;
+                    self.builder
+                        .build_store(idx, self.context.i64_type().const_int(0, false))?;
+                    Some(idx)
+                } else {
+                    None
+                };
+
+                // Store evaluated value to alloca
+                self.builder.build_store(iter_alloca, iter_val)?;
+                self.builder.build_unconditional_branch(cond_block)?;
+
+                // Now setup the loop structure tracking for breaks
+                let label_clone = label.clone();
+                self.loop_end_blocks.push(vec![(end_block, label_clone)]);
+
+                // Condition block
+                self.builder.position_at_end(cond_block);
+                let iter_val_load = self
+                    .builder
+                    .build_load(iter_type, iter_alloca, "iter_load")?;
+
+                if is_option {
+                    let condition_flag = self
+                        .builder
+                        .build_extract_value(iter_val_load.into_struct_value(), 1, "is_valid")?
+                        .into_int_value();
+                    self.builder
+                        .build_conditional_branch(condition_flag, body_block, end_block)?;
+                } else if is_bool {
+                    self.builder.build_conditional_branch(
+                        iter_val_load.into_int_value(),
+                        body_block,
+                        end_block,
+                    )?;
+                } else if iter_type.is_struct_type() {
+                    // Range or Option
+                    let struct_type = iter_type.into_struct_type();
+                    let types = struct_type.get_field_types();
+                    if types.len() == 2 {
+                        if let Some(t) = types.get(1) {
+                            if t.is_int_type() && t.into_int_type().get_bit_width() == 1 {
+                                // This is an Option type - handle in is_option branch
+                                is_option = true;
+                            } else {
+                                // This is a Range type
+                            }
+                        }
+                    }
+                    // Range
+                    let start = self.builder.build_extract_value(
+                        iter_val_load.into_struct_value(),
+                        0,
+                        "range_start",
+                    )?;
+                    let end = self.builder.build_extract_value(
+                        iter_val_load.into_struct_value(),
+                        1,
+                        "range_end",
+                    )?;
+                    let condition_flag = self.builder.build_int_compare(
+                        inkwell::IntPredicate::SLT,
+                        start.into_int_value(),
+                        end.into_int_value(),
+                        "range_cmp",
+                    )?;
+                    self.builder
+                        .build_conditional_branch(condition_flag, body_block, end_block)?;
+                } else if is_array || iter_type.is_array_type() {
+                    // Array iteration: check index < array length
+                    if let Some(idx_alloca) = array_index_alloca {
+                        let current_index = self.builder.build_load(
+                            self.context.i64_type(),
+                            idx_alloca,
+                            "array_idx_load",
+                        )?;
+                        // Get array length
+                        let array_type = iter_type.into_array_type();
+                        let len = array_type.len();
+                        let len_val = self.context.i64_type().const_int(len as u64, false);
+                        let condition_flag = self.builder.build_int_compare(
+                            inkwell::IntPredicate::SLT,
+                            current_index.into_int_value(),
+                            len_val,
+                            "array_cmp",
+                        )?;
+                        self.builder.build_conditional_branch(
+                            condition_flag,
+                            body_block,
+                            end_block,
+                        )?;
+                    } else {
+                        self.builder.build_unconditional_branch(body_block)?;
+                    }
+                } else {
+                    // Fallback for unsupported types - exit the loop to prevent infinite loop
+                    self.builder.build_unconditional_branch(end_block)?;
+                }
+
+                // Body block
+                self.builder.position_at_end(body_block);
+
+                // Setup loop variables (capture, index)
+                let var_name_clone = var_name.clone();
+                if let Some(name) = &var_name_clone {
+                    if is_option || iter_type.is_struct_type() {
+                        let val = self.builder.build_extract_value(
+                            iter_val_load.into_struct_value(),
+                            0,
+                            "captured",
+                        )?;
+                        let alloca = self.builder.build_alloca(val.get_type(), name)?;
+                        self.builder.build_store(alloca, val)?;
+                        self.variables.insert(name.clone(), alloca);
+                        self.variable_types.insert(name.clone(), Type::I64); // Fallback type
+                    } else if is_array {
+                        // Array: extract element at current index
+                        if let Some(idx_alloca) = array_index_alloca {
+                            let current_index = self.builder.build_load(
+                                self.context.i64_type(),
+                                idx_alloca,
+                                "array_idx_load_var",
+                            )?;
+                            // Use GEP to get element pointer
+                            let array_type = iter_type.into_array_type();
+                            let element_type = array_type.get_element_type();
+                            let ptr = unsafe {
+                                self.builder.build_in_bounds_gep(
+                                    iter_type,
+                                    iter_alloca,
+                                    &[
+                                        self.context.i64_type().const_int(0, false),
+                                        current_index.into_int_value(),
+                                    ],
+                                    "array_elem_ptr",
+                                )?
+                            };
+                            let elem_val =
+                                self.builder.build_load(element_type, ptr, "array_elem")?;
+                            let alloca = self.builder.build_alloca(element_type, name)?;
+                            self.builder.build_store(alloca, elem_val)?;
+                            self.variables.insert(name.clone(), alloca);
+                            // Get the proper element type for the variable type
+                            let element_lang_type = match element_type {
+                                BasicTypeEnum::IntType(t) => match t.get_bit_width() {
+                                    8 => Type::I8,
+                                    16 => Type::I16,
+                                    32 => Type::I32,
+                                    64 => Type::I64,
+                                    _ => Type::I64,
+                                },
+                                BasicTypeEnum::FloatType(_) => Type::F64,
+                                _ => Type::I64,
+                            };
+                            self.variable_types.insert(name.clone(), element_lang_type);
+                        } else {
+                            // Dummy
+                            let alloca =
+                                self.builder.build_alloca(self.context.i64_type(), name)?;
+                            self.builder
+                                .build_store(alloca, self.context.i64_type().const_zero())?;
+                            self.variables.insert(name.clone(), alloca);
+                            self.variable_types.insert(name.clone(), Type::I64);
+                        }
+                    } else {
+                        // Dummy
+                        let alloca = self.builder.build_alloca(self.context.i64_type(), name)?;
+                        self.builder
+                            .build_store(alloca, self.context.i64_type().const_zero())?;
+                        self.variables.insert(name.clone(), alloca);
+                        self.variable_types.insert(name.clone(), Type::I64);
+                    }
+                }
+
+                let index_var_clone = index_var.clone();
+                if let Some(name) = &index_var_clone {
+                    if iter_type.is_struct_type() {
+                        let val = self.builder.build_extract_value(
+                            iter_val_load.into_struct_value(),
+                            1,
+                            "index_captured",
+                        )?;
+                        let alloca = self.builder.build_alloca(val.get_type(), name)?;
+                        self.builder.build_store(alloca, val)?;
+                        self.variables.insert(name.clone(), alloca);
+                        self.variable_types.insert(name.clone(), Type::I64); // Fallback type
+                    } else if is_array {
+                        // Array: use the index variable
+                        if let Some(idx_alloca) = array_index_alloca {
+                            // Load the current index
+                            let current_index = self.builder.build_load(
+                                self.context.i64_type(),
+                                idx_alloca,
+                                "array_idx_for_var",
+                            )?;
+                            let alloca =
+                                self.builder.build_alloca(self.context.i64_type(), name)?;
+                            self.builder.build_store(alloca, current_index)?;
+                            self.variables.insert(name.clone(), alloca);
+                            self.variable_types.insert(name.clone(), Type::I64);
+                        } else {
+                            // Dummy
+                            let alloca =
+                                self.builder.build_alloca(self.context.i64_type(), name)?;
+                            self.builder
+                                .build_store(alloca, self.context.i64_type().const_zero())?;
+                            self.variables.insert(name.clone(), alloca);
+                            self.variable_types.insert(name.clone(), Type::I64);
+                        }
+                    } else {
+                        // Dummy
+                        let alloca = self.builder.build_alloca(self.context.i64_type(), name)?;
+                        self.builder
+                            .build_store(alloca, self.context.i64_type().const_zero())?;
+                        self.variables.insert(name.clone(), alloca);
+                        self.variable_types.insert(name.clone(), Type::I64);
+                    }
+                }
+
+                self.generate_hir_stmt(body)?;
+
+                let current_block = self.builder.get_insert_block().unwrap();
+                if current_block.get_terminator().is_none() {
+                    if is_option || is_bool {
+                        // Option or Bool: jump back to EVALUATION block to evaluate again!
+                        self.builder.build_unconditional_branch(eval_start_block)?;
+                    } else if iter_type.is_struct_type() {
+                        // Range: increment the counter
+                        let current_load =
+                            self.builder
+                                .build_load(iter_type, iter_alloca, "iter_next")?;
+                        let current_struct = current_load.into_struct_value();
+                        let start =
+                            self.builder
+                                .build_extract_value(current_struct, 0, "next_start")?;
+                        let end =
+                            self.builder
+                                .build_extract_value(current_struct, 1, "next_end")?;
+                        let incremented_start = self.builder.build_int_add(
+                            start.into_int_value(),
+                            self.context.i64_type().const_int(1, false),
+                            "start_inc",
+                        )?;
+
+                        let mut new_struct: inkwell::values::AggregateValueEnum =
+                            iter_type.into_struct_type().const_zero().into();
+                        new_struct = self
+                            .builder
+                            .build_insert_value(
+                                new_struct.into_struct_value(),
+                                incremented_start,
+                                0,
+                                "new_iter",
+                            )?
+                            .into();
+                        new_struct = self
+                            .builder
+                            .build_insert_value(
+                                new_struct.into_struct_value(),
+                                end,
+                                1,
+                                "new_iter_final",
+                            )?
+                            .into();
+                        self.builder
+                            .build_store(iter_alloca, new_struct.as_basic_value_enum())?;
+
+                        self.builder.build_unconditional_branch(cond_block)?;
+                    } else if is_array {
+                        // Array: increment the index
+                        if let Some(idx_alloca) = array_index_alloca {
+                            let current_index = self.builder.build_load(
+                                self.context.i64_type(),
+                                idx_alloca,
+                                "array_idx_inc",
+                            )?;
+                            let incremented = self.builder.build_int_add(
+                                current_index.into_int_value(),
+                                self.context.i64_type().const_int(1, false),
+                                "array_idx_next",
+                            )?;
+                            self.builder.build_store(idx_alloca, incremented)?;
+                        }
+                        self.builder.build_unconditional_branch(cond_block)?;
+                    } else {
+                        // Unsupported
+                        self.builder.build_unconditional_branch(cond_block)?;
+                    }
+                }
+
+                // Merge
+                self.builder.position_at_end(end_block);
+                self.loop_end_blocks.pop();
+
+                // Clean up variables
+                if let Some(name) = &var_name_clone {
+                    self.variables.remove(name);
+                    self.variable_types.remove(name);
+                }
+                if let Some(name) = &index_var_clone {
+                    self.variables.remove(name);
+                    self.variable_types.remove(name);
+                }
+
+                Ok(())
             }
             hir::HirStmt::Switch {
                 condition, cases, ..
@@ -1006,18 +1151,24 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let str_val = unsafe { self.builder.build_global_string(v, "str") }?;
                 Ok(str_val.as_basic_value_enum())
             }
-            hir::HirExpr::Char(v, _, _) => {
-                // Characters are stored as i64 in our implementation
-                Ok(self.context.i64_type().const_int(*v as u64, false).into())
+            hir::HirExpr::Char(v, ty, _) => {
+                // Use the type from the HIR expression if available
+                match self.llvm_type(ty) {
+                    BasicTypeEnum::IntType(t) => Ok(t.const_int(*v as u64, false).into()),
+                    _ => Ok(self.context.i64_type().const_int(*v as u64, false).into()),
+                }
             }
-            hir::HirExpr::Null(_, _) => {
+            hir::HirExpr::Null(ty, _) => {
                 // Null is represented as a struct { value, is_valid } with is_valid = false
-                // We'll use i64 as placeholder value and false for is_valid
-                let i64_type = self.context.i64_type();
-                let bool_type = self.context.bool_type();
+                // Use the expected type from the Option if context available
+                let (val_type, is_valid_type) = if let Type::Option(inner) = ty {
+                    (self.llvm_type(inner), self.context.bool_type())
+                } else {
+                    (self.context.i64_type().into(), self.context.bool_type())
+                };
                 let null_struct = self
                     .context
-                    .struct_type(&[i64_type.into(), bool_type.into()], false);
+                    .struct_type(&[val_type.into(), is_valid_type.into()], false);
                 Ok(null_struct.const_zero().into())
             }
             hir::HirExpr::Tuple { vals, ty, .. } => {
@@ -1060,13 +1211,35 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::Array { vals, ty, .. } => {
                 // Create an LLVM array from values
                 let llvm_type = self.llvm_type(ty);
-                let mut elements: Vec<inkwell::values::BasicValueEnum> = Vec::new();
+
+                // Generate element values
+                let mut elem_vals: Vec<inkwell::values::BasicValueEnum> = Vec::new();
                 for v in vals {
-                    elements.push(self.generate_hir_expr(v)?);
+                    elem_vals.push(self.generate_hir_expr(v)?);
                 }
-                // Create array value using const_struct (works for arrays too)
-                let array_val = self.context.const_struct(&elements, false);
-                // Store to memory and return
+
+                // Create array constant using const_array
+                let array_type = llvm_type.into_array_type();
+                let element_type = array_type.get_element_type();
+                let array_val = match element_type {
+                    BasicTypeEnum::IntType(t) => {
+                        let mut const_vec: Vec<inkwell::values::IntValue> = Vec::new();
+                        for ev in &elem_vals {
+                            const_vec.push(ev.into_int_value());
+                        }
+                        t.const_array(&const_vec).as_basic_value_enum()
+                    }
+                    BasicTypeEnum::FloatType(t) => {
+                        let mut const_vec: Vec<inkwell::values::FloatValue> = Vec::new();
+                        for ev in &elem_vals {
+                            const_vec.push(ev.into_float_value());
+                        }
+                        t.const_array(&const_vec).as_basic_value_enum()
+                    }
+                    _ => return Err("Unsupported array element type".into()),
+                };
+
+                // Store constant to memory and return loaded value
                 let alloca = self.builder.build_alloca(llvm_type, "array")?;
                 self.builder.build_store(alloca, array_val)?;
                 Ok(self
@@ -1301,14 +1474,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                         } = var_type
                         {
                             // Use the struct type name for method mangling
-                            let mangled = format!("{}_{}", type_name, name);
-                            // Try the mangled name first
-                            if self.module.get_function(&mangled).is_some() {
-                                (mangled, false, true)
-                            } else {
-                                // Fallback to demangled name
-                                (name.clone(), false, true)
-                            }
+                            let method_name = format!("{}_{}", type_name, name);
+                            (self.mangle_name(&method_name, false), false, true)
                         } else {
                             // Not a custom type, use the namespace as-is
                             let actual_package = self
@@ -1360,8 +1527,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 if needs_self {
                     if let Some(ns) = namespace.as_deref() {
                         if let Some(ptr) = self.variables.get(ns) {
-                            let val = self.builder.build_load(self.context.i64_type(), *ptr, ns)?;
-                            llvm_args.push(BasicMetadataValueEnum::from(val));
+                            // For methods, self is usually a pointer to the struct
+                            llvm_args.push(BasicMetadataValueEnum::from(*ptr));
                         }
                     }
                 }
@@ -1455,77 +1622,116 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 // For member access, we need to get the struct and extract the field
                 // First check if object is a simple identifier - we can handle it specially
-                let obj_val = if let hir::HirExpr::Ident(obj_name, _, _) = object.as_ref() {
-                    // Look up the variable - try const_variables first, then variables
-                    if let Some(ptr) = self.const_variables.get(obj_name) {
-                        // It's a const - load it
-                        if let Some(var_ty) = self.variable_types.get(obj_name) {
-                            let llvm_type = self.llvm_type(var_ty);
-                            self.builder.build_load(llvm_type, *ptr, obj_name)?
-                        } else {
-                            return Err(format!("Variable not found: {}", obj_name).into());
-                        }
-                    } else if let Some(ptr) = self.variables.get(obj_name) {
-                        // It's a variable - load it
-                        if let Some(var_ty) = self.variable_types.get(obj_name) {
-                            let llvm_type = self.llvm_type(var_ty);
-                            self.builder.build_load(llvm_type, *ptr, obj_name)?
-                        } else {
-                            return Err(format!("Variable not found: {}", obj_name).into());
-                        }
-                    } else {
-                        return Err(format!("Variable not found: {}", obj_name).into());
-                    }
-                } else {
-                    self.generate_hir_expr(object)?
-                };
-
-                // For now, we'll assume the member is a field index (0, 1, 2, ...)
-                // This is a simplification - a full implementation would look up the field name
                 let field_idx: u32 = member.parse().unwrap_or(0);
 
-                // If obj_val is a pointer, we need to handle it differently
-                let extracted = match obj_val.get_type() {
-                    BasicTypeEnum::PointerType(_) => {
-                        // It's a pointer - we need the struct type to load properly
-                        // Since we can't easily get the pointee type from the pointer,
-                        // let's use a different approach - store to alloca then load
-                        let ptr = obj_val.into_pointer_value();
-                        // Try to create an alloca with the same pointer type, then load
-                        let alloca = self.builder.build_alloca(ptr.get_type(), "ptr_temp")?;
-                        self.builder.build_store(alloca, ptr)?;
-                        // Now load - this should give us a pointer value again
-                        let reloaded =
-                            self.builder
-                                .build_load(ptr.get_type(), alloca, "member_load")?;
-                        // Try to extract as struct
-                        self.builder.build_extract_value(
-                            reloaded.into_struct_value(),
-                            field_idx,
-                            member,
-                        )?
+                let extracted = if let hir::HirExpr::Ident(obj_name, obj_ty, _) = object.as_ref() {
+                    // Find the variable's allocation pointer
+                    let alloca_ptr = self
+                        .variables
+                        .get(obj_name)
+                        .or_else(|| self.const_variables.get(obj_name))
+                        .copied()
+                        .ok_or_else(|| format!("Variable not found: {}", obj_name))?;
+                    let var_ty = self.variable_types.get(obj_name).unwrap();
+
+                    match var_ty {
+                        Type::Pointer(inner) => {
+                            // Variable holds a pointer to a struct
+                            if let Type::Custom {
+                                name: struct_name, ..
+                            } = &**inner
+                            {
+                                if let Some(struct_type) = self.context.get_struct_type(struct_name)
+                                {
+                                    // Load the pointer from alloca
+                                    let opaque_ptr_type =
+                                        self.context.ptr_type(inkwell::AddressSpace::default());
+                                    let struct_ptr = self
+                                        .builder
+                                        .build_load(opaque_ptr_type, alloca_ptr, "deref_ptr")?
+                                        .into_pointer_value();
+                                    // GEP into the field
+                                    let field_ptr = self
+                                        .builder
+                                        .build_struct_gep(
+                                            struct_type,
+                                            struct_ptr,
+                                            field_idx,
+                                            "field_ptr",
+                                        )
+                                        .map_err(|e| e.to_string())?;
+                                    // Load the field value
+                                    let field_type =
+                                        struct_type.get_field_type_at_index(field_idx).unwrap();
+                                    self.builder.build_load(field_type, field_ptr, member)?
+                                } else {
+                                    // Struct type not found, load as i64 fallback
+                                    self.context
+                                        .i64_type()
+                                        .const_int(0, false)
+                                        .as_basic_value_enum()
+                                        .into()
+                                }
+                            } else {
+                                // Pointer to non-struct, load it
+                                let opaque_ptr_type =
+                                    self.context.ptr_type(inkwell::AddressSpace::default());
+                                self.builder
+                                    .build_load(opaque_ptr_type, alloca_ptr, obj_name)?
+                            }
+                        }
+                        Type::Custom {
+                            name: struct_name, ..
+                        } => {
+                            // Variable holds a struct directly
+                            if let Some(struct_type) = self.context.get_struct_type(struct_name) {
+                                let field_ptr = self
+                                    .builder
+                                    .build_struct_gep(
+                                        struct_type,
+                                        alloca_ptr,
+                                        field_idx,
+                                        "field_ptr",
+                                    )
+                                    .map_err(|e| e.to_string())?;
+                                let field_type =
+                                    struct_type.get_field_type_at_index(field_idx).unwrap();
+                                self.builder.build_load(field_type, field_ptr, member)?
+                            } else {
+                                // Fallback: load whole struct then extractvalue
+                                let llvm_ty = self.llvm_type(var_ty);
+                                let struct_val =
+                                    self.builder.build_load(llvm_ty, alloca_ptr, obj_name)?;
+                                self.builder.build_extract_value(
+                                    struct_val.into_struct_value(),
+                                    field_idx,
+                                    member,
+                                )?
+                            }
+                        }
+                        _ => {
+                            // Non-struct or non-pointer — load raw
+                            let llvm_ty = self.llvm_type(var_ty);
+                            self.builder.build_load(llvm_ty, alloca_ptr, obj_name)?
+                        }
                     }
-                    BasicTypeEnum::StructType(_) => {
-                        // It's a struct value - extract directly
-                        self.builder.build_extract_value(
+                } else {
+                    // Object is not a simple identifier - evaluate it and extract from resulting value
+                    let obj_val = self.generate_hir_expr(object)?;
+                    match obj_val.get_type() {
+                        BasicTypeEnum::StructType(_) => self.builder.build_extract_value(
                             obj_val.into_struct_value(),
                             field_idx,
                             member,
-                        )?
-                    }
-                    _ => {
-                        // Fallback: try to treat as struct
-                        let struct_type = obj_val.get_type().into_struct_type();
-                        let alloca = self.builder.build_alloca(struct_type, "member_temp")?;
-                        self.builder.build_store(alloca, obj_val)?;
-                        let loaded = self
-                            .builder
-                            .build_load(struct_type, alloca, "member_load")?;
-                        self.builder.build_extract_value(
-                            loaded.into_struct_value(),
-                            field_idx,
-                            member,
-                        )?
+                        )?,
+                        _ => {
+                            // Pointer or scalar fallback - return a zeroinitializer as i64
+                            self.context
+                                .i64_type()
+                                .const_int(0, false)
+                                .as_basic_value_enum()
+                                .into()
+                        }
                     }
                 };
 
@@ -1702,16 +1908,17 @@ impl<'ctx> CodeGenerator<'ctx> {
 
             // Only add struct type as first parameter if there's no explicit self parameter
             if !has_self_param {
-                param_types.push(Type::Custom {
+                param_types.push(Type::Pointer(Box::new(Type::Custom {
                     name: struct_name.clone(),
                     generic_args: vec![],
                     is_exported: true,
-                });
+                })));
             }
             param_types.extend(method.params.iter().map(|p| p.ty.clone()));
 
             let fn_type = self.build_function_type(&method.return_ty, &param_types);
-            let mangled_name = format!("{}_{}", struct_name, method.name);
+            let method_name = format!("{}_{}", struct_name, method.name);
+            let mangled_name = self.mangle_name(&method_name, false);
             self.module.add_function(&mangled_name, fn_type, None);
         }
 
@@ -1850,18 +2057,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         // For void! functions, return 0 (success code)
         if fn_def.return_ty == Type::Void {
             self.builder.build_return(None)?;
-        } else if fn_def.return_ty.is_void_result() {
-            // void! returns i64 - 0 for success
-            self.builder
-                .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
-        } else if fn_def.name == "main" {
-            // main function returns i64
-            self.builder
-                .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
         } else {
-            // Other non-void functions without explicit return - return 0
-            self.builder
-                .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
+            // Non-void function without explicit return - return zero value of correct type
+            let return_type = self.llvm_type(&fn_def.return_ty);
+            let zero = return_type.const_zero();
+            self.builder.build_return(Some(&zero))?;
         }
 
         self.current_function = None;
@@ -2245,8 +2445,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(string_const.as_basic_value_enum())
             }
             Expr::Null(_) => {
-                // Null is represented as a struct { value, is_valid } with is_valid = false
-                // We'll use i64 as placeholder value and false for is_valid
                 let i64_type = self.context.i64_type();
                 let bool_type = self.context.bool_type();
                 let null_struct = self
@@ -2356,7 +2554,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 args,
                 ..
             } => self.generate_call(name, namespace.as_deref(), args),
-            Expr::Array(_, _) => todo!("Codegen for Array literals not implemented"),
+            Expr::Array(_, _, _) => todo!("Codegen for Array literals not implemented"),
             Expr::Char(_, _) => todo!("Codegen for character literals not implemented"),
             Expr::If {
                 condition,
@@ -2898,6 +3096,76 @@ impl<'ctx> CodeGenerator<'ctx> {
         Ok(phi.as_basic_value())
     }
 
+    /// Coerce a value to the expected type (e.g. wrap in Option/Result, downcast integers)
+    fn coerce_type(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        expected_ty: &Type,
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        let expected_llvm_ty = self.llvm_type(expected_ty);
+        if val.get_type() == expected_llvm_ty {
+            return Ok(val);
+        }
+
+        match expected_ty {
+            Type::Option(_) | Type::Result(_) => {
+                let struct_type = expected_llvm_ty.into_struct_type();
+                // If it's a struct, it must be Null/Error fallback ({ i64, i1 } zeroinitializer)
+                if val.is_struct_value() {
+                    return Ok(struct_type.const_zero().into());
+                } else {
+                    // Wrap the inner value
+                    let mut struct_val = struct_type.get_undef();
+                    let field_type = struct_type.get_field_types()[0];
+                    let mut inner_val = val;
+                    if inner_val.get_type() != field_type {
+                        if field_type.is_int_type() && inner_val.is_int_value() {
+                            inner_val = self
+                                .builder
+                                .build_int_cast(
+                                    inner_val.into_int_value(),
+                                    field_type.into_int_type(),
+                                    "cast",
+                                )?
+                                .into();
+                        }
+                    }
+                    struct_val = self
+                        .builder
+                        .build_insert_value(struct_val, inner_val, 0, "ret_val")?
+                        .into_struct_value();
+
+                    let flag_val = if matches!(expected_ty, Type::Option(_)) {
+                        self.context.bool_type().const_int(1, false) // is_valid = true
+                    } else {
+                        self.context.bool_type().const_int(0, false) // is_error = false
+                    };
+                    struct_val = self
+                        .builder
+                        .build_insert_value(struct_val, flag_val, 1, "flag")?
+                        .into_struct_value();
+
+                    return Ok(struct_val.into());
+                }
+            }
+            _ => {
+                // Simple integer casting
+                if expected_llvm_ty.is_int_type() && val.is_int_value() {
+                    return Ok(self
+                        .builder
+                        .build_int_cast(
+                            val.into_int_value(),
+                            expected_llvm_ty.into_int_type(),
+                            "cast",
+                        )?
+                        .into());
+                }
+            }
+        }
+
+        Ok(val)
+    }
+
     /// Convert our Type to LLVM type
     fn llvm_type(&self, ty: &Type) -> BasicTypeEnum<'ctx> {
         match ty {
@@ -2912,29 +3180,23 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::F64 => self.context.f64_type().into(),
             Type::Bool => self.context.bool_type().into(),
             Type::SelfType => self.context.i64_type().into(), // TODO: Resolve to actual struct type
-            Type::Pointer(_) => self.context.i64_type().into(), // TODO: Implement pointer types
-            Type::Void => self.context.i64_type().into(),     // Fallback to i64 for void
-            Type::Error => self.context.i64_type().into(),    // Error type falls back to i64
+            Type::Pointer(_) => self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .into(),
+            Type::Void => self.context.i64_type().into(), // For now, keep i64 for void to match other parts
+            Type::Error => self.context.i64_type().into(),
             Type::Option(inner) => {
-                // Optional type: represented as a struct { value, is_valid }
-                // where is_valid is a boolean indicating whether the value is present
                 let bool_type = self.context.bool_type();
-
-                // Use the appropriate value type based on the inner type
-                let value_type: BasicTypeEnum<'ctx> = match inner.as_ref() {
-                    Type::I8 => self.context.i8_type().into(),
-                    Type::I16 => self.context.i16_type().into(),
-                    Type::I32 => self.context.i32_type().into(),
-                    Type::I64 => self.context.i64_type().into(),
-                    Type::U8 => self.context.i8_type().into(),
-                    Type::U16 => self.context.i16_type().into(),
-                    Type::U32 => self.context.i32_type().into(),
-                    Type::U64 => self.context.i64_type().into(),
-                    Type::F64 => self.context.f64_type().into(),
-                    Type::Bool => self.context.bool_type().into(),
-                    _ => self.context.i64_type().into(), // Default for custom/generic types
-                };
-
+                let value_type = self.llvm_type(inner);
+                self.context
+                    .struct_type(&[value_type.into(), bool_type.into()], false)
+                    .into()
+            }
+            Type::Result(inner) => {
+                // Result<T> is represented same as Option<T> for now: { value, is_error }
+                let bool_type = self.context.bool_type();
+                let value_type = self.llvm_type(inner);
                 self.context
                     .struct_type(&[value_type.into(), bool_type.into()], false)
                     .into()
@@ -2947,13 +3209,32 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 self.context.struct_type(&element_types, false).into()
             }
-            Type::Custom { .. } | Type::GenericParam(_) | Type::Array { .. } => {
-                // For void, custom types, generics, and arrays, we'll just use i64 to avoid the conversion issue
+            Type::Custom { name, .. } => {
+                // Look up struct type in context
+                if let Some(st) = self.context.get_struct_type(name) {
+                    st.into()
+                } else {
+                    // Fallback to i64 if not found (might be declared later)
+                    self.context.i64_type().into()
+                }
+            }
+            Type::GenericParam(_) => {
+                // For generics, we'll just use i64 for now
                 self.context.i64_type().into()
             }
-            Type::Result(inner) => {
-                // Result type: use the inner type for LLVM representation
-                self.llvm_type(inner)
+            Type::Array { size, element_type } => {
+                // Create array type: [size x element_type]
+                let element_llvm = self.llvm_type(element_type);
+                // Use the element type's array_type method
+                match size {
+                    Some(n) => element_llvm.array_type(*n as u32).into(),
+                    None => {
+                        // For dynamic arrays, use a pointer for now
+                        self.context
+                            .ptr_type(inkwell::AddressSpace::default())
+                            .into()
+                    }
+                }
             }
         }
     }

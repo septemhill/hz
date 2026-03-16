@@ -115,6 +115,7 @@ mod tests {
                 Expr::Int(2, dummy_span()),
                 Expr::Int(3, dummy_span()),
             ],
+            None,
             dummy_span(),
         );
         let hir_expr = ctx.lower_expr(&expr);
@@ -451,14 +452,38 @@ impl LoweringContext {
     }
 
     pub fn lower_program(&mut self, program: &ast::Program) -> hir::HirProgram {
-        hir::HirProgram {
-            functions: program.functions.iter().map(|f| self.lower_fn(f)).collect(),
+        let mut functions: Vec<hir::HirFn> = program
+            .functions
+            .iter()
+            .map(|f| self.lower_fn(f, None))
+            .collect();
+
+        // Lower struct methods and add them to the global function list
+        for s in &program.structs {
+            for m in &s.methods {
+                functions.push(self.lower_fn(m, Some(&s.name)));
+            }
         }
+
+        // Lower enum methods and add them to the global function list
+        for e in &program.enums {
+            for m in &e.methods {
+                functions.push(self.lower_fn(m, Some(&e.name)));
+            }
+        }
+
+        hir::HirProgram { functions }
     }
 
-    fn lower_fn(&mut self, f: &ast::FnDef) -> hir::HirFn {
+    fn lower_fn(&mut self, f: &ast::FnDef, prefix: Option<&str>) -> hir::HirFn {
+        let name = if let Some(p) = prefix {
+            format!("{}_{}", p, f.name)
+        } else {
+            f.name.clone()
+        };
+
         hir::HirFn {
-            name: f.name.clone(),
+            name,
             params: f
                 .params
                 .iter()
@@ -495,6 +520,30 @@ impl LoweringContext {
                 generic_args: vec![],
                 is_exported: false,
             }),
+            ast::Expr::Array(elements, explicit_ty, _) => {
+                // Infer array type from elements
+                if let Some(ty) = explicit_ty {
+                    // explicit_ty is the element type (e.g., u8), wrap it in Array
+                    return Some(ast::Type::Array {
+                        size: Some(elements.len()),
+                        element_type: Box::new(ty.clone()),
+                    });
+                }
+                // Infer from first element
+                if let Some(first) = elements.first() {
+                    if let Some(elem_ty) = self.infer_type(first) {
+                        return Some(ast::Type::Array {
+                            size: Some(elements.len()),
+                            element_type: Box::new(elem_ty),
+                        });
+                    }
+                }
+                None
+            }
+            ast::Expr::Char(_, _) => Some(ast::Type::I8),
+            ast::Expr::Int(_, _) => Some(ast::Type::I64),
+            ast::Expr::Float(_, _) => Some(ast::Type::F64),
+            ast::Expr::Bool(_, _) => Some(ast::Type::Bool),
             _ => None,
         }
     }
@@ -570,15 +619,11 @@ impl LoweringContext {
                 value,
                 span,
                 ..
-            } => {
-                // For now, just lower as expression statement
-                hir::HirStmt::Expr(hir::HirExpr::Block {
-                    stmts: vec![],
-                    expr: Some(Box::new(self.lower_expr(value))),
-                    ty: ast::Type::Void,
-                    span: *span,
-                })
-            }
+            } => hir::HirStmt::Assign {
+                target: target.clone(),
+                value: self.lower_expr(value),
+                span: *span,
+            },
             ast::Stmt::For {
                 label,
                 var_name,
@@ -678,14 +723,24 @@ impl LoweringContext {
                 ty: ast::Type::I64, // Placeholder
                 span: *span,
             },
-            ast::Expr::Array(vals, span) => hir::HirExpr::Array {
-                vals: vals.iter().map(|v| self.lower_expr(v)).collect(),
-                ty: ast::Type::Array {
-                    size: Some(vals.len()),
-                    element_type: Box::new(ast::Type::I64),
-                }, // Placeholder
-                span: *span,
-            },
+            ast::Expr::Array(vals, explicit_ty, span) => {
+                // Use explicit type if provided, otherwise infer from first element
+                let element_type = if let Some(ty) = explicit_ty {
+                    ty.clone()
+                } else if let Some(first) = vals.first() {
+                    self.infer_type(first).unwrap_or(ast::Type::I64)
+                } else {
+                    ast::Type::I64
+                };
+                hir::HirExpr::Array {
+                    vals: vals.iter().map(|v| self.lower_expr(v)).collect(),
+                    ty: ast::Type::Array {
+                        size: Some(vals.len()),
+                        element_type: Box::new(element_type),
+                    },
+                    span: *span,
+                }
+            }
             ast::Expr::Ident(name, span) => {
                 hir::HirExpr::Ident(name.clone(), ast::Type::I64, *span)
             } // Placeholder type

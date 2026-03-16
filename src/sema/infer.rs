@@ -242,6 +242,8 @@ pub struct TypeInferrer {
     structs: HashMap<String, crate::ast::StructDef>,
     enums: HashMap<String, crate::ast::EnumDef>,
     errors: HashMap<String, crate::ast::ErrorDef>,
+    /// Expected type for the current expression being inferred (used for array literals)
+    expected_type: Option<Type>,
 }
 
 impl TypeInferrer {
@@ -252,7 +254,18 @@ impl TypeInferrer {
             structs: HashMap::new(),
             enums: HashMap::new(),
             errors: HashMap::new(),
+            expected_type: None,
         }
+    }
+
+    /// Set the expected type for the current expression being inferred
+    fn set_expected_type(&mut self, ty: Option<Type>) {
+        self.expected_type = ty;
+    }
+
+    /// Get the expected type for the current expression being inferred
+    fn get_expected_type(&self) -> Option<&Type> {
+        self.expected_type.as_ref()
     }
 
     /// Infer types for an entire program
@@ -458,8 +471,16 @@ impl TypeInferrer {
                     );
                 }
 
+                // Set expected_type before inferring value if explicit type is provided
+                if let Some(explicit_ty) = ty {
+                    self.set_expected_type(Some(explicit_ty.clone()));
+                }
+
                 let typed_value = if let Some(val_expr) = value {
-                    Some(self.infer_expr(val_expr)?)
+                    let result = self.infer_expr(val_expr)?;
+                    // Clear expected_type after inference
+                    self.set_expected_type(None);
+                    Some(result)
                 } else {
                     None
                 };
@@ -569,15 +590,29 @@ impl TypeInferrer {
             } => {
                 let typed_iterable = self.infer_expr(iterable)?;
 
+                // Determine the element type from the iterable
+                let element_type = match &typed_iterable.ty {
+                    Type::Array { element_type, .. } => element_type.as_ref().clone(),
+                    _ => Type::I64, // Default fallback
+                };
+
                 self.symbol_table.enter_scope();
 
                 if let Some(vn) = var_name {
-                    self.symbol_table
-                        .define(vn.clone(), Type::I64, Visibility::Private, false);
+                    self.symbol_table.define(
+                        vn.clone(),
+                        element_type.clone(),
+                        Visibility::Private,
+                        false,
+                    );
                 }
                 if let Some(cv) = capture {
-                    self.symbol_table
-                        .define(cv.clone(), Type::I64, Visibility::Private, false);
+                    self.symbol_table.define(
+                        cv.clone(),
+                        element_type.clone(),
+                        Visibility::Private,
+                        false,
+                    );
                 }
                 if let Some(iv) = index_var {
                     self.symbol_table
@@ -673,7 +708,7 @@ impl TypeInferrer {
             Expr::Tuple(_, span) => *span,
             Expr::TupleIndex { span, .. } => *span,
             Expr::Ident(_, span) => *span,
-            Expr::Array(_, span) => *span,
+            Expr::Array(_, _, span) => *span,
             Expr::Binary { span, .. } => *span,
             Expr::Unary { span, .. } => *span,
             Expr::Call { span, .. } => *span,
@@ -710,11 +745,15 @@ impl TypeInferrer {
                 },
                 span,
             }),
-            Expr::Char(value, _) => Ok(TypedExpr {
-                expr: TypedExprKind::Char(*value),
-                ty: Type::I8,
-                span,
-            }),
+            Expr::Char(value, _) => {
+                // Use expected type if available, otherwise default to i8
+                let ty = self.get_expected_type().cloned().unwrap_or(Type::I8);
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Char(*value),
+                    ty,
+                    span,
+                })
+            }
             Expr::Null(_) => Ok(TypedExpr {
                 expr: TypedExprKind::Null,
                 ty: Type::Option(Box::new(Type::I64)),
@@ -785,13 +824,38 @@ impl TypeInferrer {
                     span: *span,
                 })
             }
-            Expr::Array(elements, _) => {
+            Expr::Array(elements, explicit_ty, span) => {
+                // Get expected element type from explicit type in AST if provided
+                let explicit_element_type = explicit_ty.clone();
+
+                // Get expected element type from expected_type (context) if provided
+                let context_element_type = if let Some(expected_ty) = self.get_expected_type() {
+                    if let Type::Array { element_type, .. } = expected_ty {
+                        Some(*element_type.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // Prefer explicit type from AST, then context type
+                let expected_element_type = explicit_element_type.or(context_element_type);
+
                 let mut typed_elements = Vec::new();
                 for elem in elements {
+                    // Set expected type for each element if we have an expected element type
+                    if let Some(ref elem_ty) = expected_element_type {
+                        self.set_expected_type(Some(elem_ty.clone()));
+                    }
                     typed_elements.push(self.infer_expr(elem)?);
+                    // Clear expected type after each element
+                    self.set_expected_type(None);
                 }
-                // Determine the element type from the typed elements
-                let element_type = if typed_elements.is_empty() {
+                // Determine the element type: prefer explicit type, then context type, otherwise use first element's type
+                let element_type = if let Some(elem_ty) = expected_element_type {
+                    elem_ty
+                } else if typed_elements.is_empty() {
                     // Empty array - default to i8
                     Type::I8
                 } else {
@@ -806,7 +870,7 @@ impl TypeInferrer {
                 Ok(TypedExpr {
                     expr: TypedExprKind::Array(typed_elements),
                     ty: array_ty,
-                    span,
+                    span: *span,
                 })
             }
             Expr::Binary {
@@ -1645,9 +1709,16 @@ impl AstDump for TypedStmt {
                     print_indent(indent + 1);
                     println!("Label: {}", l);
                 }
+
+                // Determine element type from iterable
+                let element_type = match &iterable.ty {
+                    Type::Array { element_type, .. } => element_type.as_ref().clone(),
+                    _ => Type::I64,
+                };
+
                 if let Some(v) = var_name {
                     print_indent(indent + 1);
-                    println!("Var: {} (ty: i64)", v);
+                    println!("Var: {} (ty: {})", v, element_type);
                 }
                 if let Some(i) = index_var {
                     print_indent(indent + 1);
@@ -1655,7 +1726,7 @@ impl AstDump for TypedStmt {
                 }
                 if let Some(c) = capture {
                     print_indent(indent + 1);
-                    println!("Capture: {} (ty: i64)", c);
+                    println!("Capture: {} (ty: {})", c, element_type);
                 }
                 print_indent(indent + 1);
                 println!("Iterable (ty: {}):", iterable.ty);

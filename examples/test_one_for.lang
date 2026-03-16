@@ -1,0 +1,10 @@
+import "io"
+
+fn main() i64 {
+    const c = [3]u8{'a', 'b', 'c'};
+    for (c) |k, v| {
+        io.println(k, v);
+    }
+
+    return 0;
+}

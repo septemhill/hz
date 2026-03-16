@@ -58,10 +58,42 @@ impl Type {
         } else if literal.parse::<u64>().is_ok() {
             Type::U64
         } else {
-            Type::I64
+            Type::F64 // Fallback
         }
     }
 
+    /// Recursively replace `SelfType` and `Custom("Self")` with the given struct name
+    pub fn replace_self(&mut self, struct_name: &str) {
+        match self {
+            Type::SelfType => {
+                *self = Type::Custom {
+                    name: struct_name.to_string(),
+                    generic_args: Vec::new(),
+                    is_exported: false,
+                };
+            }
+            Type::Custom { name, .. } if name == "Self" => {
+                *name = struct_name.to_string();
+            }
+            Type::Pointer(inner) | Type::Option(inner) | Type::Result(inner) => {
+                inner.replace_self(struct_name);
+            }
+            Type::Tuple(types) => {
+                for t in types {
+                    t.replace_self(struct_name);
+                }
+            }
+            Type::Array { element_type, .. } => {
+                element_type.replace_self(struct_name);
+            }
+            Type::Custom { generic_args, .. } => {
+                for arg in generic_args {
+                    arg.replace_self(struct_name);
+                }
+            }
+            _ => {}
+        }
+    }
     /// Check if this is a custom type
     pub fn is_custom(&self) -> bool {
         matches!(self, Type::Custom { .. })
@@ -336,8 +368,9 @@ pub enum Expr {
     },
     /// Variable identifier
     Ident(String, Span),
-    /// Array literal (e.g., [1, 2, 3])
-    Array(Vec<Expr>, Span),
+    /// Array literal (e.g., [1, 2, 3]) or typed array (e.g., [3]u8{1, 2, 3})
+    /// For typed arrays, `ty` contains the element type (e.g., u8 for [3]u8{...})
+    Array(Vec<Expr>, Option<Type>, Span),
     /// Binary operation
     Binary {
         op: BinaryOp,
@@ -884,7 +917,7 @@ impl AstDump for Expr {
                 tuple.dump(indent + 1);
             }
             Expr::Ident(name, _) => println!("Expr::Ident({})", name),
-            Expr::Array(exprs, _) => {
+            Expr::Array(exprs, _, _) => {
                 println!("Expr::Array");
                 for e in exprs {
                     e.dump(indent + 1);

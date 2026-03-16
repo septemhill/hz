@@ -177,7 +177,7 @@ impl TypeAnalyzer {
                 }
                 None
             }
-            crate::ast::Expr::Array(elements, _) | crate::ast::Expr::Tuple(elements, _) => {
+            crate::ast::Expr::Array(elements, _, _) | crate::ast::Expr::Tuple(elements, _) => {
                 for elem in elements {
                     if let Some(s) = self.expr_find_try(elem) {
                         return Some(s);
@@ -509,7 +509,7 @@ impl TypeAnalyzer {
                         )
                     })
             }
-            crate::ast::Expr::Array(elements, _) => {
+            crate::ast::Expr::Array(elements, _, _) => {
                 for elem in elements {
                     self.analyze_expression(elem)?;
                 }
