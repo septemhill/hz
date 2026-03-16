@@ -713,12 +713,21 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .build_load(iter_type, iter_alloca, "iter_load")?;
 
                 if is_option {
-                    let condition_flag = self
+                    // This is an Option type - check if it's null (is_valid = false)
+                    let is_valid = self
                         .builder
                         .build_extract_value(iter_val_load.into_struct_value(), 1, "is_valid")?
                         .into_int_value();
+                    let is_null = self.builder.build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        is_valid,
+                        self.context.bool_type().const_int(0, false),
+                        "is_null",
+                    )?;
+                    // If null (is_valid = false), it's an infinite loop - branch to body
+                    // If not null (is_valid = true), exit the loop - branch to end
                     self.builder
-                        .build_conditional_branch(condition_flag, body_block, end_block)?;
+                        .build_conditional_branch(is_null, body_block, end_block)?;
                 } else if is_bool {
                     self.builder.build_conditional_branch(
                         iter_val_load.into_int_value(),
@@ -726,38 +735,59 @@ impl<'ctx> CodeGenerator<'ctx> {
                         end_block,
                     )?;
                 } else if iter_type.is_struct_type() {
-                    // Range or Option
+                    // Range, Option, or Null (infinite loop)
                     let struct_type = iter_type.into_struct_type();
                     let types = struct_type.get_field_types();
+                    let mut handled_null_or_option = false;
                     if types.len() == 2 {
                         if let Some(t) = types.get(1) {
                             if t.is_int_type() && t.into_int_type().get_bit_width() == 1 {
-                                // This is an Option type - handle in is_option branch
-                                is_option = true;
-                            } else {
-                                // This is a Range type
+                                // This is an Option type - check if it's null (is_valid = false)
+                                let is_valid = self.builder.build_extract_value(
+                                    iter_val_load.into_struct_value(),
+                                    1,
+                                    "is_valid",
+                                )?;
+                                let is_valid_flag = is_valid.into_int_value();
+                                let is_null = self.builder.build_int_compare(
+                                    inkwell::IntPredicate::EQ,
+                                    is_valid_flag,
+                                    self.context.bool_type().const_int(0, false),
+                                    "is_null",
+                                )?;
+                                // If null (is_valid = false), it's an infinite loop - branch to body
+                                // If not null (is_valid = true), exit the loop - branch to end
+                                self.builder
+                                    .build_conditional_branch(is_null, end_block, body_block)?;
+                                handled_null_or_option = true;
                             }
                         }
                     }
-                    // Range
-                    let start = self.builder.build_extract_value(
-                        iter_val_load.into_struct_value(),
-                        0,
-                        "range_start",
-                    )?;
-                    let end = self.builder.build_extract_value(
-                        iter_val_load.into_struct_value(),
-                        1,
-                        "range_end",
-                    )?;
-                    let condition_flag = self.builder.build_int_compare(
-                        inkwell::IntPredicate::SLT,
-                        start.into_int_value(),
-                        end.into_int_value(),
-                        "range_cmp",
-                    )?;
-                    self.builder
-                        .build_conditional_branch(condition_flag, body_block, end_block)?;
+                    // Only handle as Range if we didn't handle as Option/Null
+                    if !handled_null_or_option {
+                        // Range
+                        let start = self.builder.build_extract_value(
+                            iter_val_load.into_struct_value(),
+                            0,
+                            "range_start",
+                        )?;
+                        let end = self.builder.build_extract_value(
+                            iter_val_load.into_struct_value(),
+                            1,
+                            "range_end",
+                        )?;
+                        let condition_flag = self.builder.build_int_compare(
+                            inkwell::IntPredicate::SLT,
+                            start.into_int_value(),
+                            end.into_int_value(),
+                            "range_cmp",
+                        )?;
+                        self.builder.build_conditional_branch(
+                            condition_flag,
+                            body_block,
+                            end_block,
+                        )?;
+                    }
                 } else if is_array || iter_type.is_array_type() {
                     // Array iteration: check index < array length
                     if let Some(idx_alloca) = array_index_alloca {
@@ -784,6 +814,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                     } else {
                         self.builder.build_unconditional_branch(body_block)?;
                     }
+                } else if iter_type.is_pointer_type() {
+                    // Pointer type (e.g., null/Pointer<Void>) represents an infinite loop
+                    // Always branch to the body block
+                    self.builder.build_unconditional_branch(body_block)?;
                 } else {
                     // Fallback for unsupported types - exit the loop to prevent infinite loop
                     self.builder.build_unconditional_branch(end_block)?;

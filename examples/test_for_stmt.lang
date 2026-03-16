@@ -7,7 +7,8 @@ fn main() i64 {
 
     const c = [3]u8{'a', 'b', 'c'};
     for (c) |k, v| {
-        io.println(k, v);
+        io.println(k);
+        io.println(v);
     }
 
     // Ignore indexs
