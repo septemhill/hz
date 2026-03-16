@@ -617,12 +617,23 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let body_block = self.context.append_basic_block(function, "for_body");
                 let end_block = self.context.append_basic_block(function, "for_end");
 
-                self.builder.build_unconditional_branch(eval_start_block)?;
-                self.builder.position_at_end(eval_start_block);
-
-                // Generate expression
+                // Generate expression and allocate in entry block BEFORE branching
+                // to ensure alloca is in entry block (not in loop)
                 let iter_val = self.generate_hir_expr(iterable)?;
                 let iter_type = iter_val.get_type();
+
+                // Allocate variable to store iteration state or option value
+                // IMPORTANT: Allocate in entry block, NOT in for_eval block
+                // to avoid stack overflow in infinite loops where for_eval is visited repeatedly
+                let iter_alloca = self.builder.build_alloca(iter_type, "iter_var")?;
+                // Store the initial value
+                self.builder.build_store(iter_alloca, iter_val)?;
+
+                // Branch to for_eval (now in entry block, after alloca)
+                self.builder.build_unconditional_branch(eval_start_block)?;
+
+                // Now position at for_eval for rest of loop setup
+                self.builder.position_at_end(eval_start_block);
 
                 // Get the Lang type from the HIR expression to check if it's an array
                 let iter_lang_type = match iterable {
@@ -683,9 +694,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                 }
 
-                // Allocate variable to store iteration state or option value
-                let iter_alloca = self.builder.build_alloca(iter_type, "iter_var")?;
-
                 // For arrays, we need an index variable
                 let array_index_alloca = if is_array {
                     let idx = self
@@ -697,9 +705,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                 } else {
                     None
                 };
-
-                // Store evaluated value to alloca
-                self.builder.build_store(iter_alloca, iter_val)?;
                 self.builder.build_unconditional_branch(cond_block)?;
 
                 // Now setup the loop structure tracking for breaks
