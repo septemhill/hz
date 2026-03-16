@@ -1,6 +1,7 @@
 use crate::ast::{BinaryOp, Mutability, Span, Type, UnaryOp, Visibility};
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub enum HirExpr {
     Int(i64, Type, Span),
     Float(f64, Type, Span),
@@ -87,6 +88,7 @@ pub enum HirExpr {
 }
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub enum HirStmt {
     Expr(HirExpr),
     Let {
@@ -142,6 +144,7 @@ pub enum HirStmt {
 }
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct HirCase {
     pub patterns: Vec<HirExpr>,
     pub body: HirStmt,
@@ -149,6 +152,7 @@ pub struct HirCase {
 }
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct HirFn {
     pub name: String,
     pub params: Vec<(String, Type)>,

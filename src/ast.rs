@@ -2,11 +2,11 @@
 //!
 //! This module defines all AST nodes that represent the parsed program structure.
 
-use std::collections::HashMap;
 use std::fmt;
 
 /// Represents a data type in the language
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
 pub enum Type {
     I8,
     I16,
@@ -50,7 +50,9 @@ pub enum Type {
     Result(Box<Type>),
 }
 
+#[allow(dead_code)]
 impl Type {
+    #[allow(dead_code)]
     /// Get the default type for literals
     pub fn default_for_literal(literal: &str) -> Type {
         if literal.parse::<i64>().is_ok() {
@@ -198,6 +200,7 @@ pub enum BinaryOp {
 }
 
 impl BinaryOp {
+    #[allow(dead_code)]
     /// Get the precedence of the binary operator (higher = binds tighter)
     pub fn precedence(self) -> u8 {
         match self {
@@ -218,6 +221,7 @@ impl BinaryOp {
 
 /// Unary operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum UnaryOp {
     Neg, // - (negation)
     Pos, // + (positive)
@@ -538,6 +542,7 @@ pub struct Program {
 }
 
 /// Visitor trait for AST traversal
+#[allow(dead_code)]
 pub trait ASTVisitor<T> {
     fn visit_expr(&mut self, expr: &Expr) -> T;
     fn visit_stmt(&mut self, stmt: &Stmt) -> T;
@@ -545,6 +550,7 @@ pub trait ASTVisitor<T> {
 }
 
 /// Helper to create spans (placeholder implementation)
+#[allow(dead_code)]
 pub fn span(start: usize, end: usize) -> Span {
     Span { start, end }
 }

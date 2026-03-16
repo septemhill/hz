@@ -6,6 +6,7 @@ use crate::ast::Span;
 
 /// Token types for the Lang programming language
 #[derive(Debug, Clone, PartialEq)]
+#[allow(unused)]
 pub enum Token {
     // Keywords
     Fn,
@@ -95,6 +96,7 @@ pub enum Token {
     FatArrow, // =>
 }
 
+#[allow(unused)]
 impl Token {
     /// Get the token type name for debugging
     pub fn type_name(&self) -> &'static str {

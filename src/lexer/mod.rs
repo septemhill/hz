@@ -11,8 +11,11 @@ pub mod token;
 #[cfg(test)]
 mod tests;
 
+#[allow(unused_imports)]
 pub use error::LexerError;
+#[allow(unused_imports)]
 pub use iterator::LexerIterator;
+#[allow(unused_imports)]
 pub use lexer::{Lexer, tokenize};
 pub use peekable::{PeekableLexerIterator, iter};
 pub use token::{Token, TokenWithSpan};

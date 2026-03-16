@@ -687,9 +687,11 @@ impl TypeAnalyzer {
                 self.symbol_table.exit_scope();
                 Ok(crate::ast::Type::I64)
             }
-            crate::ast::Expr::MemberAccess { object, member, .. } => {
+            crate::ast::Expr::MemberAccess {
+                object, member: _, ..
+            } => {
                 let obj_ty = self.analyze_expression(object)?;
-                if let crate::ast::Type::Custom { name, .. } = &obj_ty {
+                if let crate::ast::Type::Custom { name: _, .. } = &obj_ty {
                     // Try to find if it's a field
                     // We need more info to resolve fields, for now return I64 if it's custom
                     // But if we have the struct info we should check

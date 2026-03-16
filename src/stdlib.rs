@@ -11,6 +11,7 @@ use crate::parser;
 
 /// Represents a loaded package
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct Package {
     pub name: String,
     pub functions: Vec<FnDef>,
@@ -27,6 +28,7 @@ pub struct StdLib {
 }
 
 impl StdLib {
+    #[allow(unused)]
     /// Create a new package manager
     pub fn new() -> Self {
         StdLib {
@@ -108,6 +110,7 @@ impl StdLib {
     }
 
     /// Get a function from a package
+    #[allow(unused)]
     pub fn get_function(&self, package_name: &str, fn_name: &str) -> Option<FnDef> {
         self.packages
             .get(package_name)
@@ -120,6 +123,7 @@ impl StdLib {
     }
 
     /// Preload common std packages
+    #[allow(unused)]
     pub fn preload_common(&mut self) -> Result<(), String> {
         // Try to load common packages if std path is set
         if self.std_path.is_some() {
@@ -142,6 +146,7 @@ impl Default for StdLib {
 }
 
 /// Try to resolve a namespace to a package and function
+#[allow(unused)]
 pub fn resolve_namespace_call(stdlib: &StdLib, namespace: &str, function: &str) -> Option<FnDef> {
     stdlib.get_function(namespace, function)
 }

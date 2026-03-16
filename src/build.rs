@@ -18,6 +18,7 @@ use crate::stdlib;
 pub struct CompilationUnit {
     pub path: PathBuf,
     pub name: String,
+    #[allow(unused)]
     pub imports: Vec<String>,
 }
 

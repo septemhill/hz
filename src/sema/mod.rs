@@ -13,11 +13,13 @@ pub mod types;
 mod tests;
 
 // Re-export for convenience
+#[allow(unused_imports)]
 pub use error::{AnalysisError, AnalysisResult};
 pub use global::GlobalDefinitionsAnalyzer;
 pub use infer::{TypedProgram, infer_types};
 pub use mutability::MutabilityAnalyzer;
 pub use resolver::SymbolResolver;
+#[allow(unused_imports)]
 pub use symbol::{Scope, Symbol, SymbolTable};
 pub use types::TypeAnalyzer;
 
@@ -71,6 +73,7 @@ impl SemanticAnalyzer {
         Ok(())
     }
 
+    #[allow(unused)]
     pub fn get_symbol_table(&self) -> &SymbolTable {
         &self.symbol_table
     }

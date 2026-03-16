@@ -4,7 +4,7 @@
 //! where every expression has its inferred type explicitly stored.
 
 use crate::ast::Visibility;
-use crate::ast::{BinaryOp, Expr, FnDef, FnParam, Program, Span, Stmt, Type, UnaryOp};
+use crate::ast::{BinaryOp, Expr, FnDef, Program, Span, Stmt, Type, UnaryOp};
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::SymbolTable;
 use std::collections::{HashMap, HashSet};
@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Type-annotated expression with its inferred type
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct TypedExpr {
     pub expr: TypedExprKind,
     pub ty: Type,
@@ -89,6 +90,7 @@ pub enum TypedExprKind {
     },
 }
 
+#[allow(unused)]
 impl TypedExpr {
     /// Create a typed expression from an AST expression
     pub fn from_ast(expr: &Expr, inferrer: &mut TypeInferrer) -> AnalysisResult<TypedExpr> {
@@ -103,12 +105,14 @@ impl TypedExpr {
 
 /// Type-annotated statement
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct TypedStmt {
     pub stmt: TypedStmtKind,
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub enum TypedStmtKind {
     /// Expression statement
     Expr { expr: TypedExpr },
@@ -174,6 +178,7 @@ pub struct TypedSwitchCase {
 
 /// Type-annotated function definition
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct TypedFnDef {
     pub name: String,
     pub visibility: Visibility,
@@ -191,6 +196,7 @@ pub struct TypedFnParam {
 
 /// Type-annotated struct definition
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct TypedStructDef {
     pub name: String,
     pub fields: Vec<crate::ast::StructField>,
@@ -202,6 +208,7 @@ pub struct TypedStructDef {
 
 /// Type-annotated enum definition
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct TypedEnumDef {
     pub name: String,
     pub variants: Vec<crate::ast::EnumVariant>,
@@ -213,6 +220,7 @@ pub struct TypedEnumDef {
 
 /// Type-annotated error definition
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct TypedErrorDef {
     pub name: String,
     pub variants: Vec<crate::ast::ErrorVariant>,

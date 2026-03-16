@@ -19,6 +19,7 @@ use crate::hir;
 use crate::stdlib::StdLib;
 
 /// Code generator context
+#[allow(unused)]
 pub struct CodeGenerator<'ctx> {
     pub context: &'ctx Context,
     pub module: Module<'ctx>,
@@ -68,7 +69,9 @@ pub struct CodeGenerator<'ctx> {
 /// Result of code generation
 pub type CodegenResult<T> = Result<T, Box<dyn Error>>;
 
+#[allow(unused)]
 impl<'ctx> CodeGenerator<'ctx> {
+    #[allow(unused)]
     /// Create a new code generator
     pub fn new(context: &'ctx Context, module_name: &str, stdlib: StdLib) -> CodegenResult<Self> {
         let module = context.create_module(module_name);
@@ -368,7 +371,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirStmt::Assign { target, value, .. } => {
                 // Skip underscore assignment (used for ignoring values)
                 if target == "_" {
-                    let llvm_val = self.generate_hir_expr(value)?;
+                    let _llvm_val = self.generate_hir_expr(value)?;
                     // Just evaluate and discard
                     return Ok(());
                 }
@@ -1233,7 +1236,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Get the tuple value
                 let tuple_val = self.generate_hir_expr(tuple)?;
                 // Extract the element at index
-                let llvm_type = self.llvm_type(ty);
+                let _llvm_type = self.llvm_type(ty);
                 let alloca = self
                     .builder
                     .build_alloca(tuple_val.get_type(), "tuple_idx_temp")?;
@@ -1304,7 +1307,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 op,
                 left,
                 right,
-                ty,
+                ty: _,
                 ..
             } => {
                 let l = self.generate_hir_expr(left)?;
@@ -1473,7 +1476,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 };
                 Ok(val)
             }
-            hir::HirExpr::Unary { op, expr, ty, .. } => {
+            hir::HirExpr::Unary {
+                op, expr, ty: _, ..
+            } => {
                 let e = self.generate_hir_expr(expr)?;
                 let val = match op {
                     UnaryOp::Neg => {
@@ -1635,7 +1640,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             hir::HirExpr::MemberAccess {
-                object, member, ty, ..
+                object,
+                member,
+                ty: _,
+                ..
             } => {
                 // Check if this is an error variant access (Type.VariantName)
                 // by checking if the object is an identifier
@@ -1663,7 +1671,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // First check if object is a simple identifier - we can handle it specially
                 let field_idx: u32 = member.parse().unwrap_or(0);
 
-                let extracted = if let hir::HirExpr::Ident(obj_name, obj_ty, _) = object.as_ref() {
+                let extracted = if let hir::HirExpr::Ident(obj_name, _obj_ty, _) = object.as_ref() {
                     // Find the variable's allocation pointer
                     let alloca_ptr = self
                         .variables
@@ -1842,8 +1850,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             hir::HirExpr::Catch {
                 expr,
-                error_var,
-                body,
+                error_var: _,
+                body: _,
                 span: _,
             } => {
                 // Catch expression: evaluate expr, if error execute body, otherwise return value
@@ -2624,8 +2632,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             Expr::Catch {
                 expr,
-                error_var,
-                body,
+                error_var: _,
+                body: _,
                 ..
             } => {
                 // Catch expression: evaluate expr, if error execute body, otherwise return value
@@ -2850,7 +2858,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         args: &[Expr],
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
         // Handle std library and namespaced function calls
-        let (mangled_name, is_std) = if let Some(ns) = namespace {
+        let (mangled_name, _is_std) = if let Some(ns) = namespace {
             // Resolve alias to actual package name
             let actual_package = self
                 .imported_packages

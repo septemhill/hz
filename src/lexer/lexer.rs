@@ -10,12 +10,14 @@ use crate::ast::Span;
 /// Lexer for the Lang programming language
 ///
 /// This lexer can be used to tokenize source code into a collection of tokens.
+#[allow(unused)]
 pub struct Lexer {
     source: Vec<char>,
     pos: usize,
     done: bool,
 }
 
+#[allow(unused)]
 impl Lexer {
     /// Create a new lexer from source code
     pub fn new(source: &str) -> Self {
@@ -421,6 +423,7 @@ impl Lexer {
 }
 
 /// Convenience function to tokenize source code
+#[allow(unused)]
 pub fn tokenize(source: &str) -> Result<Vec<TokenWithSpan>, LexerError> {
     Lexer::new(source).tokenize()
 }

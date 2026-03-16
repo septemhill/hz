@@ -5,11 +5,11 @@
 use super::error::LexerError;
 use super::token::{Token, TokenWithSpan};
 use crate::ast::Span;
-use std::collections::VecDeque;
 
 /// Iterator that lazily produces tokens from source code
 ///
 /// This provides memory-efficient tokenization as tokens are generated on-demand.
+#[allow(unused)]
 pub struct LexerIterator {
     pub source: Vec<char>,
     pub pos: usize,

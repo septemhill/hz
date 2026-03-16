@@ -34,9 +34,11 @@ pub enum ParserState {
     /// Parsing complete
     Completed,
     /// Error state
+    #[allow(unused)]
     Error(String),
 }
 
+#[allow(unused)]
 impl ParserState {
     /// Get a human-readable name for the state
     pub fn name(&self) -> &'static str {
@@ -65,6 +67,7 @@ pub struct Parser {
     state_history: Vec<ParserState>,
 }
 
+#[allow(unused)]
 impl Parser {
     /// Create a new parser from tokens (iterator)
     pub fn new(tokens: PeekableLexerIterator) -> Self {
@@ -640,6 +643,7 @@ pub fn parse(source: &str) -> Result<Program, ParseError> {
     parser.parse_program()
 }
 
+#[allow(unused)]
 impl Parser {
     /// Parse the entire program
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
@@ -1685,7 +1689,7 @@ impl Parser {
         let start = self.current_token().map(|t| t.span.start).unwrap_or(0);
         self.advance(); // consume 'for'
 
-        let mut var_name = None;
+        let var_name = None;
         let iterable: Expr;
 
         // Check if there's an opening parenthesis
@@ -1925,7 +1929,7 @@ impl Parser {
             Expr::MemberAccess {
                 object,
                 member,
-                kind,
+                kind: _,
                 span,
             } => {
                 // Handle member assignment like self.i += 1
@@ -1944,7 +1948,7 @@ impl Parser {
                             Expr::MemberAccess {
                                 object,
                                 member,
-                                kind,
+                                kind: _,
                                 ..
                             } => {
                                 format!("{}.{}", format_target(object.as_ref()), member)

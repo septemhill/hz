@@ -2,6 +2,7 @@ use crate::ast::{Type, Visibility};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct Symbol {
     pub name: String,
     pub ty: Type,

@@ -1,4 +1,4 @@
-use crate::ast::{Span, Visibility};
+use crate::ast::Visibility;
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::infer::TypedProgram;
 use crate::sema::symbol::SymbolTable;
@@ -10,6 +10,7 @@ use crate::sema::symbol::SymbolTable;
 
 pub struct MutabilityAnalyzer {
     symbol_table: SymbolTable,
+    #[allow(unused)]
     typed_program: TypedProgram,
 }
 

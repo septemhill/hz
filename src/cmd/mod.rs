@@ -14,6 +14,7 @@ pub use ast::dump_ast;
 pub use build::build;
 pub use hir::dump_hir;
 pub use ir::generate_ir;
+#[allow(unused_imports)]
 pub use jit::run_jit_command;
 pub use lsp::run_lsp;
 

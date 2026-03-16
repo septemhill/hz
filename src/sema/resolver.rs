@@ -1,4 +1,4 @@
-use crate::ast::{Span, Type, Visibility};
+use crate::ast::{Span, Visibility};
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::SymbolTable;
 
@@ -87,7 +87,7 @@ impl SymbolResolver {
         &self,
         struct_name: &str,
         method_name: &str,
-        span: Span,
+        _span: Span,
     ) -> AnalysisResult<()> {
         // First, check if it's a struct
         if let Some(struct_def) = self.structs.iter().find(|s| &s.name == struct_name) {
@@ -277,7 +277,7 @@ impl SymbolResolver {
                 Ok(())
             }
             crate::ast::Stmt::For {
-                label,
+                label: _,
                 var_name,
                 iterable,
                 capture,
@@ -364,7 +364,7 @@ impl SymbolResolver {
             crate::ast::Expr::Call {
                 name,
                 namespace,
-                args,
+                args: _,
                 span,
             } => {
                 // Check if it's io.println (special case)
@@ -382,7 +382,8 @@ impl SymbolResolver {
 
                     // Try to resolve as a struct/enum method: StructName_methodname
                     let fn_name = format!("{}_{}", ns, name);
-                    Ok(self.symbol_table
+                    Ok(self
+                        .symbol_table
                         .resolve(&fn_name)
                         .map(|s| s.ty.clone())
                         .unwrap_or(crate::ast::Type::I64))
@@ -443,8 +444,10 @@ impl SymbolResolver {
                 self.analyze_expression(expr)?;
                 Ok(crate::ast::Type::I64)
             }
-            crate::ast::Expr::MemberAccess { object, member, .. } => {
-                let obj_ty = self.analyze_expression(object)?;
+            crate::ast::Expr::MemberAccess {
+                object, member: _, ..
+            } => {
+                let _obj_ty = self.analyze_expression(object)?;
                 // For resolver, we mainly just check that the object is valid
                 // Detailed member resolution usually happens in infer_types
                 Ok(crate::ast::Type::I64)

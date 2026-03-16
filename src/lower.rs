@@ -499,7 +499,7 @@ impl LoweringContext {
     /// Infer type from expression (simplified version)
     fn infer_type(&self, expr: &ast::Expr) -> Option<ast::Type> {
         match expr {
-            ast::Expr::Ident(name, _) => {
+            ast::Expr::Ident(_name, _) => {
                 // For identifiers, we'd need scope lookup - return None for now
                 None
             }
@@ -511,7 +511,7 @@ impl LoweringContext {
                 let _ = (name, namespace); // suppress unused warnings
                 None
             }
-            ast::Expr::Try { expr, span } => {
+            ast::Expr::Try { expr, span: _ } => {
                 // For try expressions, try to get inner type
                 self.infer_type(expr)
             }

@@ -1,4 +1,4 @@
-use crate::ast::{Span, Type, Visibility};
+use crate::ast::Type;
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::SymbolTable;
 
