@@ -549,6 +549,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                         let body_block = self.context.append_basic_block(function, "for_body");
                         let end_block = self.context.append_basic_block(function, "for_end");
 
+                        // Create an alloca to store the iteration variable so it can be updated
+                        let iter_type = sv.get_type();
+                        let iter_alloca = self.builder.build_alloca(iter_type, "iter_var")?;
+                        self.builder.build_store(iter_alloca, *sv)?;
+
                         // Push the end block onto the loop stack
                         self.loop_end_blocks
                             .push(vec![(end_block, label_clone.clone())]);
@@ -559,8 +564,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // Condition block - check if start < end for range
                         self.builder.position_at_end(cond_block);
 
+                        // Load the current iteration value
+                        let iter_val_load =
+                            self.builder
+                                .build_load(iter_type, iter_alloca, "iter_load")?;
+                        let iter_struct = iter_val_load.into_struct_value();
+
                         // Check the LLVM type to determine if this is optional (i1 second field) or range (i64 second field)
-                        let struct_type = sv.get_type();
+                        let struct_type = iter_struct.get_type();
                         let types = struct_type.get_field_types();
                         let second_is_i1 = types
                             .get(1)
@@ -569,12 +580,18 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                         let is_some = if second_is_i1 {
                             // Optional type: extract valid flag (second element) - it's i1
-                            let valid = self.builder.build_extract_value(*sv, 1, "is_valid")?;
+                            let valid =
+                                self.builder
+                                    .build_extract_value(iter_struct, 1, "is_valid")?;
                             valid.into_int_value()
                         } else {
                             // Range/tuple: check if first element < second element
-                            let start = self.builder.build_extract_value(*sv, 0, "range_start")?;
-                            let end = self.builder.build_extract_value(*sv, 1, "range_end")?;
+                            let start =
+                                self.builder
+                                    .build_extract_value(iter_struct, 0, "range_start")?;
+                            let end =
+                                self.builder
+                                    .build_extract_value(iter_struct, 1, "range_end")?;
                             self.builder.build_int_compare(
                                 inkwell::IntPredicate::SLT,
                                 start.into_int_value(),
@@ -591,7 +608,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // Handle capture variable - extract value from struct and store in var_name
                         if let Some(name) = &var_name_clone {
                             // Extract the value (first element) from the struct
-                            let val = self.builder.build_extract_value(*sv, 0, "captured")?;
+                            let val =
+                                self.builder
+                                    .build_extract_value(iter_struct, 0, "captured")?;
                             let alloca = self.builder.build_alloca(val.get_type(), name)?;
                             self.builder.build_store(alloca, val)?;
                             // Save to variables map
@@ -603,7 +622,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // Handle index variable - for tuple iteration, this would be element 1
                         if let Some(name) = &index_var_clone {
                             // Try to extract second element as index
-                            let val = self.builder.build_extract_value(*sv, 1, "index_captured")?;
+                            let val = self.builder.build_extract_value(
+                                iter_struct,
+                                1,
+                                "index_captured",
+                            )?;
                             let alloca = self.builder.build_alloca(val.get_type(), name)?;
                             self.builder.build_store(alloca, val)?;
                             // Save to variables map
@@ -617,6 +640,55 @@ impl<'ctx> CodeGenerator<'ctx> {
                         self.generate_hir_stmt(body)?;
                         let current_block = self.builder.get_insert_block().unwrap();
                         if current_block.get_terminator().is_none() {
+                            // Increment the iteration variable for the next iteration
+                            // Load current value
+                            let iter_val_load =
+                                self.builder
+                                    .build_load(iter_type, iter_alloca, "iter_next")?;
+                            let iter_struct = iter_val_load.into_struct_value();
+
+                            if !second_is_i1 {
+                                // For range: increment the start value
+                                let start = self.builder.build_extract_value(
+                                    iter_struct,
+                                    0,
+                                    "next_start",
+                                )?;
+                                let end =
+                                    self.builder
+                                        .build_extract_value(iter_struct, 1, "next_end")?;
+                                let incremented_start = self.builder.build_int_add(
+                                    start.into_int_value(),
+                                    self.context.i64_type().const_int(1, false),
+                                    "start_inc",
+                                )?;
+                                // Create new struct with incremented start
+                                let mut new_struct: inkwell::values::AggregateValueEnum =
+                                    iter_type.const_zero().into();
+                                new_struct = self
+                                    .builder
+                                    .build_insert_value(
+                                        new_struct.into_struct_value(),
+                                        incremented_start,
+                                        0,
+                                        "new_iter",
+                                    )?
+                                    .into();
+                                new_struct = self
+                                    .builder
+                                    .build_insert_value(
+                                        new_struct.into_struct_value(),
+                                        end,
+                                        1,
+                                        "new_iter_final",
+                                    )?
+                                    .into();
+                                // Store back to the alloca
+                                self.builder
+                                    .build_store(iter_alloca, new_struct.as_basic_value_enum())?;
+                            }
+
+                            // Branch back to condition block
                             self.builder.build_unconditional_branch(cond_block)?;
                         }
 
