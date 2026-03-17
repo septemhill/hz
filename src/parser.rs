@@ -2406,6 +2406,7 @@ impl Parser {
 
                     // Check if we're done (handle trailing comma case)
                     if let Some(Token::RBrace) = self.current().cloned() {
+                        self.advance(); // Consume the closing brace
                         break;
                     }
                 }
