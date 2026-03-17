@@ -1,0 +1,33 @@
+// Full test for rawptr type with FFI
+import "io"
+
+// Declare external C functions for memory allocation using rawptr
+external cdecl malloc(size: u64) rawptr;
+external cdecl free(ptr: rawptr) void;
+
+// Helper function to check if pointer is not null
+fn is_valid_ptr(ptr: rawptr) bool {
+    return ptr != 0;
+}
+
+fn main() i32 {
+    io.println("=== RawPtr Full Test ===");
+    
+    // Test 1: Allocate memory with malloc
+    io.println("Test 1: Allocating 8 bytes...");
+    const ptr: rawptr = malloc(8);
+    
+    // Check if allocation succeeded using helper function
+    if (is_valid_ptr(ptr)) {
+        io.println("  Allocation: SUCCESS");
+        free(ptr);
+        io.println("  Freed");
+    } else {
+        io.println("  Allocation: FAILED!");
+        return 1;
+    }
+    
+    io.println("");
+    io.println("All tests passed!");
+    return 0;
+}

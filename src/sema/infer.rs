@@ -938,6 +938,68 @@ impl TypeInferrer {
                         span: *span,
                     });
                 }
+                // Check for is_null built-in function
+                // Usage: is_null(ptr) returns true if ptr is null
+                // Note: Only rawptr can be null because language pointers from allocators
+                // never return null - they throw an error on allocation failure
+                if namespace.is_none() && name == "is_null" {
+                    if typed_args.len() != 1 {
+                        return Err(AnalysisError::new_with_span(
+                            "is_null requires exactly one argument",
+                            span,
+                        )
+                        .with_module("infer"));
+                    }
+                    let arg_ty = &typed_args[0].ty;
+                    // Only allow rawptr - language pointers never return null
+                    if !matches!(arg_ty, Type::RawPtr) {
+                        return Err(AnalysisError::new_with_span(
+                            "is_null requires a rawptr argument",
+                            span,
+                        )
+                        .with_module("infer"));
+                    }
+                    return Ok(TypedExpr {
+                        expr: TypedExprKind::Call {
+                            name: name.clone(),
+                            namespace: None,
+                            args: typed_args,
+                        },
+                        ty: Type::Bool,
+                        span: *span,
+                    });
+                }
+                // Check for is_not_null built-in function
+                // Usage: is_not_null(ptr) returns true if ptr is not null
+                // Note: Only rawptr can be null because language pointers from allocators
+                // never return null - they throw an error on allocation failure
+                if namespace.is_none() && name == "is_not_null" {
+                    if typed_args.len() != 1 {
+                        return Err(AnalysisError::new_with_span(
+                            "is_not_null requires exactly one argument",
+                            span,
+                        )
+                        .with_module("infer"));
+                    }
+                    let arg_ty = &typed_args[0].ty;
+                    // Only allow rawptr - language pointers never return null
+                    if !matches!(arg_ty, Type::RawPtr) {
+                        return Err(AnalysisError::new_with_span(
+                            "is_not_null requires a rawptr argument",
+                            span,
+                        )
+                        .with_module("infer"));
+                    }
+                    return Ok(TypedExpr {
+                        expr: TypedExprKind::Call {
+                            name: name.clone(),
+                            namespace: None,
+                            args: typed_args,
+                        },
+                        ty: Type::Bool,
+                        span: *span,
+                    });
+                }
 
                 // Try to resolve function return type
                 let fn_name = if let Some(ns) = namespace {

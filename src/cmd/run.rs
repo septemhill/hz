@@ -15,6 +15,8 @@ pub fn run_jit(source: &str) -> Result<(), Box<dyn Error>> {
     let mut stdlib = stdlib::StdLib::new();
     // Set std path to ./std relative to current directory
     stdlib.set_std_path("./std");
+    // Preload builtin package (contains is_null, is_not_null, etc.)
+    let _ = stdlib.preload_builtins();
     // Don't preload packages - require explicit imports
     // let _ = stdlib.preload_common();
     println!(

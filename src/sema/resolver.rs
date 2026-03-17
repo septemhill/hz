@@ -373,6 +373,12 @@ impl SymbolResolver {
                     return Ok(crate::ast::Type::Void);
                 }
 
+                // Check if it's is_null or is_not_null (built-in functions)
+                if namespace.is_none() && (name == "is_null" || name == "is_not_null") {
+                    // These functions take a rawptr or pointer and return bool
+                    return Ok(crate::ast::Type::Bool);
+                }
+
                 // For other calls, we'd need to look up the function type
                 // For now, handle namespace calls (like Config.parse)
                 if let Some(ns) = namespace {

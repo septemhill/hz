@@ -1,0 +1,9 @@
+// Test rawptr type - just declaration
+import "io"
+
+external cdecl malloc(size: u64) rawptr;
+
+fn main() i32 {
+    io.println("Test");
+    return 0;
+}

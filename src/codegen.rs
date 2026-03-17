@@ -1551,6 +1551,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 } else {
                     if name == "main" {
                         ("main".to_string(), false, false)
+                    } else if name == "is_null" || name == "is_not_null" {
+                        // Built-in null checking functions - handled inline
+                        return self.generate_null_check_builtin(name, args);
                     } else {
                         (format!("{}_{}", self.module_name, name), false, false)
                     }
@@ -1924,6 +1927,57 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .build_call(printf, &[format_arg.into(), arg_meta.into()], "")?;
         }
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// Generate code for is_null and is_not_null built-in functions
+    fn generate_null_check_builtin(
+        &mut self,
+        name: &str,
+        args: &[hir::HirExpr],
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        // Generate the argument (pointer value)
+        let arg = self.generate_hir_expr(&args[0])?;
+
+        // Get the pointer value
+        let ptr_value = match arg {
+            BasicValueEnum::PointerValue(ptr) => ptr,
+            BasicValueEnum::IntValue(int_val) => {
+                // Convert integer to pointer
+                self.builder.build_int_to_ptr(
+                    int_val,
+                    self.context.ptr_type(inkwell::AddressSpace::default()),
+                    "int_to_ptr",
+                )?
+            }
+            _ => return Err("Invalid argument type for null check".into()),
+        };
+
+        // Compare with null (zero pointer)
+        let null_ptr = self
+            .context
+            .ptr_type(inkwell::AddressSpace::default())
+            .const_null();
+        let is_null = self.builder.build_int_compare(
+            inkwell::IntPredicate::EQ,
+            ptr_value,
+            null_ptr,
+            "ptr_is_null",
+        )?;
+
+        // For is_null: return true if pointer equals null
+        // For is_not_null: return true if pointer does not equal null
+        let result = if name == "is_null" {
+            is_null
+        } else {
+            self.builder.build_int_compare(
+                inkwell::IntPredicate::NE,
+                ptr_value,
+                null_ptr,
+                "ptr_is_not_null",
+            )?
+        };
+
+        Ok(result.into())
     }
 
     /// Declare a struct type in LLVM
@@ -3226,6 +3280,10 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::U64 => self.context.i64_type().into(),
             Type::F64 => self.context.f64_type().into(),
             Type::Bool => self.context.bool_type().into(),
+            Type::RawPtr => self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .into(),
             Type::SelfType => self.context.i64_type().into(), // TODO: Resolve to actual struct type
             Type::Pointer(_) => self
                 .context

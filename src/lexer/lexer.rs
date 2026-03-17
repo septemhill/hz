@@ -279,6 +279,7 @@ impl Lexer {
             "try" => Token::Try,
             "catch" => Token::Catch,
             "break" => Token::Break,
+            "rawptr" => Token::RawPtr,
             "_" => Token::Underscore,
             _ => Token::Ident(ident.clone()),
         };

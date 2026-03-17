@@ -137,6 +137,21 @@ impl StdLib {
         }
         Ok(())
     }
+
+    /// Preload builtin package (contains built-in functions like is_null, is_not_null)
+    #[allow(unused)]
+    pub fn preload_builtins(&mut self) -> Result<(), String> {
+        // Try to load builtin package if std path is set
+        if self.std_path.is_some() {
+            match self.load_package("builtin") {
+                Ok(_) => println!("    Loaded 'builtin' package successfully"),
+                Err(e) => println!("    Warning: Failed to load 'builtin' package: {}", e),
+            }
+        } else {
+            println!("    Warning: Std path not set, skipping builtin preload");
+        }
+        Ok(())
+    }
 }
 
 impl Default for StdLib {

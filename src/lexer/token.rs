@@ -36,6 +36,7 @@ pub enum Token {
     Try,
     Catch,
     Break,
+    RawPtr,
 
     // Identifiers
     Ident(String),
@@ -144,6 +145,7 @@ impl Token {
             Token::Try => "try",
             Token::Catch => "catch",
             Token::Break => "break",
+            Token::RawPtr => "rawptr",
             Token::FatArrow => "=>",
             Token::Assign => "=",
             Token::Plus => "+",

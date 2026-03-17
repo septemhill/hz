@@ -1,0 +1,152 @@
+// Test CPointer - Safe C Pointer Wrapper
+// 
+// This example demonstrates how to use the CPointer module
+// for safe memory management with C functions.
+
+import "io"
+import "c_pointer"
+
+fn main() i32 {
+    io.println("=== CPointer Test Suite ===");
+    io.println("");
+    
+    var all_passed = true;
+    
+    // Test 1: Basic allocation
+    io.println("Test 1: Basic allocation");
+    {
+        var ptr = CPointer32.create(10);
+        
+        if ptr.is_null() {
+            io.println("  FAILED: Allocation returned null");
+            all_passed = false;
+        } else {
+            io.println("  Allocation: OK");
+            io.println("  Length: {ptr.length()}");
+            
+            // Free memory
+            ptr.free();
+            io.println("  Free: OK");
+        }
+    }
+    
+    io.println("");
+    
+    // Test 2: Null pointer handling
+    io.println("Test 2: Null pointer handling");
+    {
+        var ptr = CPointer32.null();
+        
+        if ptr.is_null() {
+            io.println("  Null check: OK");
+        } else {
+            io.println("  FAILED: Should be null");
+            all_passed = false;
+        }
+        
+        // is_owned should be false for null
+        if !ptr.is_owned() {
+            io.println("  Ownership check: OK");
+        }
+    }
+    
+    io.println("");
+    
+    // Test 3: CPointerU8 for byte arrays
+    io.println("Test 3: CPointerU8 for byte arrays");
+    {
+        var ptr = CPointerU8.create(64);
+        
+        if !ptr.is_null() {
+            io.println("  Allocation: OK");
+            io.println("  Length: {ptr.length()}");
+            
+            var raw = ptr.raw();
+            if raw != 0 {
+                io.println("  Raw pointer: OK");
+            }
+            
+            ptr.free();
+            io.println("  Free: OK");
+        } else {
+            io.println("  FAILED: Allocation failed");
+            all_passed = false;
+        }
+    }
+    
+    io.println("");
+    
+    // Test 4: CPointer64 for 64-bit values
+    io.println("Test 4: CPointer64 for 64-bit values");
+    {
+        var ptr = CPointer64.create(5);
+        
+        if !ptr.is_null() {
+            io.println("  Allocation: OK");
+            io.println("  Length: {ptr.length()}");
+            
+            ptr.free();
+            io.println("  Free: OK");
+        } else {
+            io.println("  FAILED: Allocation failed");
+            all_passed = false;
+        }
+    }
+    
+    io.println("");
+    
+    // Test 5: Ownership semantics
+    io.println("Test 5: Ownership semantics");
+    {
+        var ptr = CPointer32.create(5);
+        var is_owned_before = ptr.is_owned();
+        
+        if is_owned_before {
+            io.println("  Ownership: OK (owned by default)");
+        } else {
+            io.println("  FAILED: Should be owned by default");
+            all_passed = false;
+        }
+        
+        ptr.free();
+        
+        // After free, is_null should be true conceptually
+        // (though we can't actually check internal state after move)
+        io.println("  Free: OK");
+    }
+    
+    io.println("");
+    
+    // Test 6: Multiple allocations
+    io.println("Test 6: Multiple allocations");
+    {
+        var ptr1 = CPointer32.create(10);
+        var ptr2 = CPointer32.create(20);
+        var ptr3 = CPointerU8.create(100);
+        
+        if !ptr1.is_null() && !ptr2.is_null() && !ptr3.is_null() {
+            io.println("  Allocations: OK");
+            
+            ptr1.free();
+            ptr2.free();
+            ptr3.free();
+            
+            io.println("  All freed: OK");
+        } else {
+            io.println("  FAILED: Some allocations failed");
+            all_passed = false;
+        }
+    }
+    
+    io.println("");
+    
+    // Final result
+    io.println("==================================");
+    if all_passed {
+        io.println("ALL TESTS PASSED");
+        return 0;
+    } else {
+        io.println("SOME TESTS FAILED")
+        return 1;
+    }
+}

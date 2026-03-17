@@ -1,0 +1,28 @@
+// Basic test for rawptr type
+import "io"
+
+external cdecl malloc(size: u64) rawptr;
+external cdecl free(ptr: rawptr) void;
+
+fn main() i32 {
+    io.println("=== RawPtr Test ===");
+    
+    // Test 1: Allocate memory with malloc
+    io.println("Test 1: Allocating 8 bytes...");
+    const ptr: rawptr = malloc(8);
+    io.println("  Got pointer");
+    
+    // Check if allocation succeeded
+    if (is_not_null(ptr)) {
+        io.println("  Allocation: SUCCESS");
+        free(ptr);
+        io.println("  Freed");
+    } else {
+        io.println("  Allocation: FAILED!");
+        return 1;
+    }
+    
+    io.println("");
+    io.println("All tests passed!");
+    return 0;
+}

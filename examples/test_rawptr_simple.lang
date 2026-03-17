@@ -1,0 +1,13 @@
+// Simple test for rawptr type
+import "io"
+
+external cdecl malloc(size: u64) rawptr;
+
+fn main() i32 {
+    const ptr: rawptr = malloc(9);
+    io.println("Got pointer");
+
+    io.println(is_null(ptr));
+    io.println(is_not_null(ptr));
+    return 0;
+}

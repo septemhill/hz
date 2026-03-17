@@ -1,0 +1,15 @@
+// Test is_null and is_not_null
+import "io"
+
+fn main() i32 {
+    // Test is_null and is_not_null without malloc
+    const result1 = is_null(0);
+    const result2 = is_not_null(0);
+    
+    io.println("is_null(0): ");
+    io.println(result1);
+    io.println("is_not_null(0): ");
+    io.println(result2);
+    
+    return 0;
+}

@@ -1,0 +1,12 @@
+// Test that is_null/is_not_null only accept rawptr
+import "io"
+
+fn test_with_integer() i32 {
+    // This should fail - is_null requires rawptr, not i64
+    const result = is_null(0);
+    return 0;
+}
+
+fn main() i32 {
+    return 0;
+}

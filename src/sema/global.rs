@@ -2,6 +2,9 @@ use crate::ast::Type;
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::SymbolTable;
 
+// List of builtin functions that cannot be overridden
+const BUILTIN_FUNCTIONS: &[&str] = &["is_null", "is_not_null"];
+
 // ============================================================================
 // Analysis Pass 1: Global Definitions Analyzer
 // Collects and validates all global symbols (functions, external functions,
@@ -30,6 +33,14 @@ impl GlobalDefinitionsAnalyzer {
 
     fn collect_functions(&mut self, functions: &[crate::ast::FnDef]) -> AnalysisResult<()> {
         for f in functions {
+            // Check if this function conflicts with a builtin function
+            if BUILTIN_FUNCTIONS.contains(&f.name.as_str()) {
+                return Err(AnalysisError::new_with_span(
+                    &format!("Cannot override builtin function '{}'", f.name),
+                    &f.span,
+                )
+                .with_module("global"));
+            }
             if self.symbol_table.resolve(&f.name).is_some() {
                 return Err(AnalysisError::new_with_span(
                     &format!("Duplicate declaration of function '{}'", f.name),
@@ -48,6 +59,14 @@ impl GlobalDefinitionsAnalyzer {
         ext_fns: &[crate::ast::ExternalFnDef],
     ) -> AnalysisResult<()> {
         for ext_fn in ext_fns {
+            // Check if this external function conflicts with a builtin function
+            if BUILTIN_FUNCTIONS.contains(&ext_fn.name.as_str()) {
+                return Err(AnalysisError::new_with_span(
+                    &format!("Cannot override builtin function '{}'", ext_fn.name),
+                    &ext_fn.span,
+                )
+                .with_module("global"));
+            }
             if self.symbol_table.resolve(&ext_fn.name).is_some() {
                 return Err(AnalysisError::new_with_span(
                     &format!(

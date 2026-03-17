@@ -1,0 +1,110 @@
+// ArenaAllocator - Fast allocator that pre-allocates a large chunk
+// This allocator is very fast for many allocations but doesn't support individual frees.
+// All memory is freed when the allocator is destroyed.
+
+import "io";
+
+// External C functions for memory allocation
+external cdecl fn malloc(size: usize) *void;
+external cdecl fn free(ptr: *void) void;
+
+// ArenaAllocator: Pre-allocates a large chunk and manages it internally
+struct ArenaAllocator {
+    /// The large memory chunk
+    buffer: *void,
+    /// Total buffer capacity
+    capacity: usize,
+    /// Current allocation offset
+    offset: usize,
+    /// Size of all allocations (for tracking)
+    total_allocated: usize,
+    /// Parent allocator for internal use
+    parent: *MallocAllocator,
+
+    // Create arena with specified capacity
+    fn with_capacity(parent: *MallocAllocator, capacity: usize) ArenaAllocator {
+        var buffer = parent.alloc(capacity);
+
+        return ArenaAllocator {
+            buffer: buffer,
+            capacity: capacity,
+            offset: 0,
+            total_allocated: 0,
+            parent: parent,
+        };
+    }
+
+    // Create arena with default capacity (e.g., 1MB)
+    fn new(parent: *MallocAllocator) ArenaAllocator {
+        // Default 1MB capacity
+        return ArenaAllocator.with_capacity(parent, 1024 * 1024);
+    }
+
+    // Allocate from arena (bump allocation)
+    fn alloc<T>(self, size: usize) *T {
+        // Align to next 8-byte boundary for safety
+        var aligned_size = (size + 7) & ~7;
+
+        // Check if we have space
+        if self.offset + aligned_size > self.capacity {
+            io.println("[ArenaAllocator] Out of memory! Requested: " + size);
+            io.println("  Capacity: " + self.capacity);
+            io.println("  Used: " + self.offset);
+            io.println("  Remaining: " + (self.capacity - self.offset));
+            panic("ArenaAllocator: out of memory");
+        }
+
+        // Get pointer at current offset
+        var ptr = (self.buffer as *u8).add(self.offset) as *void;
+
+        // Bump offset
+        self.offset = self.offset + aligned_size;
+        self.total_allocated = self.total_allocated + aligned_size;
+
+        return ptr as *T;
+    }
+
+    // Free - NO OP in arena!
+    // Memory is not actually freed, just marked as allocated.
+    // The entire arena will be freed when deinit is called.
+    fn free<T>(self, ptr: *T) {
+        // NO OP - arena doesn't support individual frees
+        // This is intentional for performance
+    }
+
+    // Reset arena - clear all allocations
+    // Note: This does NOT free the underlying buffer,
+    // it just resets the offset to 0, making all
+    // previous allocations available again.
+    fn reset(self) {
+        self.offset = 0;
+        // Note: old data is still there, but will be overwritten
+    }
+
+    // Get current usage
+    fn used(self) usize {
+        return self.offset;
+    }
+
+    // Get remaining capacity
+    fn remaining(self) usize {
+        return self.capacity - self.offset;
+    }
+
+    // Get total capacity
+    fn get_capacity(self) usize {
+        return self.capacity;
+    }
+
+    // Destroy arena - free entire buffer
+    fn deinit(self) {
+        if self.buffer != null {
+            self.parent.free(self.buffer);
+            self.buffer = null;
+        }
+
+        io.println("[ArenaAllocator] Destroyed");
+        io.println("  Total allocated: " + self.total_allocated + " bytes");
+        io.println("  Final capacity used: " + self.offset + " / " + self.capacity);
+    }
+}

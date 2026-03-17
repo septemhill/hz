@@ -44,6 +44,7 @@ _kw_u32 = { "u32" }
 _kw_u64 = { "u64" }
 _kw_bool = { "bool" }
 _kw_void = { "void" }
+_kw_rawptr = { "rawptr" }
 _kw_null = { "null" }
 _kw_external = { "external" }
 _kw_cdecl = { "cdecl" }
@@ -56,7 +57,7 @@ _kw_import = { "import" }
 ty = _{ 
     "i8" | "i16" | "i32" | "i64" | 
     "u8" | "u16" | "u32" | "u64" | 
-    "bool" | "void" 
+    "bool" | "void" | "rawptr"
 }
 
 // Optional type: ? followed by a base type (e.g., ?i32, ?bool)

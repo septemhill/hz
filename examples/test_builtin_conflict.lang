@@ -1,0 +1,11 @@
+// Test that user cannot override builtin functions
+import "io"
+
+// This should fail - trying to override builtin function is_null
+fn is_null(x: i32) bool {
+    return x == 0;
+}
+
+fn main() i32 {
+    return 0;
+}

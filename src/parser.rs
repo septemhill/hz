@@ -1088,6 +1088,11 @@ impl Parser {
                 }
                 return Ok(Type::Void);
             }
+            // Check for rawptr return type
+            if id == "rawptr" {
+                self.advance();
+                return Ok(Type::RawPtr);
+            }
         }
 
         // Check for SelfType return
@@ -1096,9 +1101,14 @@ impl Parser {
             return Ok(Type::SelfType);
         }
 
+        // Check for RawPtr return type
+        if let Some(Token::RawPtr) = self.current().cloned() {
+            self.advance();
+            return Ok(Type::RawPtr);
+        }
+
         // Try to parse a type (including optional types)
         if let Ok(ty) = self.parse_type() {
-            eprintln!("DEBUG parse_return_type: parsed type {:?}", ty);
             return Ok(ty);
         }
 
@@ -2886,6 +2896,10 @@ impl Parser {
                 self.advance();
                 "self".to_string()
             }
+            Some(Token::RawPtr) => {
+                self.advance();
+                "rawptr".to_string()
+            }
             _ => {
                 return Err(ParseError {
                     message: "Expected type".to_string(),
@@ -2906,6 +2920,7 @@ impl Parser {
             "u64" => Type::U64,
             "bool" => Type::Bool,
             "void" => Type::Void,
+            "rawptr" => Type::RawPtr,
             "self" => Type::SelfType,
             _ => Type::Custom {
                 name: type_name,

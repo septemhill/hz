@@ -608,6 +608,14 @@ impl TypeAnalyzer {
                     }
                     return Ok(crate::ast::Type::Void);
                 }
+                // Check if it's is_null or is_not_null (built-in functions)
+                if namespace.is_none() && (name == "is_null" || name == "is_not_null") {
+                    // These functions take a rawptr or pointer and return bool
+                    for arg in args {
+                        self.analyze_expression(arg)?;
+                    }
+                    return Ok(crate::ast::Type::Bool);
+                }
                 let symbol_ty = if let Some(ns) = namespace {
                     // Try to resolve as a struct/enum method: StructName_methodname
                     let fn_name = format!("{}_{}", ns, name);

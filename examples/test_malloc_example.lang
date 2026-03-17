@@ -1,0 +1,131 @@
+// Practical malloc usage example with error handling
+// This example demonstrates safe dynamic memory allocation using malloc/free
+// Includes error handling for malloc failure cases using external helpers
+
+import "io"
+
+// Declare external C functions for memory allocation
+external cdecl malloc(size: u64) *void;
+external cdecl free(ptr: *void) void;
+
+// memset to write to memory
+external cdecl memset(ptr: *void, value: i32, size: u64) *void;
+
+// memcpy to copy memory  
+external cdecl memcpy(dest: *void, src: *void, size: u64) *void;
+
+// External helper to check if pointer is null
+// Returns 1 if ptr is not null, 0 if ptr is null
+external cdecl __is_valid_pointer(ptr: *void) i32;
+
+// Helper wrapper - returns true if pointer is valid (not null)
+fn is_not_null(ptr: *void) bool {
+    const result: i32 = __is_valid_pointer(ptr);
+    const is_valid: bool = result == 1;
+    return is_valid;
+}
+
+fn main() i32 {
+    io.println("=== Malloc Error Handling Test ===");
+    io.println("With NULL pointer checking");
+    io.println("");
+    
+    var all_ok: bool = true;
+    
+    // Test 1: Allocate memory with error handling
+    io.println("Test 1: Allocating 8 bytes...");
+    const ptr1: *void = malloc(8);
+    
+    // Check if allocation succeeded
+    if (is_not_null(ptr1)) {
+        io.println("  Allocation: SUCCESS");
+        memset(ptr1, 42, 8);
+        io.println("  Write: OK");
+        free(ptr1);
+        io.println("  Freed");
+    } else {
+        io.println("  Allocation: FAILED!");
+        all_ok = false;
+    }
+    
+        all_ok = false;
+    }
+    
+    // Test 2: Allocate for string storage
+    io.println("Test 2: Allocating 256 bytes...");
+    ptr2 = malloc(256);
+    
+    if (is_not_null(ptr2)) {
+        io.println("  Allocation: SUCCESS");
+        memset(ptr2, 65, 256);
+        io.println("  Write: OK");
+    } else {
+        io.println("  Allocation: FAILED!");
+        all_ok = false;
+    }
+    
+    // Test 3: Allocate large memory
+    io.println("Test 3: Allocating 1MB...");
+    const large_ptr: *void = malloc(1048576);
+    
+    if (is_not_null(large_ptr)) {
+        io.println("  Allocation: SUCCESS");
+        memset(large_ptr, 66, 1024);
+        io.println("  Write: OK");
+        free(large_ptr);
+        io.println("  Memory freed");
+    } else {
+        io.println("  Allocation: FAILED!");
+        all_ok = false;
+    }
+    
+    // Test 4: Multiple allocations
+    io.println("Test 4: Multiple allocations...");
+    src = malloc(64);
+    dest = malloc(64);
+    
+    if (is_not_null(src) && is_not_null(dest)) {
+        io.println("  Both allocations: SUCCESS");
+        memset(src, 66, 64);
+        memcpy(dest, src, 64);
+        io.println("  Operations: OK");
+    } else {
+        io.println("  Allocation: FAILED!");
+        all_ok = false;
+    }
+    
+    // Clean up - only free valid pointers
+    io.println("");
+    io.println("Cleanup phase:");
+    
+    if (is_not_null(ptr1)) {
+        free(ptr1);
+        io.println("  Freed ptr1");
+    }
+    
+    if (is_not_null(ptr2)) {
+        free(ptr2);
+        io.println("  Freed ptr2");
+    }
+    
+    if (is_not_null(src)) {
+        free(src);
+        io.println("  Freed src");
+    }
+    
+    if (is_not_null(dest)) {
+        free(dest);
+        io.println("  Freed dest");
+    }
+    
+    io.println("");
+    
+    // Final result
+    if (all_ok) {
+        io.println("=== ALL TESTS PASSED ===");
+        return 0;
+    } else {
+        io.println("=== SOME TESTS FAILED ===");
+        return 1;
+    }
+}

@@ -1,0 +1,19 @@
+// Test allocator - simplified version that works
+
+import "io"
+
+fn main() void {
+    // This is a simplified test
+    // The allocator interface will be:
+    // - malloc_allocator.new() creates an allocator
+    // - allocator.alloc(size) allocates memory
+    // - allocator.free(ptr) frees memory
+    // - allocator.deinit() destroys the allocator
+    
+    io.println("Allocator test placeholder")
+    io.println("The allocator interface:")
+    io.println("  var alloc = malloc_allocator.new()")
+    io.println("  var ptr = alloc.alloc(size)")
+    io.println("  alloc.free(ptr)")
+    io.println("  alloc.deinit()")
+}

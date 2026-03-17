@@ -19,6 +19,9 @@ pub enum Type {
     F64,
     Bool,
     Void,
+    /// Raw pointer type (opaque pointer, similar to C's void*)
+    /// Cannot perform arithmetic operations directly, must convert to u64
+    RawPtr,
     /// Self type (for struct methods)
     SelfType,
     /// Pointer type (e.g., *i32)
@@ -67,6 +70,7 @@ impl Type {
     /// Recursively replace `SelfType` and `Custom("Self")` with the given struct name
     pub fn replace_self(&mut self, struct_name: &str) {
         match self {
+            Type::RawPtr => {}
             Type::SelfType => {
                 *self = Type::Custom {
                     name: struct_name.to_string(),
@@ -145,6 +149,7 @@ impl fmt::Display for Type {
             Type::F64 => write!(f, "f64"),
             Type::Bool => write!(f, "bool"),
             Type::Void => write!(f, "void"),
+            Type::RawPtr => write!(f, "rawptr"),
             Type::SelfType => write!(f, "Self"),
             Type::Pointer(inner) => write!(f, "*{}", inner),
             Type::Option(inner) => write!(f, "?{}", inner),

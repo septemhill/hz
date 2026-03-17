@@ -205,6 +205,7 @@ impl LexerIterator {
             "try" => Token::Try,
             "catch" => Token::Catch,
             "break" => Token::Break,
+            "rawptr" => Token::RawPtr,
             _ => Token::Ident(ident),
         }
     }
