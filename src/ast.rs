@@ -812,7 +812,11 @@ impl AstDump for Stmt {
             Stmt::Assign {
                 target, op, value, ..
             } => {
-                println!("Stmt::Assign: {} {:?}", target, op);
+                println!("Stmt::Assign");
+                print_indent(indent + 1);
+                println!("Target: {}", target);
+                print_indent(indent + 1);
+                println!("Op: {:?}", op);
                 print_indent(indent + 1);
                 println!("Value:");
                 value.dump(indent + 2);

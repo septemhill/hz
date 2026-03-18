@@ -4,7 +4,7 @@
 //! where every expression has its inferred type explicitly stored.
 
 use crate::ast::Visibility;
-use crate::ast::{BinaryOp, Expr, FnDef, Program, Span, Stmt, Type, UnaryOp};
+use crate::ast::{AssignOp, BinaryOp, Expr, FnDef, Program, Span, Stmt, Type, UnaryOp};
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::SymbolTable;
 use std::collections::{HashMap, HashSet};
@@ -129,7 +129,11 @@ pub enum TypedStmtKind {
         is_const: bool,
     },
     /// Assignment statement
-    Assign { target: String, value: TypedExpr },
+    Assign {
+        target: String,
+        op: AssignOp,
+        value: TypedExpr,
+    },
     /// Return statement
     Return { value: Option<TypedExpr> },
     /// Block statement
@@ -662,13 +666,14 @@ impl TypeInferrer {
             Stmt::Assign {
                 target,
                 value,
-                op: _,
+                op,
                 span,
             } => {
                 let typed_value = self.infer_expr(value)?;
                 Ok(TypedStmt {
                     stmt: TypedStmtKind::Assign {
                         target: target.clone(),
+                        op: *op,
                         value: typed_value,
                     },
                     span: *span,
@@ -1893,10 +1898,14 @@ impl AstDump for TypedStmt {
                     v.dump(indent + 2);
                 }
             }
-            TypedStmtKind::Assign { target, value } => {
-                println!("Stmt::Assign: {} (ty: {})", target, value.ty);
+            TypedStmtKind::Assign { target, op, value } => {
+                println!("Stmt::Assign");
                 print_indent(indent + 1);
-                println!("Value:");
+                println!("Target: {}", target);
+                print_indent(indent + 1);
+                println!("Op: {:?}", op);
+                print_indent(indent + 1);
+                println!("Value (ty: {}):", value.ty);
                 value.dump(indent + 2);
             }
             TypedStmtKind::Return { value } => {
