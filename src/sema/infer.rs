@@ -276,6 +276,149 @@ impl TypeInferrer {
         self.expected_type.as_ref()
     }
 
+    /// Validate io.println format string arguments
+    fn validate_io_println_format(
+        &self,
+        format_str: &str,
+        args: &[TypedExpr],
+        span: &Span,
+    ) -> AnalysisResult<()> {
+        // Parse format string to extract placeholders
+        let placeholders = self.parse_format_placeholders(format_str);
+
+        // Check number of arguments matches placeholders
+        if placeholders.len() != args.len() {
+            return Err(AnalysisError::new_with_span(
+                &format!(
+                    "io.println format string has {} placeholders but got {} arguments",
+                    placeholders.len(),
+                    args.len()
+                ),
+                span,
+            )
+            .with_module("infer"));
+        }
+
+        // Check each argument type matches the placeholder
+        for (idx, (placeholder, arg)) in placeholders.iter().zip(args.iter()).enumerate() {
+            match placeholder.as_str() {
+                "s" => {
+                    // {s} requires u8 array or slice
+                    if !self.is_u8_array_or_slice(&arg.ty) {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "io.println placeholder #{} {{}} requires u8 array/slice, got {:?}",
+                                idx + 1,
+                                arg.ty
+                            ),
+                            &arg.span,
+                        )
+                        .with_module("infer"));
+                    }
+                }
+                "d" => {
+                    // {d} requires integer type
+                    if !self.is_integer_type(&arg.ty) {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "io.println placeholder #{} {{d}} requires integer type (i8/u8, i16/u16, i32/u32, i64/u64), got {:?}",
+                                idx + 1,
+                                arg.ty
+                            ),
+                            &arg.span,
+                        ).with_module("infer"));
+                    }
+                }
+                "f" => {
+                    // {f} requires float type
+                    if !self.is_float_type(&arg.ty) {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "io.println placeholder #{} {{f}} requires float type (f32/f64), got {:?}",
+                                idx + 1,
+                                arg.ty
+                            ),
+                            &arg.span,
+                        ).with_module("infer"));
+                    }
+                }
+                "x" => {
+                    // {x} requires integer type
+                    if !self.is_integer_type(&arg.ty) {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "io.println placeholder #{} {{x}} requires integer type (i8/u8, i16/u16, i32/u32, i64/u64), got {:?}",
+                                idx + 1,
+                                arg.ty
+                            ),
+                            &arg.span,
+                        ).with_module("infer"));
+                    }
+                }
+                _ => {
+                    // Unknown placeholder - ignore
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Parse format string and extract placeholders
+    fn parse_format_placeholders(&self, format_str: &str) -> Vec<String> {
+        let mut placeholders = Vec::new();
+        let mut chars = format_str.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                let mut placeholder = String::new();
+                while let Some(&pc) = chars.peek() {
+                    if pc == '}' {
+                        chars.next();
+                        break;
+                    } else {
+                        placeholder.push(chars.next().unwrap());
+                    }
+                }
+                if !placeholder.is_empty() {
+                    placeholders.push(placeholder);
+                }
+            }
+        }
+
+        placeholders
+    }
+
+    /// Check if type is u8 array or slice
+    fn is_u8_array_or_slice(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Array { element_type, .. } => {
+                matches!(**element_type, Type::U8)
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if type is integer type
+    fn is_integer_type(&self, ty: &Type) -> bool {
+        matches!(
+            ty,
+            Type::I8
+                | Type::I16
+                | Type::I32
+                | Type::I64
+                | Type::U8
+                | Type::U16
+                | Type::U32
+                | Type::U64
+        )
+    }
+
+    /// Check if type is float type
+    fn is_float_type(&self, ty: &Type) -> bool {
+        matches!(ty, Type::F32 | Type::F64)
+    }
+
     /// Infer types for an entire program
     pub fn infer_program(&mut self, program: &Program) -> AnalysisResult<TypedProgram> {
         // Populate structs, enums and errors maps for exhaustiveness checking and member access refinement
@@ -746,10 +889,9 @@ impl TypeInferrer {
             }),
             Expr::String(value, _) => Ok(TypedExpr {
                 expr: TypedExprKind::String(value.clone()),
-                ty: Type::Custom {
-                    name: "String".to_string(),
-                    generic_args: vec![],
-                    is_exported: false,
+                ty: Type::Array {
+                    size: None,
+                    element_type: Box::new(Type::U8),
                 },
                 span,
             }),
@@ -928,6 +1070,13 @@ impl TypeInferrer {
 
                 // Check for special cases
                 if namespace.as_deref() == Some("io") && name == "println" {
+                    // Validate format string arguments if first arg is a string literal
+                    if let Some(first_arg) = args.first() {
+                        if let Expr::String(format_str, _) = first_arg {
+                            // Parse format string and validate argument types
+                            self.validate_io_println_format(format_str, &typed_args[1..], span)?;
+                        }
+                    }
                     return Ok(TypedExpr {
                         expr: TypedExprKind::Call {
                             name: name.clone(),

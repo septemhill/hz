@@ -2918,6 +2918,8 @@ impl Parser {
             "u16" => Type::U16,
             "u32" => Type::U32,
             "u64" => Type::U64,
+            "f32" => Type::F32,
+            "f64" => Type::F64,
             "bool" => Type::Bool,
             "void" => Type::Void,
             "rawptr" => Type::RawPtr,

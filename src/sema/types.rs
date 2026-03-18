@@ -456,10 +456,9 @@ impl TypeAnalyzer {
             crate::ast::Expr::Int(_, _) => Ok(crate::ast::Type::I64),
             crate::ast::Expr::Float(_, _) => Ok(crate::ast::Type::F64),
             crate::ast::Expr::Bool(_, _) => Ok(crate::ast::Type::Bool),
-            crate::ast::Expr::String(_, _) => Ok(crate::ast::Type::Custom {
-                name: "String".to_string(),
-                generic_args: vec![],
-                is_exported: false,
+            crate::ast::Expr::String(_, _) => Ok(crate::ast::Type::Array {
+                size: None,
+                element_type: Box::new(crate::ast::Type::U8),
             }),
             crate::ast::Expr::Char(_, _) => Ok(crate::ast::Type::I8),
             crate::ast::Expr::Null(_) => {

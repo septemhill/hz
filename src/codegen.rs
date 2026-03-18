@@ -1897,36 +1897,170 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder
                 .build_call(printf, &[empty_str.as_basic_value_enum().into()], "")?;
         } else {
-            // Generate the format string and argument based on the argument type
-            let arg = self.generate_hir_expr(&args[0])?;
+            // Check if first argument is a string literal for format string handling
+            if let hir::HirExpr::String(format_str_value, _, _) = &args[0] {
+                // Parse format string and handle placeholders
+                let (printf_format, arg_indices) =
+                    self.parse_hir_format_string(format_str_value, args.len() - 1)?;
 
-            // Determine the format specifier based on the type
-            let (format_str, arg_val) = match arg {
-                BasicValueEnum::IntValue(int_val) => {
-                    let bit_width = int_val.get_type().get_bit_width();
-                    if bit_width == 1 || bit_width == 32 {
-                        ("%d\n", arg)
-                    } else {
-                        ("%lld\n", arg)
+                // Create format string for printf
+                let fmt_str = unsafe { self.builder.build_global_string(&printf_format, "fmt") }?;
+
+                // Build argument list
+                let mut llvm_args: Vec<BasicMetadataValueEnum<'_>> =
+                    vec![fmt_str.as_basic_value_enum().into()];
+
+                for &idx in &arg_indices {
+                    if idx + 1 < args.len() {
+                        let val = self.generate_hir_expr(&args[idx + 1])?;
+                        llvm_args.push(val.into());
                     }
                 }
-                BasicValueEnum::PointerValue(_) => {
-                    // String pointers use %s format
-                    ("%s\n", arg)
-                }
-                _ => ("%lld\n", arg),
-            };
 
-            let format_ptr = unsafe { self.builder.build_global_string(format_str, "fmt") }?;
+                self.builder.build_call(printf, &llvm_args, "")?;
+            } else {
+                // Generate the format string and argument based on the argument type
+                let arg = self.generate_hir_expr(&args[0])?;
 
-            // Convert to metadata value for function call
-            let format_arg = format_ptr.as_basic_value_enum();
-            let arg_meta = arg_val;
+                // Determine the format specifier based on the type
+                let (format_str, arg_val) = match arg {
+                    BasicValueEnum::IntValue(int_val) => {
+                        let bit_width = int_val.get_type().get_bit_width();
+                        if bit_width == 1 || bit_width == 32 {
+                            ("%d\n", arg)
+                        } else {
+                            ("%lld\n", arg)
+                        }
+                    }
+                    BasicValueEnum::PointerValue(_) => {
+                        // String pointers use %s format
+                        ("%s\n", arg)
+                    }
+                    _ => ("%lld\n", arg),
+                };
 
-            self.builder
-                .build_call(printf, &[format_arg.into(), arg_meta.into()], "")?;
+                let format_ptr = unsafe { self.builder.build_global_string(format_str, "fmt") }?;
+
+                // Convert to metadata value for function call
+                let format_arg = format_ptr.as_basic_value_enum();
+                let arg_meta = arg_val;
+
+                self.builder
+                    .build_call(printf, &[format_arg.into(), arg_meta.into()], "")?;
+            }
         }
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// Parse format string and extract printf format and argument indices for HIR
+    fn parse_hir_format_string(
+        &self,
+        format_str: &str,
+        num_args: usize,
+    ) -> CodegenResult<(String, Vec<usize>)> {
+        let mut result = String::new();
+        let mut arg_index = 0;
+        let mut chars = format_str.chars().peekable();
+        let mut arg_indices: Vec<usize> = Vec::new();
+
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                // Look for placeholder
+                let mut placeholder = String::new();
+                while let Some(&pc) = chars.peek() {
+                    if pc == '}' {
+                        chars.next();
+                        break;
+                    } else {
+                        placeholder.push(chars.next().unwrap());
+                    }
+                }
+
+                // Process placeholder
+                match placeholder.as_str() {
+                    "s" => {
+                        // String (ASCII) - requires u8 array/slice
+                        result.push_str("%s");
+                        if arg_index < num_args {
+                            arg_indices.push(arg_index);
+                            arg_index += 1;
+                        }
+                    }
+                    "d" => {
+                        // Integer
+                        result.push_str("%lld");
+                        if arg_index < num_args {
+                            arg_indices.push(arg_index);
+                            arg_index += 1;
+                        }
+                    }
+                    "f" => {
+                        // Float
+                        result.push_str("%f");
+                        if arg_index < num_args {
+                            arg_indices.push(arg_index);
+                            arg_index += 1;
+                        }
+                    }
+                    "x" => {
+                        // Hex
+                        result.push_str("%llx");
+                        if arg_index < num_args {
+                            arg_indices.push(arg_index);
+                            arg_index += 1;
+                        }
+                    }
+                    "" => {
+                        // Empty placeholder - just {}
+                        result.push_str("%lld");
+                        if arg_index < num_args {
+                            arg_indices.push(arg_index);
+                            arg_index += 1;
+                        }
+                    }
+                    _ => {
+                        // Unknown placeholder - treat as error or pass through
+                        result.push('{');
+                        result.push_str(&placeholder);
+                        result.push('}');
+                    }
+                }
+            } else if c == '\\' {
+                // Handle escape sequences
+                if let Some(&next) = chars.peek() {
+                    match next {
+                        'n' => {
+                            chars.next();
+                            result.push('\n');
+                        }
+                        't' => {
+                            chars.next();
+                            result.push('\t');
+                        }
+                        '\\' => {
+                            chars.next();
+                            result.push('\\');
+                        }
+                        '"' => {
+                            chars.next();
+                            result.push('"');
+                        }
+                        _ => {
+                            result.push(c);
+                        }
+                    }
+                } else {
+                    result.push(c);
+                }
+            } else {
+                result.push(c);
+            }
+        }
+
+        // Add newline at the end
+        result.push('\n');
+
+        Ok((result, arg_indices))
     }
 
     /// Generate code for is_null and is_not_null built-in functions
@@ -2989,33 +3123,166 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder
                 .build_call(printf, &[empty_str.as_basic_value_enum().into()], "")?;
         } else {
-            // Generate first argument
-            let arg = self.generate_expr(&args[0])?;
+            // Generate first argument (format string)
+            let format_arg = &args[0];
 
-            // Check if the argument is a string pointer (for string literals)
-            // String literals are represented as pointer types in our implementation
-            let arg_type = arg.get_type();
+            // Check if first argument is a string literal
+            if let Expr::String(format_str, _) = format_arg {
+                // Parse format string and handle placeholders
+                let (printf_format, arg_indices) =
+                    self.parse_format_string(format_str, args.len() - 1)?;
 
-            if let BasicTypeEnum::PointerType(_) = arg_type {
-                // It's a string pointer - use %s format
-                let fmt_str = unsafe { self.builder.build_global_string("%s\n", "fmt") }?;
-                let metadata_arg: inkwell::values::BasicMetadataValueEnum<'_> =
-                    fmt_str.as_basic_value_enum().into();
-                let arg_metadata: inkwell::values::BasicMetadataValueEnum<'_> = arg.into();
-                self.builder
-                    .build_call(printf, &[metadata_arg, arg_metadata], "")?;
+                // Create format string for printf
+                let fmt_str = unsafe { self.builder.build_global_string(&printf_format, "fmt") }?;
+
+                // Build argument list
+                let mut llvm_args: Vec<BasicMetadataValueEnum<'_>> =
+                    vec![fmt_str.as_basic_value_enum().into()];
+
+                for &idx in &arg_indices {
+                    let val = self.generate_expr(&args[idx + 1])?;
+                    llvm_args.push(val.into());
+                }
+
+                self.builder.build_call(printf, &llvm_args, "")?;
             } else {
-                // It's a numeric value - use %lld format
-                let fmt_str = unsafe { self.builder.build_global_string("%lld\n", "fmt") }?;
-                let metadata_arg: inkwell::values::BasicMetadataValueEnum<'_> =
-                    fmt_str.as_basic_value_enum().into();
-                let arg_metadata: inkwell::values::BasicMetadataValueEnum<'_> = arg.into();
-                self.builder
-                    .build_call(printf, &[metadata_arg, arg_metadata], "")?;
+                // Not a string literal - generate as before (simple print)
+                let arg = self.generate_expr(&args[0])?;
+                let arg_type = arg.get_type();
+
+                if let BasicTypeEnum::PointerType(_) = arg_type {
+                    // It's a string pointer - use %s format
+                    let fmt_str = unsafe { self.builder.build_global_string("%s\n", "fmt") }?;
+                    let metadata_arg: inkwell::values::BasicMetadataValueEnum<'_> =
+                        fmt_str.as_basic_value_enum().into();
+                    let arg_metadata: inkwell::values::BasicMetadataValueEnum<'_> = arg.into();
+                    self.builder
+                        .build_call(printf, &[metadata_arg, arg_metadata], "")?;
+                } else {
+                    // It's a numeric value - use %lld format
+                    let fmt_str = unsafe { self.builder.build_global_string("%lld\n", "fmt") }?;
+                    let metadata_arg: inkwell::values::BasicMetadataValueEnum<'_> =
+                        fmt_str.as_basic_value_enum().into();
+                    let arg_metadata: inkwell::values::BasicMetadataValueEnum<'_> = arg.into();
+                    self.builder
+                        .build_call(printf, &[metadata_arg, arg_metadata], "")?;
+                }
             }
         }
 
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// Parse format string and extract printf format and argument indices
+    /// Format placeholders: {s} = string (u8 array), {d} = integer, {f} = float, {x} = hex
+    fn parse_format_string(
+        &self,
+        format_str: &str,
+        num_args: usize,
+    ) -> CodegenResult<(String, Vec<usize>)> {
+        let mut result = String::new();
+        let mut arg_index = 0;
+        let mut chars = format_str.chars().peekable();
+        let mut arg_indices: Vec<usize> = Vec::new();
+
+        while let Some(c) = chars.next() {
+            if c == '{' {
+                // Look for placeholder
+                let mut placeholder = String::new();
+                while let Some(&pc) = chars.peek() {
+                    if pc == '}' {
+                        chars.next();
+                        break;
+                    } else {
+                        placeholder.push(chars.next().unwrap());
+                    }
+                }
+
+                // Process placeholder
+                match placeholder.as_str() {
+                    "s" => {
+                        // String (ASCII) - requires u8 array/slice
+                        result.push_str("%s");
+                        if arg_index < num_args {
+                            arg_indices.push(arg_index);
+                            arg_index += 1;
+                        }
+                    }
+                    "d" => {
+                        // Integer
+                        result.push_str("%lld");
+                        if arg_index < num_args {
+                            arg_indices.push(arg_index);
+                            arg_index += 1;
+                        }
+                    }
+                    "f" => {
+                        // Float
+                        result.push_str("%f");
+                        if arg_index < num_args {
+                            arg_indices.push(arg_index);
+                            arg_index += 1;
+                        }
+                    }
+                    "x" => {
+                        // Hex
+                        result.push_str("%llx");
+                        if arg_index < num_args {
+                            arg_indices.push(arg_index);
+                            arg_index += 1;
+                        }
+                    }
+                    "" => {
+                        // Empty placeholder - just {}
+                        result.push_str("%lld");
+                        if arg_index < num_args {
+                            arg_indices.push(arg_index);
+                            arg_index += 1;
+                        }
+                    }
+                    _ => {
+                        // Unknown placeholder - treat as error or pass through
+                        result.push('{');
+                        result.push_str(&placeholder);
+                        result.push('}');
+                    }
+                }
+            } else if c == '\\' {
+                // Handle escape sequences
+                if let Some(&next) = chars.peek() {
+                    match next {
+                        'n' => {
+                            chars.next();
+                            result.push('\n');
+                        }
+                        't' => {
+                            chars.next();
+                            result.push('\t');
+                        }
+                        '\\' => {
+                            chars.next();
+                            result.push('\\');
+                        }
+                        '"' => {
+                            chars.next();
+                            result.push('"');
+                        }
+                        _ => {
+                            result.push(c);
+                        }
+                    }
+                } else {
+                    result.push(c);
+                }
+            } else {
+                result.push(c);
+            }
+        }
+
+        // Add newline at the end
+        result.push('\n');
+
+        Ok((result, arg_indices))
     }
 
     /// Generate if statement
@@ -3278,6 +3545,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::U16 => self.context.i16_type().into(),
             Type::U32 => self.context.i32_type().into(),
             Type::U64 => self.context.i64_type().into(),
+            Type::F32 => self.context.f32_type().into(),
             Type::F64 => self.context.f64_type().into(),
             Type::Bool => self.context.bool_type().into(),
             Type::RawPtr => self

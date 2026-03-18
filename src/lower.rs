@@ -49,7 +49,9 @@ mod tests {
         match hir_expr {
             hir::HirExpr::String(val, ty, _) => {
                 assert_eq!(val, "hello");
-                assert!(matches!(ty, Type::Custom { name, .. } if name == "String"));
+                assert!(
+                    matches!(ty, Type::Array { element_type, .. } if matches!(*element_type, Type::U8))
+                );
             }
             _ => panic!("Expected String expression"),
         }
@@ -686,10 +688,9 @@ impl LoweringContext {
             ast::Expr::Bool(v, span) => hir::HirExpr::Bool(*v, ast::Type::Bool, *span),
             ast::Expr::String(v, span) => hir::HirExpr::String(
                 v.clone(),
-                ast::Type::Custom {
-                    name: "String".to_string(),
-                    generic_args: vec![],
-                    is_exported: false,
+                ast::Type::Array {
+                    size: None,
+                    element_type: Box::new(ast::Type::U8),
                 },
                 *span,
             ),
