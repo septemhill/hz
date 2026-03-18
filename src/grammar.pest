@@ -189,7 +189,10 @@ const_stmt = {
 }
 
 // Type that can be optional (prefixed with ?)
-type_with_optional = { "?" ~ ty | ty }
+type_with_optional = { "?" ~ ty | ty | fn_ty }
+
+// Function type: fn(param_types) return_type
+fn_ty = { "fn" ~ "(" ~ (type_with_optional ~ ("," ~ type_with_optional)*)? ~ ")" ~ type_with_optional }
 
 // ============================================================
 // FUNCTIONS

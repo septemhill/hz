@@ -38,6 +38,7 @@ pub fn run_jit(source: &str) -> Result<(), Box<dyn Error>> {
     let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;
 
     let mut lowering_ctx = lower::LoweringContext::new();
+    lowering_ctx.set_symbol_table(analyzer.get_symbol_table().clone());
     let hir_program = lowering_ctx.lower_program(&program);
 
     for f in &program.functions {

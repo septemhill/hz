@@ -187,6 +187,7 @@ impl BuildSystem {
 
         // 3. Lower
         let mut lowering_ctx = lower::LoweringContext::new();
+        lowering_ctx.set_symbol_table(analyzer.get_symbol_table().clone());
         let mut hir_program = lowering_ctx.lower_program(&program);
 
         // 4. Opt

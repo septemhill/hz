@@ -48,8 +48,15 @@ impl GlobalDefinitionsAnalyzer {
                 )
                 .with_module("global"));
             }
-            self.symbol_table
-                .define(f.name.clone(), f.return_ty.clone(), f.visibility, true);
+            self.symbol_table.define(
+                f.name.clone(),
+                Type::Function {
+                    params: f.params.iter().map(|p| p.ty.clone()).collect(),
+                    return_type: Box::new(f.return_ty.clone()),
+                },
+                f.visibility,
+                true,
+            );
         }
         Ok(())
     }

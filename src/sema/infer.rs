@@ -588,10 +588,20 @@ impl TypeInferrer {
                 span,
                 mutability,
             } => {
+                eprintln!(
+                    "DEBUG Let: name={}, ty={:?}, value={:?}",
+                    name,
+                    ty,
+                    value.is_some()
+                );
                 let inferred_ty = if let Some(explicit_ty) = ty {
                     explicit_ty.clone()
                 } else if let Some(val_expr) = value {
                     let typed_val = self.infer_expr(val_expr)?;
+                    eprintln!(
+                        "DEBUG Let '{}': inferred type from value: {:?}",
+                        name, typed_val.ty
+                    );
                     typed_val.ty.clone()
                 } else {
                     return Err(AnalysisError::new_with_span(
@@ -600,6 +610,8 @@ impl TypeInferrer {
                     )
                     .with_module("infer"));
                 };
+
+                eprintln!("DEBUG Let '{}': final inferred_ty: {:?}", name, inferred_ty);
 
                 // Define the variable in the symbol table
                 if let Some(ns) = names {
@@ -1152,6 +1164,35 @@ impl TypeInferrer {
 
                 // Try to resolve function return type
                 let fn_name = if let Some(ns) = namespace {
+                    // First check if the namespace is a variable in scope (struct instance)
+                    // If so, we need to look up the field in the struct type
+                    if let Some(var_symbol) = self.symbol_table.resolve(ns) {
+                        // The namespace is a variable - look up the field in its type
+                        if let Type::Custom {
+                            name: struct_name, ..
+                        } = &var_symbol.ty
+                        {
+                            if let Some(struct_def) = self.structs.get(struct_name) {
+                                if let Some(field) =
+                                    struct_def.fields.iter().find(|f| &f.name == name)
+                                {
+                                    // Found the field - extract return type if it's a function
+                                    if let Type::Function { return_type, .. } = &field.ty {
+                                        return Ok(TypedExpr {
+                                            expr: TypedExprKind::Call {
+                                                name: name.clone(),
+                                                namespace: namespace.clone(),
+                                                args: typed_args,
+                                            },
+                                            ty: return_type.as_ref().clone(),
+                                            span: *span,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        // If we couldn't find the field, fall through to regular handling
+                    }
                     format!("{}_{}", ns, name)
                 } else {
                     name.clone()
@@ -1160,7 +1201,14 @@ impl TypeInferrer {
                 let ty = self
                     .symbol_table
                     .resolve(&fn_name)
-                    .map(|s| s.ty.clone())
+                    .map(|s| {
+                        // If the symbol is a function type, extract the return type
+                        if let Type::Function { return_type, .. } = &s.ty {
+                            return_type.as_ref().clone()
+                        } else {
+                            s.ty.clone()
+                        }
+                    })
                     .unwrap_or(Type::I64); // Default to i64 if not found
 
                 Ok(TypedExpr {

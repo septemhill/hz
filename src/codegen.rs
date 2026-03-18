@@ -357,7 +357,30 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let llvm_type = self.llvm_type(ty);
                 let alloca = self.builder.build_alloca(llvm_type, name)?;
                 if let Some(val) = value {
-                    let mut llvm_val = self.generate_hir_expr(val)?;
+                    // Check if we need special handling for identifiers that might be functions
+                    let mut llvm_val = if let hir::HirExpr::Ident(ident_name, _, _) = val {
+                        // Try to look up as a function first
+                        let fn_name = if ident_name == "main" {
+                            "main".to_string()
+                        } else {
+                            format!("{}_{}", self.module_name, ident_name)
+                        };
+
+                        if self.module.get_function(&fn_name).is_some() {
+                            eprintln!("DEBUG: Let - identifier is a function: {}", fn_name);
+                            // This identifier is a function - get the function pointer
+                            if let Some(fn_val) = self.module.get_function(&fn_name) {
+                                fn_val.as_global_value().as_pointer_value().into()
+                            } else {
+                                self.generate_hir_expr(val)?
+                            }
+                        } else {
+                            // Not a function, process normally
+                            self.generate_hir_expr(val)?
+                        }
+                    } else {
+                        self.generate_hir_expr(val)?
+                    };
                     llvm_val = self.coerce_type(llvm_val, ty)?;
                     self.builder.build_store(alloca, llvm_val)?;
                 }
@@ -1289,18 +1312,35 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .build_load(llvm_type, alloca, "array_load")?
                     .into())
             }
-            hir::HirExpr::Ident(name, _, _) => {
+            hir::HirExpr::Ident(name, ty, _) => {
                 // Skip underscore identifier (used for ignoring values)
                 if name == "_" {
                     // Return a dummy value
                     return Ok(self.context.i64_type().const_zero().into());
                 }
+
+                // Check if this is a function type - if so, get the function pointer
+                if let Type::Function { .. } = ty {
+                    // Get the function pointer
+                    let fn_name = if name == "main" {
+                        "main".to_string()
+                    } else {
+                        format!("{}_{}", self.module_name, name)
+                    };
+                    let fn_val = self
+                        .module
+                        .get_function(&fn_name)
+                        .ok_or(format!("Function not found: {}", fn_name))?;
+                    // Return the function's pointer
+                    return Ok(fn_val.as_global_value().as_pointer_value().into());
+                }
+
                 let ptr = self
                     .variables
                     .get(name)
                     .ok_or(format!("Var not found: {}", name))?;
-                let ty = self.variable_types.get(name).unwrap();
-                let llvm_type = self.llvm_type(ty);
+                let var_ty = self.variable_types.get(name).unwrap();
+                let llvm_type = self.llvm_type(var_ty);
                 Ok(self.builder.build_load(llvm_type, *ptr, name)?.into())
             }
             hir::HirExpr::Binary {
@@ -1509,19 +1549,112 @@ impl<'ctx> CodeGenerator<'ctx> {
                 args,
                 ..
             } => {
-                let (mangled_name, _is_std, needs_self) = if let Some(ns) = namespace.as_deref() {
-                    // First, check if the namespace is a variable with a struct type
-                    // This handles method calls like "f.next()" where f is a struct instance
-                    if let Some(var_type) = self.variable_types.get(ns) {
-                        if let Type::Custom {
-                            name: type_name, ..
-                        } = var_type
-                        {
-                            // Use the struct type name for method mangling
-                            let method_name = format!("{}_{}", type_name, name);
-                            (self.mangle_name(&method_name, false), false, true)
+                // First, check if the callee is a variable that holds a function pointer
+                eprintln!(
+                    "DEBUG Call: name={}, namespace={:?}, variables: {:?}",
+                    name,
+                    namespace,
+                    self.variables.keys().collect::<Vec<_>>()
+                );
+                if namespace.is_none() {
+                    if let Some(var_alloca) = self.variables.get(name) {
+                        eprintln!(
+                            "DEBUG Call: variable '{}' found in variables, checking variable_types",
+                            name
+                        );
+                        if let Some(var_type) = self.variable_types.get(name) {
+                            eprintln!("DEBUG Call: variable '{}' has type {:?}", name, var_type);
+                            // Check if this variable has a function type
+                            if let Type::Function {
+                                params,
+                                return_type,
+                            } = var_type.clone()
+                            {
+                                eprintln!("DEBUG: Call via function pointer variable: {}", name);
+                                // Load the function pointer from the variable
+                                let fn_ptr = self.builder.build_load(
+                                    self.context.ptr_type(inkwell::AddressSpace::default()),
+                                    *var_alloca,
+                                    name,
+                                )?;
+
+                                // Generate args first
+                                let mut llvm_args: Vec<BasicMetadataValueEnum> = Vec::new();
+                                for arg_expr in args {
+                                    let val = self.generate_hir_expr(arg_expr)?;
+                                    llvm_args.push(BasicMetadataValueEnum::from(val));
+                                }
+
+                                // Create function type for indirect call using existing method
+                                let fn_sig = self.build_function_type(&return_type, &params);
+
+                                // Cast pointer to function pointer type
+                                let casted_ptr = self
+                                    .builder
+                                    .build_bit_cast(
+                                        fn_ptr,
+                                        self.context.ptr_type(inkwell::AddressSpace::default()),
+                                        "cast_fn",
+                                    )?
+                                    .into_pointer_value();
+
+                                let call_result = self.builder.build_indirect_call(
+                                    fn_sig,
+                                    casted_ptr,
+                                    &llvm_args,
+                                    "indirect_call",
+                                )?;
+
+                                let result = match call_result.try_as_basic_value() {
+                                    inkwell::values::ValueKind::Basic(val) => val,
+                                    _ => self.context.i64_type().const_int(0, false).into(),
+                                };
+                                return Ok(result);
+                            }
+                        }
+                    }
+                }
+
+                let (mangled_name, _is_std, needs_self, is_fn_ptr_field) =
+                    if let Some(ns) = namespace.as_deref() {
+                        // First, check if the namespace is a variable with a struct type
+                        // This handles method calls like "f.next()" where f is a struct instance
+                        // But also handles field access like "c.add" where c is a struct with a function field
+                        if let Some(var_type) = self.variable_types.get(ns) {
+                            if let Type::Custom {
+                                name: type_name, ..
+                            } = var_type
+                            {
+                                // Check if this is a known method - try to find it
+                                let method_name = format!("{}_{}", type_name, name);
+                                let mangled = self.mangle_name(&method_name, false);
+
+                                // Check if the method actually exists in the module
+                                let method_exists = self.module.get_function(&mangled).is_some();
+
+                                if method_exists {
+                                    (mangled, false, true, false)
+                                } else {
+                                    // Method doesn't exist - this is likely a function pointer field
+                                    // Return a marker to handle it as field access
+                                    (format!("{}__fn_ptr_field", name), false, false, true)
+                                }
+                            } else {
+                                // Not a custom type, use the namespace as-is
+                                let actual_package = self
+                                    .imported_packages
+                                    .get(ns)
+                                    .map(|s| s.as_str())
+                                    .unwrap_or(ns);
+
+                                if actual_package == "io" && name == "println" {
+                                    return self.generate_hir_io_println(args);
+                                }
+
+                                (format!("{}_{}", actual_package, name), true, false, false)
+                            }
                         } else {
-                            // Not a custom type, use the namespace as-is
+                            // Namespace is not a known variable - treat as package namespace
                             let actual_package = self
                                 .imported_packages
                                 .get(ns)
@@ -1532,32 +1665,100 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 return self.generate_hir_io_println(args);
                             }
 
-                            (format!("{}_{}", actual_package, name), true, false)
+                            (format!("{}_{}", actual_package, name), true, false, false)
                         }
                     } else {
-                        // Namespace is not a known variable - treat as package namespace
-                        let actual_package = self
-                            .imported_packages
+                        if name == "main" {
+                            ("main".to_string(), false, false, false)
+                        } else if name == "is_null" || name == "is_not_null" {
+                            // Built-in null checking functions - handled inline
+                            return self.generate_null_check_builtin(name, args);
+                        } else {
+                            (
+                                format!("{}_{}", self.module_name, name),
+                                false,
+                                false,
+                                false,
+                            )
+                        }
+                    };
+
+                // Handle function pointer field access
+                if is_fn_ptr_field {
+                    if let Some(ns) = namespace.as_deref() {
+                        // Get the struct variable
+                        let struct_ptr = self
+                            .variables
                             .get(ns)
-                            .map(|s| s.as_str())
-                            .unwrap_or(ns);
+                            .or_else(|| self.const_variables.get(ns))
+                            .copied()
+                            .ok_or_else(|| format!("Variable not found: {}", ns))?;
 
-                        if actual_package == "io" && name == "println" {
-                            return self.generate_hir_io_println(args);
+                        let var_ty = self
+                            .variable_types
+                            .get(ns)
+                            .ok_or_else(|| format!("Type not found for: {}", ns))?;
+
+                        // Get the field index from the struct type
+                        if let Type::Custom {
+                            name: type_name, ..
+                        } = var_ty
+                        {
+                            // Look up the struct type
+                            if let Some(struct_type) = self.context.get_struct_type(type_name) {
+                                // Find the field index - we need to iterate through struct fields
+                                // For now, assume field 0 (add field)
+                                // TODO: Make this more robust by finding the actual field
+                                let field_idx = 0u32; // Assuming 'add' is the first field
+
+                                // GEP to the field
+                                let field_ptr = self
+                                    .builder
+                                    .build_struct_gep(
+                                        struct_type,
+                                        struct_ptr,
+                                        field_idx,
+                                        "field_ptr",
+                                    )
+                                    .map_err(|e| e.to_string())?;
+
+                                // Load the function pointer
+                                let fn_ptr_type =
+                                    self.context.ptr_type(inkwell::AddressSpace::default());
+                                let fn_ptr = self
+                                    .builder
+                                    .build_load(fn_ptr_type, field_ptr, "fn_ptr")?
+                                    .into_pointer_value();
+
+                                // Get the function type from HIR
+                                // For now, use a simple i64 function type
+                                // TODO: Get the actual function signature
+                                let fn_sig = self.context.i64_type().fn_type(&[], false);
+
+                                // Generate args first
+                                let mut llvm_args: Vec<BasicMetadataValueEnum> = Vec::new();
+                                for arg_expr in args {
+                                    let val = self.generate_hir_expr(arg_expr)?;
+                                    llvm_args.push(BasicMetadataValueEnum::from(val));
+                                }
+
+                                // Make indirect call
+                                let call_result = self.builder.build_indirect_call(
+                                    fn_sig,
+                                    fn_ptr,
+                                    &llvm_args,
+                                    "indirect_call",
+                                )?;
+
+                                let result = match call_result.try_as_basic_value() {
+                                    inkwell::values::ValueKind::Basic(val) => val,
+                                    _ => self.context.i64_type().const_int(0, false).into(),
+                                };
+                                return Ok(result);
+                            }
                         }
-
-                        (format!("{}_{}", actual_package, name), true, false)
                     }
-                } else {
-                    if name == "main" {
-                        ("main".to_string(), false, false)
-                    } else if name == "is_null" || name == "is_not_null" {
-                        // Built-in null checking functions - handled inline
-                        return self.generate_null_check_builtin(name, args);
-                    } else {
-                        (format!("{}_{}", self.module_name, name), false, false)
-                    }
-                };
+                }
 
                 let function = self
                     .module
@@ -3608,6 +3809,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                             .into()
                     }
                 }
+            }
+            Type::Function { .. } => {
+                // Function type is represented as a pointer to the function
+                self.context
+                    .ptr_type(inkwell::AddressSpace::default())
+                    .into()
             }
         }
     }

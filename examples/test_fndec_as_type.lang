@@ -1,0 +1,32 @@
+
+fn add(a: i64, b: i64) i64 {
+    return a + b;
+}
+
+struct Interface {
+    add: fn(i64, i64) i64,
+}
+
+fn main() i64 {
+    var a: fn(i64, i64) i64 = add;
+
+    var b = add;
+
+    // Call the function through the variable
+    var result = a(1, 2);
+    
+    // Call through the other variable too
+    var result2 = b(3, 4);
+
+    io.println("result: {d}, result2: {d}", result, result2);
+
+    const c = Interface {
+        add: add,
+    };
+
+    const v = c.add(12,34);
+    io.println("v: {d}", v);
+
+    // Return sum of both results
+    return result + result2;
+}

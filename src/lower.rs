@@ -1,5 +1,6 @@
 use crate::ast;
 use crate::hir;
+use crate::sema::SymbolTable;
 
 #[cfg(test)]
 mod tests {
@@ -446,11 +447,19 @@ mod tests {
 
 pub struct LoweringContext {
     // Context for lowering (e.g. current scope, type info)
+    symbol_table: SymbolTable,
 }
 
 impl LoweringContext {
     pub fn new() -> Self {
-        LoweringContext {}
+        LoweringContext {
+            symbol_table: SymbolTable::new(),
+        }
+    }
+
+    /// Set the symbol table (called from the analyzer after semantic analysis)
+    pub fn set_symbol_table(&mut self, symbol_table: SymbolTable) {
+        self.symbol_table = symbol_table;
     }
 
     pub fn lower_program(&mut self, program: &ast::Program) -> hir::HirProgram {
@@ -501,9 +510,13 @@ impl LoweringContext {
     /// Infer type from expression (simplified version)
     fn infer_type(&self, expr: &ast::Expr) -> Option<ast::Type> {
         match expr {
-            ast::Expr::Ident(_name, _) => {
-                // For identifiers, we'd need scope lookup - return None for now
-                None
+            ast::Expr::Ident(name, _) => {
+                // Look up identifier in symbol table
+                if let Some(symbol) = self.symbol_table.resolve(name) {
+                    Some(self.lang_type_to_ast_type(&symbol.ty))
+                } else {
+                    None
+                }
             }
             ast::Expr::Call {
                 name, namespace, ..
@@ -548,6 +561,11 @@ impl LoweringContext {
             ast::Expr::Bool(_, _) => Some(ast::Type::Bool),
             _ => None,
         }
+    }
+
+    /// Convert from semantic analysis Type to AST Type (they're the same type)
+    fn lang_type_to_ast_type(&self, lang_type: &ast::Type) -> ast::Type {
+        lang_type.clone()
     }
 
     fn lower_stmt(&mut self, s: &ast::Stmt) -> hir::HirStmt {
@@ -743,8 +761,26 @@ impl LoweringContext {
                 }
             }
             ast::Expr::Ident(name, span) => {
-                hir::HirExpr::Ident(name.clone(), ast::Type::I64, *span)
-            } // Placeholder type
+                // Look up the type from the symbol table
+                let mut ty = self
+                    .symbol_table
+                    .resolve(name)
+                    .map(|s| s.ty.clone())
+                    .unwrap_or(ast::Type::I64); // Default to i64 if not found
+
+                // If the resolved type is a primitive type (not a function),
+                // check if this identifier is actually a function and convert to function type
+                // This handles cases like: var a: fn(i64, i64) i64 = add;
+                if !matches!(ty, ast::Type::Function { .. }) {
+                    // Try to find a function definition with this name
+                    // We need to look in the program's functions list
+                    // For now, if the name exists in the symbol table with a return type,
+                    // we'll need to handle this differently
+                    // Actually, let's skip this for now - the codegen will handle it
+                }
+
+                hir::HirExpr::Ident(name.clone(), ty, *span)
+            }
             ast::Expr::Binary {
                 op,
                 left,

@@ -46,21 +46,20 @@ impl SemanticAnalyzer {
         let mut global_analyzer = GlobalDefinitionsAnalyzer::new();
         global_analyzer.analyze(program)?;
 
-        // Pass 2: Type analysis
-        let symbol_table = global_analyzer.get_symbol_table().clone();
+        // Pass 2: Type inference - produce type-annotated AST (must run early for function types)
+        let mut symbol_table = global_analyzer.get_symbol_table().clone();
+        let typed_prog = infer_types(program, symbol_table.clone())?;
+        self.typed_program = Some(typed_prog.clone());
+
+        // Pass 3: Type analysis - use the SAME symbol table that was passed to infer_types
         let mut type_analyzer = TypeAnalyzer::new(symbol_table);
         type_analyzer.analyze(program)?;
 
-        // Pass 3: Symbol resolution
+        // Pass 4: Symbol resolution
         let symbol_table = type_analyzer.get_symbol_table().clone();
         let mut symbol_resolver =
             SymbolResolver::new(symbol_table, program.structs.clone(), program.enums.clone());
         symbol_resolver.analyze(program)?;
-
-        // Pass 4: Type inference - produce type-annotated AST (must run before mutability)
-        let symbol_table = symbol_resolver.get_symbol_table().clone();
-        let typed_prog = infer_types(program, symbol_table)?;
-        self.typed_program = Some(typed_prog.clone());
 
         // Pass 5: Mutability analysis
         let symbol_table = symbol_resolver.get_symbol_table().clone();

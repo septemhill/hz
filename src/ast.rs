@@ -52,6 +52,13 @@ pub enum Type {
     Error,
     /// Result type with error (e.g., i32! means i32 or error)
     Result(Box<Type>),
+    /// Function type (e.g., fn(i64, i64) i64)
+    Function {
+        /// Parameter types
+        params: Vec<Type>,
+        /// Return type
+        return_type: Box<Type>,
+    },
 }
 
 #[allow(dead_code)]
@@ -92,6 +99,15 @@ impl Type {
             }
             Type::Array { element_type, .. } => {
                 element_type.replace_self(struct_name);
+            }
+            Type::Function {
+                params,
+                return_type,
+            } => {
+                for param in params {
+                    param.replace_self(struct_name);
+                }
+                return_type.replace_self(struct_name);
             }
             Type::Custom { generic_args, .. } => {
                 for arg in generic_args {
@@ -176,6 +192,13 @@ impl fmt::Display for Type {
             },
             Type::Error => write!(f, "error"),
             Type::Result(inner) => write!(f, "{}!", inner),
+            Type::Function {
+                params,
+                return_type,
+            } => {
+                let params_str: Vec<String> = params.iter().map(|t| t.to_string()).collect();
+                write!(f, "fn({}) {}", params_str.join(", "), return_type)
+            }
         }
     }
 }

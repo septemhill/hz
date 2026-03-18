@@ -2803,6 +2803,51 @@ impl Parser {
 
     /// Parse a base type (without modifiers)
     fn parse_base_type(&mut self) -> Result<Type, ParseError> {
+        // Check for function type: fn(params) return_type
+        if self.match_token(Token::Fn) {
+            self.skip_whitespace();
+
+            // Expect opening parenthesis
+            if !self.match_token(Token::LParen) {
+                return Err(ParseError {
+                    message: "Expected '(' in function type".to_string(),
+                    location: self.current_token().map(|t| t.span.start),
+                });
+            }
+
+            self.skip_whitespace();
+
+            // Parse parameter types
+            let mut params = Vec::new();
+            if !matches!(self.current(), Some(Token::RParen)) {
+                loop {
+                    params.push(self.parse_type()?);
+                    self.skip_whitespace();
+
+                    if self.match_token(Token::RParen) {
+                        break;
+                    }
+
+                    if !self.match_token(Token::Comma) {
+                        return Err(ParseError {
+                            message: "Expected ',' or ')' in function type parameters".to_string(),
+                            location: self.current_token().map(|t| t.span.start),
+                        });
+                    }
+                }
+            } else {
+                self.advance(); // consume ')'
+            }
+
+            // Parse return type
+            let return_type = Box::new(self.parse_type()?);
+
+            return Ok(Type::Function {
+                params,
+                return_type,
+            });
+        }
+
         if self.match_token(Token::Star) {
             let inner = self.parse_type()?;
             return Ok(Type::Pointer(Box::new(inner)));
