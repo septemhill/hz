@@ -636,14 +636,69 @@ impl LoweringContext {
             }
             ast::Stmt::Assign {
                 target,
+                op,
                 value,
                 span,
-                ..
-            } => hir::HirStmt::Assign {
-                target: target.clone(),
-                value: self.lower_expr(value),
-                span: *span,
-            },
+            } => {
+                // Handle compound assignment (e.g., c.age += 43)
+                if *op != ast::AssignOp::Assign {
+                    // For compound assignment, expand to: target = target op value
+                    // Parse the target to get object and member
+                    let (obj, member) = if target.contains('.') {
+                        let parts: Vec<&str> = target.split('.').collect();
+                        (parts[0].to_string(), Some(parts[1].to_string()))
+                    } else {
+                        (target.clone(), None)
+                    };
+
+                    // Infer the type from the value expression
+                    let value_ty = self.infer_type(value).unwrap_or(ast::Type::I64);
+
+                    // Create the read expression (read current value from target)
+                    let read_expr = if let Some(member) = member {
+                        hir::HirExpr::MemberAccess {
+                            object: Box::new(hir::HirExpr::Ident(obj, value_ty.clone(), *span)),
+                            member,
+                            ty: value_ty.clone(),
+                            span: *span,
+                        }
+                    } else {
+                        hir::HirExpr::Ident(target.clone(), value_ty.clone(), *span)
+                    };
+
+                    // Create the binary operation
+                    let bin_op = match op {
+                        ast::AssignOp::AddAssign => ast::BinaryOp::Add,
+                        ast::AssignOp::SubAssign => ast::BinaryOp::Sub,
+                        ast::AssignOp::MulAssign => ast::BinaryOp::Mul,
+                        ast::AssignOp::DivAssign => ast::BinaryOp::Div,
+                        ast::AssignOp::Assign => ast::BinaryOp::Add,
+                    };
+
+                    // Lower the value expression
+                    let lowered_value = self.lower_expr(value);
+
+                    let result_expr = hir::HirExpr::Binary {
+                        op: bin_op,
+                        left: Box::new(read_expr),
+                        right: Box::new(lowered_value),
+                        ty: value_ty,
+                        span: *span,
+                    };
+
+                    hir::HirStmt::Assign {
+                        target: target.clone(),
+                        value: result_expr,
+                        span: *span,
+                    }
+                } else {
+                    hir::HirStmt::Assign {
+                        target: target.clone(),
+                        value: self.lower_expr(value),
+                        span: *span,
+                    }
+                }
+            }
             ast::Stmt::For {
                 label,
                 var_name,
@@ -762,7 +817,7 @@ impl LoweringContext {
             }
             ast::Expr::Ident(name, span) => {
                 // Look up the type from the symbol table
-                let mut ty = self
+                let ty = self
                     .symbol_table
                     .resolve(name)
                     .map(|s| s.ty.clone())

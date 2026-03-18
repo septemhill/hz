@@ -47,7 +47,7 @@ impl SemanticAnalyzer {
         global_analyzer.analyze(program)?;
 
         // Pass 2: Type inference - produce type-annotated AST (must run early for function types)
-        let mut symbol_table = global_analyzer.get_symbol_table().clone();
+        let symbol_table = global_analyzer.get_symbol_table().clone();
         let typed_prog = infer_types(program, symbol_table.clone())?;
         self.typed_program = Some(typed_prog.clone());
 

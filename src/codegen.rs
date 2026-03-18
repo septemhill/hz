@@ -64,6 +64,9 @@ pub struct CodeGenerator<'ctx> {
 
     // Current module name for mangling
     module_name: String,
+
+    // Struct field indices (struct_name -> field_name -> field_index)
+    struct_field_indices: HashMap<String, HashMap<String, u32>>,
 }
 
 /// Result of code generation
@@ -95,6 +98,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             stdlib,
             imported_packages: HashMap::new(),
             module_name: module_name.to_string(),
+            struct_field_indices: HashMap::new(),
         })
     }
 
@@ -407,7 +411,28 @@ impl<'ctx> CodeGenerator<'ctx> {
                     let ptr = self.variables.get(obj_name).ok_or("Var not found")?.clone();
                     let var_ty = self.variable_types.get(obj_name).unwrap();
 
-                    let field_idx: u32 = member.parse().unwrap_or(0);
+                    // First, get the struct name from the variable type
+                    let struct_name = match var_ty {
+                        Type::Pointer(inner) => {
+                            if let Type::Custom { name, .. } = &**inner {
+                                name.clone()
+                            } else {
+                                return Err("Member assignment on non-custom pointer type".into());
+                            }
+                        }
+                        Type::Custom { name, .. } => name.clone(),
+                        _ => return Err("Member assignment on non-struct type".into()),
+                    };
+
+                    // Look up the field index from our mapping
+                    let field_idx = self
+                        .struct_field_indices
+                        .get(&struct_name)
+                        .and_then(|fields| fields.get(member))
+                        .copied()
+                        .ok_or_else(|| {
+                            format!("Field '{}' not found in struct '{}'", member, struct_name)
+                        })?;
 
                     // Determine struct_ptr and struct_type based on whether the variable is a pointer to a struct or the struct itself
                     let (struct_ptr, struct_type) = if let Type::Pointer(inner) = var_ty {
@@ -1347,11 +1372,23 @@ impl<'ctx> CodeGenerator<'ctx> {
                 op,
                 left,
                 right,
-                ty: _,
+                ty,
                 ..
             } => {
-                let l = self.generate_hir_expr(left)?;
-                let r = self.generate_hir_expr(right)?;
+                let mut l = self.generate_hir_expr(left)?;
+                let mut r = self.generate_hir_expr(right)?;
+
+                // Type coercion: cast right operand to match left operand's type if needed
+                if l.is_int_value() && r.is_int_value() {
+                    let l_type = l.into_int_value().get_type();
+                    let r_type = r.into_int_value().get_type();
+                    if l_type.get_bit_width() != r_type.get_bit_width() {
+                        r = self
+                            .builder
+                            .build_int_cast(r.into_int_value(), l_type, "binary_cast")?
+                            .into();
+                    }
+                }
 
                 // Handle different types
                 let val = match op {
@@ -1550,27 +1587,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ..
             } => {
                 // First, check if the callee is a variable that holds a function pointer
-                eprintln!(
-                    "DEBUG Call: name={}, namespace={:?}, variables: {:?}",
-                    name,
-                    namespace,
-                    self.variables.keys().collect::<Vec<_>>()
-                );
                 if namespace.is_none() {
                     if let Some(var_alloca) = self.variables.get(name) {
-                        eprintln!(
-                            "DEBUG Call: variable '{}' found in variables, checking variable_types",
-                            name
-                        );
                         if let Some(var_type) = self.variable_types.get(name) {
-                            eprintln!("DEBUG Call: variable '{}' has type {:?}", name, var_type);
                             // Check if this variable has a function type
                             if let Type::Function {
                                 params,
                                 return_type,
                             } = var_type.clone()
                             {
-                                eprintln!("DEBUG: Call via function pointer variable: {}", name);
                                 // Load the function pointer from the variable
                                 let fn_ptr = self.builder.build_load(
                                     self.context.ptr_type(inkwell::AddressSpace::default()),
@@ -1849,31 +1874,44 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ty: _,
                 ..
             } => {
-                // Check if this is an error variant access (Type.VariantName)
-                // by checking if the object is an identifier
-                if let hir::HirExpr::Ident(obj_name, _, _) = object.as_ref() {
-                    // Try to find the full error variant name in variables
-                    let full_name = format!("{}.{}", obj_name, member);
-                    if let Some(ptr) = self.variables.get(&full_name) {
-                        // Found error variant as a variable
-                        let var_ty = self.variable_types.get(&full_name).unwrap();
-                        let llvm_type = self.llvm_type(var_ty);
-                        return Ok(self.builder.build_load(llvm_type, *ptr, &full_name)?.into());
-                    }
-                    // Also check const_variables
-                    if let Some(ptr) = self.const_variables.get(&full_name) {
-                        let var_ty = self.variable_types.get(&full_name).unwrap();
-                        let llvm_type = self.llvm_type(var_ty);
-                        return Ok(self.builder.build_load(llvm_type, *ptr, &full_name)?.into());
-                    }
-                    // If not found as variable, it might be an error type name
-                    // Return a non-zero error value to indicate an error occurred
-                    return Ok(self.context.i64_type().const_int(1, false).into());
-                }
-
                 // For member access, we need to get the struct and extract the field
                 // First check if object is a simple identifier - we can handle it specially
-                let field_idx: u32 = member.parse().unwrap_or(0);
+
+                // Get struct name and field index from the object if it's an identifier
+                let (struct_name, field_idx) = if let hir::HirExpr::Ident(obj_name, _obj_ty, _) =
+                    object.as_ref()
+                {
+                    let var_ty = match self.variable_types.get(obj_name) {
+                        Some(ty) => ty.clone(),
+                        None => return Err(format!("Variable type not found: {}", obj_name).into()),
+                    };
+
+                    let struct_name = match &var_ty {
+                        Type::Pointer(inner) => {
+                            if let Type::Custom { name, .. } = &**inner {
+                                name.clone()
+                            } else {
+                                return Err("Member access on non-custom pointer type".into());
+                            }
+                        }
+                        Type::Custom { name, .. } => name.clone(),
+                        _ => return Err("Member access on non-struct type".into()),
+                    };
+
+                    let field_idx = self
+                        .struct_field_indices
+                        .get(&struct_name)
+                        .and_then(|fields| fields.get(member))
+                        .copied()
+                        .ok_or_else(|| {
+                            format!("Field '{}' not found in struct '{}'", member, struct_name)
+                        })?;
+
+                    (Some(struct_name), field_idx)
+                } else {
+                    // For non-identifier objects, fall back to numeric index (legacy behavior)
+                    (None, member.parse().unwrap_or(0))
+                };
 
                 let extracted = if let hir::HirExpr::Ident(obj_name, _obj_ty, _) = object.as_ref() {
                     // Find the variable's allocation pointer
@@ -2329,6 +2367,14 @@ impl<'ctx> CodeGenerator<'ctx> {
         let struct_type = self.context.opaque_struct_type(struct_name);
         struct_type.set_body(&field_types, false);
 
+        // Build field name to index mapping
+        let mut field_map = HashMap::new();
+        for (idx, field) in struct_def.fields.iter().enumerate() {
+            field_map.insert(field.name.clone(), idx as u32);
+        }
+        self.struct_field_indices
+            .insert(struct_name.clone(), field_map);
+
         // Declare struct methods as standalone functions
         // Methods are named as StructName_methodname
         // Always declare methods regardless of struct visibility
@@ -2703,10 +2749,135 @@ impl<'ctx> CodeGenerator<'ctx> {
                 span: _,
             } => {
                 // Check if trying to reassign a const variable (compile-time error)
-                if self.const_variables.contains_key(target) {
+                if !target.contains('.') && self.const_variables.contains_key(target) {
                     return Err(format!("Cannot reassign constant variable '{}'", target).into());
                 }
 
+                // Handle member access (e.g., c.age += 43)
+                if target.contains('.') {
+                    let parts: Vec<&str> = target.split('.').collect();
+                    let obj_name = parts[0];
+                    let member = parts[1];
+
+                    let ptr = self.variables.get(obj_name).ok_or("Var not found")?.clone();
+                    let var_ty = self.variable_types.get(obj_name).unwrap();
+
+                    // Get the struct name from the variable type
+                    let struct_name = match var_ty {
+                        Type::Pointer(inner) => {
+                            if let Type::Custom { name, .. } = &**inner {
+                                name.clone()
+                            } else {
+                                return Err("Member assignment on non-custom pointer type".into());
+                            }
+                        }
+                        Type::Custom { name, .. } => name.clone(),
+                        _ => return Err("Member assignment on non-struct type".into()),
+                    };
+
+                    // Look up the field index
+                    let field_idx = self
+                        .struct_field_indices
+                        .get(&struct_name)
+                        .and_then(|fields| fields.get(member))
+                        .copied()
+                        .ok_or_else(|| {
+                            format!("Field '{}' not found in struct '{}'", member, struct_name)
+                        })?;
+
+                    // Get struct pointer and type
+                    let (struct_ptr, struct_type) = if let Type::Pointer(inner) = var_ty {
+                        if let Type::Custom {
+                            name: struct_name, ..
+                        } = &**inner
+                        {
+                            let st = self.context.get_struct_type(struct_name).unwrap();
+                            let opaque_ptr_type =
+                                self.context.ptr_type(inkwell::AddressSpace::default());
+                            let loaded_ptr = self
+                                .builder
+                                .build_load(opaque_ptr_type, ptr, "obj_ptr")?
+                                .into_pointer_value();
+                            (loaded_ptr, st)
+                        } else {
+                            return Err("Member assignment on non-custom pointer type".into());
+                        }
+                    } else if let Type::Custom {
+                        name: struct_name, ..
+                    } = var_ty
+                    {
+                        let st = self.context.get_struct_type(struct_name).unwrap();
+                        (ptr, st)
+                    } else {
+                        return Err("Member assignment on non-struct type".into());
+                    };
+
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(struct_type, struct_ptr, field_idx, "field_ptr")
+                        .map_err(|e| e.to_string())?;
+                    let field_type = struct_type.get_field_type_at_index(field_idx).unwrap();
+
+                    let llvm_value = self.generate_expr(value)?;
+
+                    match op {
+                        AssignOp::Assign => {
+                            // Coerce and store the value
+                            let mut coerced_val = llvm_value;
+                            if field_type.is_int_type() && llvm_value.is_int_value() {
+                                coerced_val = self
+                                    .builder
+                                    .build_int_cast(
+                                        llvm_value.into_int_value(),
+                                        field_type.into_int_type(),
+                                        "assign_cast",
+                                    )?
+                                    .into();
+                            }
+                            self.builder.build_store(field_ptr, coerced_val)?;
+                        }
+                        AssignOp::AddAssign => {
+                            let current = self.builder.build_load(field_type, field_ptr, "tmp")?;
+                            let result = self.builder.build_int_add(
+                                current.into_int_value(),
+                                llvm_value.into_int_value(),
+                                "addtmp",
+                            )?;
+                            self.builder.build_store(field_ptr, result)?;
+                        }
+                        AssignOp::SubAssign => {
+                            let current = self.builder.build_load(field_type, field_ptr, "tmp")?;
+                            let result = self.builder.build_int_sub(
+                                current.into_int_value(),
+                                llvm_value.into_int_value(),
+                                "subtmp",
+                            )?;
+                            self.builder.build_store(field_ptr, result)?;
+                        }
+                        AssignOp::MulAssign => {
+                            let current = self.builder.build_load(field_type, field_ptr, "tmp")?;
+                            let result = self.builder.build_int_mul(
+                                current.into_int_value(),
+                                llvm_value.into_int_value(),
+                                "multmp",
+                            )?;
+                            self.builder.build_store(field_ptr, result)?;
+                        }
+                        AssignOp::DivAssign => {
+                            let current = self.builder.build_load(field_type, field_ptr, "tmp")?;
+                            let result = self.builder.build_int_signed_div(
+                                current.into_int_value(),
+                                llvm_value.into_int_value(),
+                                "divtmp",
+                            )?;
+                            self.builder.build_store(field_ptr, result)?;
+                        }
+                    }
+
+                    return Ok(());
+                }
+
+                // Simple variable assignment (non-member)
                 // Get the pointer first to avoid borrow issues
                 let target_ptr = self
                     .variables
