@@ -35,6 +35,23 @@ fn analyze_source_with_symbols(
     Ok(analyzer.get_symbol_table().clone())
 }
 
+/// Helper function that returns the typed program after analysis
+fn analyze_source_typed(source: &str) -> Result<crate::sema::TypedProgram, AnalysisError> {
+    let tokens = lexer_iter(source);
+    let mut parser = Parser::new(tokens);
+    let program = parser
+        .parse_program()
+        .map_err(|e| AnalysisError::new(&e.to_string()))?;
+
+    let mut analyzer = SemanticAnalyzer::new();
+    analyzer.analyze(&program)?;
+
+    analyzer
+        .get_typed_program()
+        .cloned()
+        .ok_or_else(|| AnalysisError::new("Typed program was not produced"))
+}
+
 // ==========================================================================
 // Test: Simple hello world program
 // ==========================================================================
@@ -290,6 +307,123 @@ fn main() void {
         result.is_err(),
         "Expected error for undefined function call"
     );
+}
+
+#[test]
+fn test_unknown_member_access_error() {
+    let source = r#"
+struct Point {
+    x: i64,
+}
+
+fn main() void {
+    const p = Point { x: 1 };
+    p.y;
+}
+"#;
+    let result = analyze_source(source);
+    assert!(result.is_err(), "Expected error for unknown member access");
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("has no member"),
+        "Error should mention missing member: {}",
+        err
+    );
+}
+
+#[test]
+fn test_tuple_destructuring_size_mismatch_error() {
+    let source = r#"
+fn main() void {
+    const (a, b, c) = (1, 2);
+}
+"#;
+    let result = analyze_source(source);
+    assert!(
+        result.is_err(),
+        "Expected error for tuple destructuring size mismatch"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("Tuple destructuring"),
+        "Error should mention tuple destructuring: {}",
+        err
+    );
+}
+
+#[test]
+fn test_for_bool_capture_error() {
+    let source = r#"
+fn main() void {
+    for (true) |value| {
+        value;
+    }
+}
+"#;
+    let result = analyze_source(source);
+    assert!(
+        result.is_err(),
+        "Expected error for binding a loop variable from a bool condition"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("Cannot infer loop variable type")
+            || err.message.contains("cannot bind loop variables"),
+        "Error should mention the invalid loop binding: {}",
+        err
+    );
+}
+
+#[test]
+fn test_for_option_capture_uses_inner_type() {
+    use crate::ast::Type;
+    use crate::sema::infer::{TypedExprKind, TypedStmtKind};
+
+    let source = r#"
+struct Iter {
+    i: u8,
+
+    pub fn next(self: *Self) ?u8 {
+        return self.i;
+    }
+}
+
+fn main() void {
+    var iter = Iter { i: 1 };
+    for (iter.next()) |value| {
+        value;
+    }
+}
+"#;
+
+    let typed_program = analyze_source_typed(source).expect("semantic analysis should succeed");
+    let main_fn = typed_program
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main function should exist");
+
+    let for_stmt = main_fn
+        .body
+        .iter()
+        .find(|stmt| matches!(stmt.stmt, TypedStmtKind::For { .. }))
+        .expect("main should contain a for loop");
+
+    let body = match &for_stmt.stmt {
+        TypedStmtKind::For { body, .. } => body,
+        _ => unreachable!("filtered above"),
+    };
+
+    let expr = match &body.stmt {
+        TypedStmtKind::Block { stmts } => match &stmts[0].stmt {
+            TypedStmtKind::Expr { expr } => expr,
+            other => panic!("expected loop body expression, got {:?}", other),
+        },
+        other => panic!("expected loop body block, got {:?}", other),
+    };
+
+    assert_eq!(expr.ty, Type::U8);
+    assert!(matches!(expr.expr, TypedExprKind::Ident(ref name) if name == "value"));
 }
 
 #[test]

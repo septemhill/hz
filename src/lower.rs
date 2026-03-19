@@ -416,6 +416,46 @@ mod tests {
     }
 
     #[test]
+    fn test_lower_for_loop_capture_uses_iterable_element_type() {
+        let mut ctx = LoweringContext::new();
+        let stmt = Stmt::For {
+            label: None,
+            var_name: None,
+            iterable: Expr::Array(
+                vec![Expr::Char('a', dummy_span()), Expr::Char('b', dummy_span())],
+                Some(Type::U8),
+                dummy_span(),
+            ),
+            capture: Some("value".to_string()),
+            index_var: None,
+            body: Box::new(Stmt::Block {
+                stmts: vec![Stmt::Expr {
+                    expr: Expr::Ident("value".to_string(), dummy_span()),
+                    span: dummy_span(),
+                }],
+                span: dummy_span(),
+            }),
+            span: dummy_span(),
+        };
+
+        let hir_stmt = ctx.lower_stmt(&stmt);
+
+        match hir_stmt {
+            hir::HirStmt::For { body, .. } => match *body {
+                hir::HirStmt::Expr(hir::HirExpr::Block { stmts, .. }) => match &stmts[0] {
+                    hir::HirStmt::Expr(hir::HirExpr::Ident(name, ty, _)) => {
+                        assert_eq!(name, "value");
+                        assert_eq!(*ty, Type::U8);
+                    }
+                    _ => panic!("Expected loop body identifier"),
+                },
+                _ => panic!("Expected lowered loop body block"),
+            },
+            _ => panic!("Expected For statement"),
+        }
+    }
+
+    #[test]
     fn test_lower_program() {
         let mut ctx = LoweringContext::new();
 
@@ -596,6 +636,21 @@ impl LoweringContext {
                 name, namespace, ..
             } => {
                 if let Some(ns) = namespace {
+                    let receiver_ty = self
+                        .resolve_local(ns)
+                        .or_else(|| self.symbol_table.resolve(ns).map(|s| s.ty.clone()));
+                    if let Some(struct_name) = receiver_ty
+                        .as_ref()
+                        .and_then(|ty| self.custom_type_name(ty))
+                    {
+                        if let Some(ty) = self
+                            .function_returns
+                            .get(&format!("{}_{}", struct_name, name))
+                        {
+                            return Some(ty.clone());
+                        }
+                    }
+
                     let qualified = format!("{}_{}", ns, name);
                     if let Some(ty) = self.function_returns.get(&qualified) {
                         return Some(ty.clone());
@@ -658,6 +713,28 @@ impl LoweringContext {
                 }
                 None
             }
+            ast::Expr::Binary {
+                op, left, right, ..
+            } => match op {
+                ast::BinaryOp::Range => {
+                    let left_ty = self.infer_type(left)?;
+                    let right_ty = self.infer_type(right)?;
+                    Some(ast::Type::Tuple(vec![left_ty, right_ty]))
+                }
+                ast::BinaryOp::Eq
+                | ast::BinaryOp::Ne
+                | ast::BinaryOp::Lt
+                | ast::BinaryOp::Gt
+                | ast::BinaryOp::Le
+                | ast::BinaryOp::Ge
+                | ast::BinaryOp::And
+                | ast::BinaryOp::Or => Some(ast::Type::Bool),
+                _ => self.infer_type(left).or_else(|| self.infer_type(right)),
+            },
+            ast::Expr::Unary { expr, op, .. } => match op {
+                ast::UnaryOp::Not => Some(ast::Type::Bool),
+                _ => self.infer_type(expr),
+            },
             ast::Expr::Char(_, _) => Some(ast::Type::I8),
             ast::Expr::Int(_, _) => Some(ast::Type::I64),
             ast::Expr::Float(_, _) => Some(ast::Type::F64),
@@ -666,9 +743,37 @@ impl LoweringContext {
         }
     }
 
+    fn infer_for_binding_type(&self, iterable: &ast::Expr) -> Option<ast::Type> {
+        if matches!(iterable, ast::Expr::Null(_)) {
+            return None;
+        }
+
+        match self.infer_type(iterable)? {
+            ast::Type::Array { element_type, .. } => Some(*element_type),
+            ast::Type::Option(inner_ty) => Some(*inner_ty),
+            ast::Type::Tuple(types) if !types.is_empty() => types.first().cloned(),
+            _ => None,
+        }
+    }
+
+    fn infer_for_index_type(&self, iterable: &ast::Expr) -> Option<ast::Type> {
+        match self.infer_type(iterable)? {
+            ast::Type::Array { .. } => Some(ast::Type::I64),
+            _ => None,
+        }
+    }
+
     /// Convert from semantic analysis Type to AST Type (they're the same type)
     fn lang_type_to_ast_type(&self, lang_type: &ast::Type) -> ast::Type {
         lang_type.clone()
+    }
+
+    fn custom_type_name<'a>(&self, ty: &'a ast::Type) -> Option<&'a str> {
+        match ty {
+            ast::Type::Custom { name, .. } => Some(name.as_str()),
+            ast::Type::Pointer(inner) => self.custom_type_name(inner),
+            _ => None,
+        }
     }
 
     fn lower_stmt(&mut self, s: &ast::Stmt) -> hir::HirStmt {
@@ -852,15 +957,39 @@ impl LoweringContext {
                 body,
                 span,
                 ..
-            } => hir::HirStmt::For {
-                label: label.clone(),
-                // Use capture as the var_name (the loop variable)
-                var_name: capture.clone().or(var_name.clone()),
-                index_var: index_var.clone(),
-                iterable: self.lower_expr(iterable),
-                body: Box::new(self.lower_stmt(body)),
-                span: *span,
-            },
+            } => {
+                let loop_binding_ty = self.infer_for_binding_type(iterable);
+                let loop_index_ty = self.infer_for_index_type(iterable);
+
+                self.enter_local_scope();
+                if let Some(name) = var_name {
+                    if let Some(ty) = loop_binding_ty.clone() {
+                        self.define_local(name.clone(), ty);
+                    }
+                }
+                if let Some(name) = capture {
+                    if let Some(ty) = loop_binding_ty.clone() {
+                        self.define_local(name.clone(), ty);
+                    }
+                }
+                if let Some(name) = index_var {
+                    if let Some(ty) = loop_index_ty.clone() {
+                        self.define_local(name.clone(), ty);
+                    }
+                }
+                let lowered_body = Box::new(self.lower_stmt(body));
+                self.exit_local_scope();
+
+                hir::HirStmt::For {
+                    label: label.clone(),
+                    // Use capture as the var_name (the loop variable)
+                    var_name: capture.clone().or(var_name.clone()),
+                    index_var: index_var.clone(),
+                    iterable: self.lower_expr(iterable),
+                    body: lowered_body,
+                    span: *span,
+                }
+            }
             ast::Stmt::Switch {
                 condition,
                 cases,
@@ -932,9 +1061,9 @@ impl LoweringContext {
             },
             ast::Expr::Tuple(vals, span) => hir::HirExpr::Tuple {
                 vals: vals.iter().map(|v| self.lower_expr(v)).collect(),
-                ty: self
-                    .infer_type(e)
-                    .unwrap_or_else(|| ast::Type::Tuple(vals.iter().map(|_| ast::Type::I64).collect())),
+                ty: self.infer_type(e).unwrap_or_else(|| {
+                    ast::Type::Tuple(vals.iter().map(|_| ast::Type::I64).collect())
+                }),
                 span: *span,
             },
             ast::Expr::TupleIndex { tuple, index, span } => hir::HirExpr::TupleIndex {
@@ -1008,15 +1137,13 @@ impl LoweringContext {
                 namespace,
                 args,
                 span,
-            } => {
-                hir::HirExpr::Call {
-                    name: name.clone(),
-                    namespace: namespace.clone(),
-                    args: args.iter().map(|a| self.lower_expr(a)).collect(),
-                    return_ty: self.infer_type(e).unwrap_or(ast::Type::Void),
-                    span: *span,
-                }
-            }
+            } => hir::HirExpr::Call {
+                name: name.clone(),
+                namespace: namespace.clone(),
+                args: args.iter().map(|a| self.lower_expr(a)).collect(),
+                return_ty: self.infer_type(e).unwrap_or(ast::Type::Void),
+                span: *span,
+            },
             ast::Expr::If {
                 condition,
                 capture,

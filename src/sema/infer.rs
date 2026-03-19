@@ -205,6 +205,73 @@ fn destructured_binding_type(aggregate_ty: &Type, index: usize) -> Type {
     }
 }
 
+fn destructured_binding_type_checked(
+    aggregate_ty: &Type,
+    index: usize,
+    span: &Span,
+) -> AnalysisResult<Type> {
+    match aggregate_ty {
+        Type::Tuple(types) => types.get(index).cloned().ok_or_else(|| {
+            AnalysisError::new_with_span(
+                &format!(
+                    "Tuple destructuring expected at least {} elements, but found {}",
+                    index + 1,
+                    types.len()
+                ),
+                span,
+            )
+            .with_module("infer")
+        }),
+        _ => Err(AnalysisError::new_with_span(
+            &format!("Cannot destructure non-tuple type {}", aggregate_ty),
+            span,
+        )
+        .with_module("infer")),
+    }
+}
+
+fn for_binding_type(iterable: &Expr, iterable_ty: &Type) -> AnalysisResult<Option<Type>> {
+    if matches!(iterable, Expr::Null(_)) {
+        return Ok(None);
+    }
+
+    match iterable_ty {
+        Type::Array { element_type, .. } => Ok(Some(element_type.as_ref().clone())),
+        Type::Option(inner_ty) => Ok(Some(inner_ty.as_ref().clone())),
+        Type::Tuple(types) if types.len() == 2 => Ok(types.first().cloned()),
+        Type::Bool => Ok(None),
+        _ => Err(AnalysisError::new(&format!(
+            "For loop iterable of type {} is not supported",
+            iterable_ty
+        ))
+        .with_module("infer")),
+    }
+}
+
+fn for_index_type(iterable: &Expr, iterable_ty: &Type) -> AnalysisResult<Option<Type>> {
+    if matches!(iterable, Expr::Null(_)) {
+        return Ok(None);
+    }
+
+    match iterable_ty {
+        Type::Array { .. } => Ok(Some(Type::I64)),
+        Type::Option(_) | Type::Tuple(_) | Type::Bool => Ok(None),
+        _ => Err(AnalysisError::new(&format!(
+            "For loop iterable of type {} is not supported",
+            iterable_ty
+        ))
+        .with_module("infer")),
+    }
+}
+
+fn custom_type_name(ty: &Type) -> Option<&str> {
+    match ty {
+        Type::Custom { name, .. } => Some(name.as_str()),
+        Type::Pointer(inner) => custom_type_name(inner),
+        _ => None,
+    }
+}
+
 fn format_typed_binding_names(names: &[Option<String>], ty: &Type) -> String {
     let bindings: Vec<String> = names
         .iter()
@@ -656,7 +723,7 @@ impl TypeInferrer {
                         if let Some(n) = name_opt {
                             self.symbol_table.define(
                                 n.clone(),
-                                destructured_binding_type(&inferred_ty, index),
+                                destructured_binding_type_checked(&inferred_ty, index, span)?,
                                 Visibility::Private,
                                 matches!(mutability, crate::ast::Mutability::Const),
                             );
@@ -790,19 +857,35 @@ impl TypeInferrer {
                 span,
             } => {
                 let typed_iterable = self.infer_expr(iterable)?;
+                let binding_ty = for_binding_type(iterable, &typed_iterable.ty)?;
+                let index_ty = for_index_type(iterable, &typed_iterable.ty)?;
 
-                // Determine the element type from the iterable
-                let element_type = match &typed_iterable.ty {
-                    Type::Array { element_type, .. } => element_type.as_ref().clone(),
-                    _ => Type::I64, // Default fallback
-                };
+                if (var_name.is_some() || capture.is_some()) && binding_ty.is_none() {
+                    let message = if matches!(iterable, Expr::Null(_)) {
+                        "Infinite for loop cannot bind loop variables".to_string()
+                    } else {
+                        format!(
+                            "Cannot infer loop variable type from iterable of type {}",
+                            typed_iterable.ty
+                        )
+                    };
+                    return Err(AnalysisError::new_with_span(&message, span).with_module("infer"));
+                }
+
+                if index_var.is_some() && index_ty.is_none() {
+                    return Err(AnalysisError::new_with_span(
+                        "For loop index variable is only supported when iterating over arrays",
+                        span,
+                    )
+                    .with_module("infer"));
+                }
 
                 self.symbol_table.enter_scope();
 
                 if let Some(vn) = var_name {
                     self.symbol_table.define(
                         vn.clone(),
-                        element_type.clone(),
+                        binding_ty.clone().expect("binding type checked above"),
                         Visibility::Private,
                         false,
                     );
@@ -810,14 +893,18 @@ impl TypeInferrer {
                 if let Some(cv) = capture {
                     self.symbol_table.define(
                         cv.clone(),
-                        element_type.clone(),
+                        binding_ty.clone().expect("binding type checked above"),
                         Visibility::Private,
                         false,
                     );
                 }
                 if let Some(iv) = index_var {
-                    self.symbol_table
-                        .define(iv.clone(), Type::I64, Visibility::Private, false);
+                    self.symbol_table.define(
+                        iv.clone(),
+                        index_ty.expect("index type checked above"),
+                        Visibility::Private,
+                        false,
+                    );
                 }
 
                 let typed_body = self.infer_stmt(body)?;
@@ -1206,11 +1293,22 @@ impl TypeInferrer {
                     // If so, we need to look up the field in the struct type
                     if let Some(var_symbol) = self.symbol_table.resolve(ns) {
                         // The namespace is a variable - look up the field in its type
-                        if let Type::Custom {
-                            name: struct_name, ..
-                        } = &var_symbol.ty
-                        {
+                        if let Some(struct_name) = custom_type_name(&var_symbol.ty) {
                             if let Some(struct_def) = self.structs.get(struct_name) {
+                                if let Some(method) =
+                                    struct_def.methods.iter().find(|m| &m.name == name)
+                                {
+                                    return Ok(TypedExpr {
+                                        expr: TypedExprKind::Call {
+                                            name: name.clone(),
+                                            namespace: namespace.clone(),
+                                            args: typed_args,
+                                        },
+                                        ty: method.return_ty.clone(),
+                                        span: *span,
+                                    });
+                                }
+
                                 if let Some(field) =
                                     struct_def.fields.iter().find(|f| &f.name == name)
                                 {
@@ -1226,6 +1324,20 @@ impl TypeInferrer {
                                             span: *span,
                                         });
                                     }
+                                }
+                            } else if let Some(enum_def) = self.enums.get(struct_name) {
+                                if let Some(method) =
+                                    enum_def.methods.iter().find(|m| &m.name == name)
+                                {
+                                    return Ok(TypedExpr {
+                                        expr: TypedExprKind::Call {
+                                            name: name.clone(),
+                                            namespace: namespace.clone(),
+                                            args: typed_args,
+                                        },
+                                        ty: method.return_ty.clone(),
+                                        span: *span,
+                                    });
                                 }
                             }
                         }
@@ -1247,7 +1359,18 @@ impl TypeInferrer {
                             s.ty.clone()
                         }
                     })
-                    .unwrap_or(Type::I64); // Default to i64 if not found
+                    .ok_or_else(|| {
+                        let display_name = if let Some(ns) = namespace {
+                            format!("{}.{}", ns, name)
+                        } else {
+                            name.clone()
+                        };
+                        AnalysisError::new_with_span(
+                            &format!("Undefined function '{}'", display_name),
+                            span,
+                        )
+                        .with_module("infer")
+                    })?;
 
                 Ok(TypedExpr {
                     expr: TypedExprKind::Call {
@@ -1388,7 +1511,7 @@ impl TypeInferrer {
 
                 let typed_object = self.infer_expr(object)?;
 
-                let (kind, ty) = if let Type::Custom { name, .. } = &typed_object.ty {
+                let (kind, ty) = if let Some(name) = custom_type_name(&typed_object.ty) {
                     if let Some(struct_def) = self.structs.get(name) {
                         if let Some(method) = struct_def.methods.iter().find(|m| &m.name == member)
                         {
@@ -1401,7 +1524,11 @@ impl TypeInferrer {
                         {
                             (crate::ast::MemberAccessKind::StructField, field.ty.clone())
                         } else {
-                            (crate::ast::MemberAccessKind::StructField, Type::I64)
+                            return Err(AnalysisError::new_with_span(
+                                &format!("Type {} has no member '{}'", name, member),
+                                span,
+                            )
+                            .with_module("infer"));
                         }
                     } else if let Some(enum_def) = self.enums.get(name) {
                         if let Some(method) = enum_def.methods.iter().find(|m| &m.name == member) {
@@ -1415,19 +1542,35 @@ impl TypeInferrer {
                                 typed_object.ty.clone(),
                             )
                         } else {
-                            (crate::ast::MemberAccessKind::EnumMember, Type::I64)
+                            return Err(AnalysisError::new_with_span(
+                                &format!("Type {} has no member '{}'", name, member),
+                                span,
+                            )
+                            .with_module("infer"));
                         }
                     } else if let Some(error_def) = self.errors.get(name) {
                         if error_def.variants.iter().any(|v| &v.name == member) {
                             (crate::ast::MemberAccessKind::ErrorMember, Type::Error)
                         } else {
-                            (crate::ast::MemberAccessKind::Unknown, Type::I64)
+                            return Err(AnalysisError::new_with_span(
+                                &format!("Type {} has no member '{}'", name, member),
+                                span,
+                            )
+                            .with_module("infer"));
                         }
                     } else {
-                        (crate::ast::MemberAccessKind::StructField, Type::I64)
+                        return Err(AnalysisError::new_with_span(
+                            &format!("Type {} has no member '{}'", name, member),
+                            span,
+                        )
+                        .with_module("infer"));
                     }
                 } else {
-                    (crate::ast::MemberAccessKind::Unknown, Type::I64)
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Type {} has no member '{}'", typed_object.ty, member),
+                        span,
+                    )
+                    .with_module("infer"));
                 };
 
                 Ok(TypedExpr {

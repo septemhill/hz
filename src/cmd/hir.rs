@@ -31,6 +31,7 @@ pub fn dump_hir(source: &str, output_path: Option<String>) -> Result<(), Box<dyn
     // Lower to HIR
     println!("Lowering to HIR...");
     let mut lowering_ctx = lower::LoweringContext::new();
+    lowering_ctx.set_symbol_table(analyzer.get_symbol_table().clone());
     let hir_program = lowering_ctx.lower_program(&program);
 
     // Format HIR using Debug

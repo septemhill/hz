@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 EXPECT_TIMEOUT_HEADER = b"# expect: timeout\n"
+ANSI_RED = "\033[31m"
+ANSI_GREEN = "\033[32m"
+ANSI_RESET = "\033[0m"
 
 
 @dataclass
@@ -204,6 +207,26 @@ def parse_expect_bytes(raw: bytes) -> tuple[str, bytes]:
     return ("completed", raw)
 
 
+def supports_color() -> bool:
+    if os.environ.get("CLICOLOR_FORCE") == "1":
+        return True
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    return sys.stdout.isatty() and os.environ.get("TERM") != "dumb"
+
+
+def colorize(text: str, color: str) -> str:
+    if not supports_color():
+        return text
+    return f"{color}{text}{ANSI_RESET}"
+
+
+def format_case_status(ok: bool) -> str:
+    if ok:
+        return colorize("ok", ANSI_GREEN)
+    return colorize("failed", ANSI_RED)
+
+
 def evaluate_expect_match(result: ExampleResult) -> None:
     if not result.expect_exists or result.runtime_output is None:
         return
@@ -368,6 +391,20 @@ def write_expect_files(results: list[ExampleResult]) -> int:
     return updated
 
 
+def compiled_case_summary(result: ExampleResult) -> tuple[bool, str | None]:
+    if result.runtime_state == "signaled":
+        return (False, "runtime failed")
+    if result.runtime_state == "completed" and result.runtime_output_truncated:
+        return (False, "runtime output truncated")
+    if result.runtime_state == "timeout" and not result.expect_exists:
+        return (False, "missing .expect (timeout)")
+    if not result.expect_exists:
+        return (False, "missing .expect")
+    if result.expect_matches is False:
+        return (False, "expect mismatch")
+    return (True, None)
+
+
 def print_results(results: list[ExampleResult], root: Path, show_errors: bool) -> None:
     compiled = [result for result in results if result.compile_ok]
     failed = [result for result in results if not result.compile_ok]
@@ -376,19 +413,10 @@ def print_results(results: list[ExampleResult], root: Path, show_errors: bool) -
     for result in compiled:
         rel_source = result.source.relative_to(root)
         rel_expect = result.expect.relative_to(root)
-        if result.runtime_state == "signaled":
-            status = "runtime failed"
-        elif result.runtime_state == "completed" and result.runtime_output_truncated:
-            status = "runtime output truncated"
-        elif result.runtime_state == "timeout" and not result.expect_exists:
-            status = "missing .expect (timeout)"
-        elif not result.expect_exists:
-            status = "missing .expect"
-        elif result.expect_matches is False:
-            status = "expect mismatch"
-        else:
-            status = "expect ok"
-        print(f"- {rel_source} -> {rel_expect} [{status}]")
+        ok, detail = compiled_case_summary(result)
+        status = format_case_status(ok)
+        suffix = f" {detail}" if detail else ""
+        print(f"- {rel_source} -> {rel_expect} [{status}]{suffix}")
         if show_errors and result.runtime_ok is False:
             detail = result.runtime_error or f"exit code {result.runtime_returncode}"
             print(f"  {detail}")
@@ -397,7 +425,7 @@ def print_results(results: list[ExampleResult], root: Path, show_errors: bool) -
     print(f"Compilation failed ({len(failed)}):")
     for result in failed:
         rel_source = result.source.relative_to(root)
-        print(f"- {rel_source}")
+        print(f"- {rel_source} [{format_case_status(False)}]")
         if show_errors:
             snippet = result.compile_output.strip()
             if snippet:
