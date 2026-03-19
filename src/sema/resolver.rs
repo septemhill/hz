@@ -16,6 +16,13 @@ pub struct SymbolResolver {
     current_struct: Option<String>,
 }
 
+fn destructured_binding_type(aggregate_ty: &crate::ast::Type, index: usize) -> crate::ast::Type {
+    match aggregate_ty {
+        crate::ast::Type::Tuple(types) => types.get(index).cloned().unwrap_or(crate::ast::Type::I64),
+        _ => aggregate_ty.clone(),
+    }
+}
+
 impl SymbolResolver {
     pub fn new(
         symbol_table: SymbolTable,
@@ -170,19 +177,24 @@ impl SymbolResolver {
                 value,
                 ..
             } => {
-                if let Some(val_expr) = value {
-                    self.analyze_expression(val_expr)?;
-                }
-                let inferred_ty = value
-                    .as_ref()
-                    .map(|_| crate::ast::Type::I64)
-                    .unwrap_or_else(|| ty.clone().unwrap_or(crate::ast::Type::I64));
+                let value_ty = if let Some(val_expr) = value {
+                    Some(self.analyze_expression(val_expr)?)
+                } else {
+                    None
+                };
+                let inferred_ty = if let Some(explicit_ty) = ty {
+                    explicit_ty.clone()
+                } else if let Some(value_ty) = value_ty {
+                    value_ty
+                } else {
+                    crate::ast::Type::I64
+                };
                 if let Some(ns) = names {
-                    for name_opt in ns {
+                    for (index, name_opt) in ns.iter().enumerate() {
                         if let Some(n) = name_opt {
                             self.symbol_table.define(
                                 n.clone(),
-                                inferred_ty.clone(),
+                                destructured_binding_type(&inferred_ty, index),
                                 Visibility::Private,
                                 false,
                             );
@@ -396,16 +408,19 @@ impl SymbolResolver {
                 } else {
                     // Regular function call
                     // Try to resolve the function
-                    if self.symbol_table.resolve(name).is_none() {
+                    let symbol_ty = if let Some(symbol) = self.symbol_table.resolve(name) {
+                        symbol.ty.clone()
+                    } else {
                         return Err(AnalysisError::new_with_span(
                             &format!("Undefined function '{}'", name),
                             span,
                         )
                         .with_module("resolver"));
+                    };
+                    match symbol_ty {
+                        crate::ast::Type::Function { return_type, .. } => Ok(*return_type),
+                        other => Ok(other),
                     }
-                    // Return I64 as placeholder
-                    // In a full implementation, we'd look up the function's return type
-                    Ok(crate::ast::Type::I64)
                 }
             }
             crate::ast::Expr::Catch {
@@ -467,16 +482,19 @@ impl SymbolResolver {
             } => {
                 self.analyze_expression(condition)?;
                 if let Some(cap) = capture {
+                    let cond_ty = self.analyze_expression(condition)?;
                     self.symbol_table.enter_scope();
-                    self.symbol_table.define(
-                        cap.clone(),
-                        crate::ast::Type::I64,
-                        Visibility::Private,
-                        false,
-                    );
+                    let capture_ty = if let crate::ast::Type::Option(inner_ty) = cond_ty {
+                        *inner_ty
+                    } else {
+                        crate::ast::Type::I64
+                    };
+                    self.symbol_table
+                        .define(cap.clone(), capture_ty, Visibility::Private, false);
                     self.analyze_expression(then_branch)?;
                     self.symbol_table.exit_scope();
                 } else {
+                    self.analyze_expression(condition)?;
                     self.analyze_expression(then_branch)?;
                 }
                 self.analyze_expression(else_branch)?;

@@ -198,6 +198,26 @@ pub struct TypedFnParam {
     pub ty: Type,
 }
 
+fn destructured_binding_type(aggregate_ty: &Type, index: usize) -> Type {
+    match aggregate_ty {
+        Type::Tuple(types) => types.get(index).cloned().unwrap_or(Type::I64),
+        _ => aggregate_ty.clone(),
+    }
+}
+
+fn format_typed_binding_names(names: &[Option<String>], ty: &Type) -> String {
+    let bindings: Vec<String> = names
+        .iter()
+        .enumerate()
+        .map(|(index, name_opt)| match name_opt {
+            Some(name) => format!("{}: {}", name, destructured_binding_type(ty, index)),
+            None => "_".to_string(),
+        })
+        .collect();
+
+    format!("[{}]", bindings.join(", "))
+}
+
 /// Type-annotated struct definition
 #[derive(Debug, Clone)]
 #[allow(unused)]
@@ -592,21 +612,10 @@ impl TypeInferrer {
                 span,
                 mutability,
             } => {
-                eprintln!(
-                    "DEBUG Let: name={}, ty={:?}, value={:?}",
-                    name,
-                    ty,
-                    value.is_some()
-                );
                 let inferred_ty = if let Some(explicit_ty) = ty {
                     explicit_ty.clone()
                 } else if let Some(val_expr) = value {
-                    let typed_val = self.infer_expr(val_expr)?;
-                    eprintln!(
-                        "DEBUG Let '{}': inferred type from value: {:?}",
-                        name, typed_val.ty
-                    );
-                    typed_val.ty.clone()
+                    self.infer_expr(val_expr)?.ty.clone()
                 } else {
                     return Err(AnalysisError::new_with_span(
                         "Variable must have either a type or an initial value",
@@ -615,15 +624,13 @@ impl TypeInferrer {
                     .with_module("infer"));
                 };
 
-                eprintln!("DEBUG Let '{}': final inferred_ty: {:?}", name, inferred_ty);
-
                 // Define the variable in the symbol table
                 if let Some(ns) = names {
-                    for name_opt in ns {
+                    for (index, name_opt) in ns.iter().enumerate() {
                         if let Some(n) = name_opt {
                             self.symbol_table.define(
                                 n.clone(),
-                                inferred_ty.clone(),
+                                destructured_binding_type(&inferred_ty, index),
                                 Visibility::Private,
                                 matches!(mutability, crate::ast::Mutability::Const),
                             );
@@ -1887,7 +1894,7 @@ impl AstDump for TypedStmt {
             } => {
                 let mut_str = if *is_const { "const" } else { "var" };
                 let name_str = if let Some(ns) = names {
-                    format!("{:?}", ns)
+                    format_typed_binding_names(ns, ty)
                 } else {
                     name.clone()
                 };

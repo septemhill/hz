@@ -11,6 +11,13 @@ pub struct TypeAnalyzer {
     symbol_table: SymbolTable,
 }
 
+fn destructured_binding_type(aggregate_ty: &crate::ast::Type, index: usize) -> crate::ast::Type {
+    match aggregate_ty {
+        crate::ast::Type::Tuple(types) => types.get(index).cloned().unwrap_or(crate::ast::Type::I64),
+        _ => aggregate_ty.clone(),
+    }
+}
+
 impl TypeAnalyzer {
     pub fn new(symbol_table: SymbolTable) -> Self {
         TypeAnalyzer { symbol_table }
@@ -228,7 +235,7 @@ impl TypeAnalyzer {
 
                     // Define the variable in the symbol table
                     if let Some(ns) = names {
-                        for name_opt in ns {
+                        for (index, name_opt) in ns.iter().enumerate() {
                             if let Some(n) = name_opt {
                                 if self.symbol_table.contains(n) {
                                     return Err(AnalysisError::new_with_span(
@@ -242,7 +249,7 @@ impl TypeAnalyzer {
                                 }
                                 self.symbol_table.define(
                                     n.clone(),
-                                    inferred_ty.clone(),
+                                    destructured_binding_type(&inferred_ty, index),
                                     Visibility::Private,
                                     matches!(mutability, crate::ast::Mutability::Const),
                                 );
@@ -269,7 +276,7 @@ impl TypeAnalyzer {
 
                     // Define the variable in the symbol table
                     if let Some(ns) = names {
-                        for name_opt in ns {
+                        for (index, name_opt) in ns.iter().enumerate() {
                             if let Some(n) = name_opt {
                                 if self.symbol_table.contains(n) {
                                     return Err(AnalysisError::new_with_span(
@@ -283,7 +290,7 @@ impl TypeAnalyzer {
                                 }
                                 self.symbol_table.define(
                                     n.clone(),
-                                    explicit_ty.clone(),
+                                    destructured_binding_type(&explicit_ty, index),
                                     Visibility::Private,
                                     matches!(mutability, crate::ast::Mutability::Const),
                                 );
@@ -555,7 +562,6 @@ impl TypeAnalyzer {
             } => {
                 let l_ty = self.analyze_expression(left)?;
                 let r_ty = self.analyze_expression(right)?;
-                eprintln!("DEBUG Binary: l_ty={:?}, r_ty={:?}", l_ty, r_ty);
                 match op {
                     crate::ast::BinaryOp::Add
                     | crate::ast::BinaryOp::Sub
@@ -676,7 +682,10 @@ impl TypeAnalyzer {
                 for arg in args {
                     self.analyze_expression(arg)?;
                 }
-                Ok(symbol_ty)
+                match symbol_ty {
+                    crate::ast::Type::Function { return_type, .. } => Ok(*return_type),
+                    other => Ok(other),
+                }
             }
             crate::ast::Expr::If {
                 condition,

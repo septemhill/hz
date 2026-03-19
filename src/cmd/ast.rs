@@ -23,9 +23,14 @@ pub fn dump_ast(source: &str) -> Result<(), Box<dyn Error>> {
             }
         }
         Err(e) => {
-            eprintln!("Semantic Analysis Error: {}", e);
-            println!("Dumping untyped AST:");
-            program.dump(0);
+            if let Some(typed_program) = analyzer.get_typed_program() {
+                eprintln!("Semantic Analysis Warning: {}", e);
+                typed_program.dump(0);
+            } else {
+                eprintln!("Semantic Analysis Error: {}", e);
+                println!("Dumping untyped AST:");
+                program.dump(0);
+            }
         }
     }
 
