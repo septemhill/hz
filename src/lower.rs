@@ -448,12 +448,14 @@ mod tests {
 pub struct LoweringContext {
     // Context for lowering (e.g. current scope, type info)
     symbol_table: SymbolTable,
+    errors: std::collections::HashMap<String, ast::ErrorDef>,
 }
 
 impl LoweringContext {
     pub fn new() -> Self {
         LoweringContext {
             symbol_table: SymbolTable::new(),
+            errors: std::collections::HashMap::new(),
         }
     }
 
@@ -463,6 +465,11 @@ impl LoweringContext {
     }
 
     pub fn lower_program(&mut self, program: &ast::Program) -> hir::HirProgram {
+        // Collect errors from the program
+        for e in &program.errors {
+            self.errors.insert(e.name.clone(), e.clone());
+        }
+
         let mut functions: Vec<hir::HirFn> = program
             .functions
             .iter()
@@ -902,10 +909,35 @@ impl LoweringContext {
                 kind: _,
                 span,
             } => {
+                // Try to resolve the type from the symbol table or check if it's an error member access
+                let ty = if let ast::Expr::Ident(obj_name, _) = object.as_ref() {
+                    // First check if this is an error type member access
+                    if let Some(error_def) = self.errors.get(obj_name) {
+                        if error_def.variants.iter().any(|v| &v.name == member) {
+                            // This is an error member access (e.g., SampleError.CodegenError)
+                            return hir::HirExpr::MemberAccess {
+                                object: Box::new(self.lower_expr(object)),
+                                member: member.clone(),
+                                ty: ast::Type::Error,
+                                span: *span,
+                            };
+                        }
+                    }
+
+                    // Then try to resolve the type from the symbol table
+                    let full_name = format!("{}.{}", obj_name, member);
+                    self.symbol_table
+                        .resolve(&full_name)
+                        .map(|s| s.ty.clone())
+                        .unwrap_or(ast::Type::I64)
+                } else {
+                    ast::Type::I64 // Fallback for non-identifier objects
+                };
+
                 hir::HirExpr::MemberAccess {
                     object: Box::new(self.lower_expr(object)),
                     member: member.clone(),
-                    ty: ast::Type::I64, // Placeholder
+                    ty,
                     span: *span,
                 }
             }

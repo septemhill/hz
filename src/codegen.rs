@@ -11,7 +11,8 @@ use inkwell::execution_engine::ExecutionEngine;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue,
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
+    PointerValue,
 };
 
 use crate::ast::*;
@@ -211,31 +212,198 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    fn llvm_function_return_type(
+        &self,
+        return_ty: &Type,
+        is_main: bool,
+    ) -> Option<BasicTypeEnum<'ctx>> {
+        if is_main || matches!(return_ty, Type::Result(_)) {
+            Some(self.context.i64_type().into())
+        } else if return_ty == &Type::Void {
+            None
+        } else {
+            Some(self.llvm_type(return_ty))
+        }
+    }
+
+    fn default_llvm_return_value(
+        &self,
+        return_ty: &Type,
+        is_main: bool,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        match self.llvm_function_return_type(return_ty, is_main) {
+            Some(llvm_ty) if is_main || matches!(return_ty, Type::Result(_)) => {
+                Some(self.context.i64_type().const_int(0, false).into())
+            }
+            Some(llvm_ty) => Some(llvm_ty.const_zero()),
+            None => None,
+        }
+    }
+
+    fn current_function_is_main(&self) -> bool {
+        self.current_function
+            .map(|function| function.get_name().to_str().ok() == Some("main"))
+            .unwrap_or(false)
+    }
+
+    fn current_block_has_terminator(&self) -> bool {
+        self.builder
+            .get_insert_block()
+            .and_then(|block| block.get_terminator())
+            .is_some()
+    }
+
+    fn get_or_create_printf(&self) -> FunctionValue<'ctx> {
+        let printf_type = self.context.i64_type().fn_type(
+            &[self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .into()],
+            true,
+        );
+
+        self.module.get_function("printf").unwrap_or_else(|| {
+            self.module.add_function(
+                "printf",
+                printf_type,
+                Some(inkwell::module::Linkage::External),
+            )
+        })
+    }
+
+    fn get_or_create_last_error_global(&self) -> GlobalValue<'ctx> {
+        self.module
+            .get_global("__lang_last_error_message")
+            .unwrap_or_else(|| {
+                let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+                let global =
+                    self.module
+                        .add_global(ptr_ty, None, "__lang_last_error_message");
+                global.set_initializer(&ptr_ty.const_null());
+                global
+            })
+    }
+
+    fn clear_last_error_message(&mut self) -> CodegenResult<()> {
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let last_error = self.get_or_create_last_error_global();
+        self.builder
+            .build_store(last_error.as_pointer_value(), ptr_ty.const_null())?;
+        Ok(())
+    }
+
+    fn set_last_error_message(&mut self, message: &str) -> CodegenResult<()> {
+        let last_error = self.get_or_create_last_error_global();
+        let message_ptr =
+            unsafe { self.builder.build_global_string(message, "last_error_message") }?;
+        self.builder
+            .build_store(last_error.as_pointer_value(), message_ptr.as_pointer_value())?;
+        Ok(())
+    }
+
+    fn emit_last_error_message(&mut self) -> CodegenResult<()> {
+        let function = self.current_function.ok_or("No current function")?;
+        let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
+        let last_error = self.get_or_create_last_error_global();
+        let last_error_ptr = self
+            .builder
+            .build_load(
+                ptr_ty,
+                last_error.as_pointer_value(),
+                "last_error_message_ptr",
+            )?
+            .into_pointer_value();
+
+        let has_message = self
+            .builder
+            .build_is_not_null(last_error_ptr, "has_last_error_message")?;
+
+        let print_block = self.context.append_basic_block(function, "main_error_print");
+        let fallback_block = self
+            .context
+            .append_basic_block(function, "main_error_print_fallback");
+        let merge_block = self.context.append_basic_block(function, "main_error_print_done");
+
+        self.builder
+            .build_conditional_branch(has_message, print_block, fallback_block)?;
+
+        self.builder.position_at_end(print_block);
+        let printf = self.get_or_create_printf();
+        let string_fmt = unsafe { self.builder.build_global_string("%s\n", "main_error_fmt") }?;
+        self.builder.build_call(
+            printf,
+            &[
+                string_fmt.as_basic_value_enum().into(),
+                last_error_ptr.as_basic_value_enum().into(),
+            ],
+            "",
+        )?;
+        self.builder.build_unconditional_branch(merge_block)?;
+
+        self.builder.position_at_end(fallback_block);
+        let fallback = unsafe { self.builder.build_global_string("error\n", "main_error") }?;
+        self.builder
+            .build_call(printf, &[fallback.as_basic_value_enum().into()], "")?;
+        self.builder.build_unconditional_branch(merge_block)?;
+
+        self.builder.position_at_end(merge_block);
+        Ok(())
+    }
+
+    fn emit_main_error_exit(&mut self) -> CodegenResult<()> {
+        self.emit_last_error_message()?;
+        self.builder
+            .build_return(Some(&self.context.i64_type().const_int(1, false)))?;
+        Ok(())
+    }
+
+    fn hir_expr_type<'a>(&self, expr: &'a hir::HirExpr) -> &'a Type {
+        match expr {
+            hir::HirExpr::Int(_, ty, _)
+            | hir::HirExpr::Float(_, ty, _)
+            | hir::HirExpr::Bool(_, ty, _)
+            | hir::HirExpr::String(_, ty, _)
+            | hir::HirExpr::Char(_, ty, _)
+            | hir::HirExpr::Null(ty, _)
+            | hir::HirExpr::Ident(_, ty, _)
+            | hir::HirExpr::Tuple { ty, .. }
+            | hir::HirExpr::TupleIndex { ty, .. }
+            | hir::HirExpr::Array { ty, .. }
+            | hir::HirExpr::Binary { ty, .. }
+            | hir::HirExpr::Unary { ty, .. }
+            | hir::HirExpr::If { ty, .. }
+            | hir::HirExpr::Block { ty, .. }
+            | hir::HirExpr::MemberAccess { ty, .. }
+            | hir::HirExpr::Struct { ty, .. } => ty,
+            hir::HirExpr::Call { return_ty, .. } => return_ty,
+            hir::HirExpr::Try { expr, .. } => self
+                .hir_expr_type(expr)
+                .result_inner()
+                .unwrap_or_else(|| self.hir_expr_type(expr)),
+            hir::HirExpr::Catch { expr, .. } => self.hir_expr_type(expr),
+        }
+    }
+
     /// Build function type from return type and parameter types
     fn build_function_type(
         &self,
         return_ty: &Type,
         param_tys: &[Type],
+        is_main: bool,
     ) -> inkwell::types::FunctionType<'ctx> {
         let param_types: Vec<BasicMetadataTypeEnum> =
             param_tys.iter().map(|p| self.llvm_type(p).into()).collect();
 
-        // Handle void as void return type
-        // But void! (Result where inner is Void) returns i64 to propagate error codes
-        if return_ty == &Type::Void {
-            self.context.void_type().fn_type(&param_types, false)
-        } else if return_ty.is_void_result() {
-            // void! returns i64 to allow error propagation (0 = success, non-zero = error)
-            self.context.i64_type().fn_type(&param_types, false)
-        } else {
-            let return_type = self.llvm_type(return_ty);
-            return_type.fn_type(&param_types, false)
+        match self.llvm_function_return_type(return_ty, is_main) {
+            Some(return_type) => return_type.fn_type(&param_types, false),
+            None => self.context.void_type().fn_type(&param_types, false),
         }
     }
 
     /// Generate code for an HIR function
     fn generate_hir_function(&mut self, hir_fn: &hir::HirFn) -> CodegenResult<()> {
-        let mangled_name = self.mangle_name(&hir_fn.name, hir_fn.name == "main");
+        let is_main = hir_fn.name == "main";
+        let mangled_name = self.mangle_name(&hir_fn.name, is_main);
 
         let function = self.module.get_function(&mangled_name).ok_or(format!(
             "Function not declared: {} (original: {})",
@@ -249,6 +417,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         self.variable_types.clear();
         self.const_variables.clear();
         self.defer_stack.clear();
+        self.defer_bang_stack.clear();
 
         let entry_block = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry_block);
@@ -257,6 +426,10 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Push function scope for defers
         self.push_defer_scope();
         self.push_defer_bang_scope();
+
+        if is_main {
+            self.clear_last_error_message()?;
+        }
 
         for (i, (name, ty)) in hir_fn.params.iter().enumerate() {
             let param_value = function
@@ -269,24 +442,26 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.variable_types.insert(name.clone(), ty.clone());
         }
 
-        // For void functions, we need to handle implicit returns properly
-        // For main function, if return type is Void, treat it as void (return nothing)
-        // void! returns i64 (error code), so it's not void
-        let is_void = hir_fn.return_ty == Type::Void;
+        let returns_llvm_void = !is_main && hir_fn.return_ty == Type::Void;
+        let mut returned_early = false;
 
         // Track statements
         let stmt_count = hir_fn.body.len();
         for (i, stmt) in hir_fn.body.iter().enumerate() {
+            if self.current_block_has_terminator() {
+                break;
+            }
+
             // Check if this is the last statement in a void function
             let is_last = i == stmt_count - 1;
 
             match stmt {
                 hir::HirStmt::Return(_, _) => {
-                    // Explicit return - generate it (defers handled in the return handler)
                     self.generate_hir_stmt(stmt)?;
-                    return Ok(());
+                    returned_early = true;
+                    break;
                 }
-                _ if is_last && is_void => {
+                _ if is_last && returns_llvm_void => {
                     // Last statement in void function
                     // For expression statements, call generate_hir_expr directly to avoid
                     // generating a return statement from the Call expression
@@ -301,19 +476,23 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                     // Execute defers AFTER the last statement
                     self.pop_defer_scope()?;
-                    // Return void
                     self.builder.build_return(None)?;
-                    return Ok(());
+                    returned_early = true;
+                    break;
                 }
-                _ if is_last && !is_void => {
+                _ if is_last && !returns_llvm_void => {
                     // Last statement in non-void function - use value as return
                     self.generate_hir_stmt(stmt)?;
                     // Execute defers AFTER the last statement
                     self.pop_defer_scope()?;
-                    // For main, always return 0
-                    self.builder
-                        .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
-                    return Ok(());
+                    if let Some(default_ret) = self.default_llvm_return_value(&hir_fn.return_ty, is_main)
+                    {
+                        self.builder.build_return(Some(&default_ret))?;
+                    } else {
+                        self.builder.build_return(None)?;
+                    }
+                    returned_early = true;
+                    break;
                 }
                 _ => {
                     self.generate_hir_stmt(stmt)?;
@@ -321,23 +500,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         }
 
-        // If we get here, we didn't return in the loop
-        if is_void {
-            // Execute defers AFTER the implicit return
+        if !returned_early && !self.current_block_has_terminator() {
             self.pop_defer_scope()?;
-            self.builder.build_return(None)?;
-        } else if hir_fn.name == "main" {
-            // Execute defers AFTER returning 0
-            self.pop_defer_scope()?;
-            // main function without explicit return - return 0
-            self.builder
-                .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
-        } else {
-            // Execute defers AFTER returning 0
-            self.pop_defer_scope()?;
-            // Non-void function without return - return 0
-            self.builder
-                .build_return(Some(&self.context.i64_type().const_int(0, false)))?;
+            if let Some(default_ret) = self.default_llvm_return_value(&hir_fn.return_ty, is_main) {
+                self.builder.build_return(Some(&default_ret))?;
+            } else {
+                self.builder.build_return(None)?;
+            }
         }
 
         self.current_function = None;
@@ -511,54 +680,51 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Execute defers before returning
                 self.pop_defer_scope()?;
 
+                let is_main = self.current_function_is_main();
+                let ret_ty = self
+                    .return_type
+                    .clone()
+                    .ok_or("Return encountered without current function return type")?;
+
                 if let Some(val) = value {
                     let mut llvm_val = self.generate_hir_expr(val)?;
 
-                    if let Some(ret_ty) = &self.return_type {
-                        llvm_val = self.coerce_type(llvm_val, ret_ty)?;
+                    // Skip coercion for error type expressions - they already return i64
+                    let is_error_expr = match val {
+                        hir::HirExpr::MemberAccess {
+                            ty: Type::Error, ..
+                        } => true,
+                        _ => false,
+                    };
+
+                    if is_main && ret_ty.is_result() && is_error_expr {
+                        self.emit_main_error_exit()?;
+                        return Ok(());
                     }
 
-                    // Check if the return type is void! (Result where inner is Void)
-                    // In this case, we need to return the error code (i64) and call defer!
-                    if let Some(Type::Result(inner)) = &self.return_type {
-                        let int_val = if llvm_val.is_int_value() {
-                            llvm_val.into_int_value()
-                        } else {
-                            // If it's a struct (Option), extract the valid flag as the "value" for success/error check
-                            self.context.i64_type().const_int(0, false)
-                        };
-                        let zero = self.llvm_type(inner).into_int_type().const_zero();
-                        let is_error = self.builder.build_int_compare(
-                            inkwell::IntPredicate::NE,
-                            int_val,
-                            zero,
-                            "is_error",
-                        )?;
-
-                        let function = self.current_function.unwrap();
-                        let error_block = self.context.append_basic_block(function, "error_return");
-                        let continue_block =
-                            self.context.append_basic_block(function, "continue_return");
-
-                        self.builder.build_conditional_branch(
-                            is_error,
-                            error_block,
-                            continue_block,
-                        )?;
-
-                        // Error path - execute defer! and return error code
-                        self.builder.position_at_end(error_block);
-                        self.execute_defer_bang_on_error()?;
-                        self.builder.build_return(Some(&llvm_val))?;
-
-                        // Success path - just return success (0)
-                        self.builder.position_at_end(continue_block);
-                        self.builder.build_return(Some(&llvm_val))?;
-                    } else {
-                        self.builder.build_return(Some(&llvm_val))?;
+                    if !is_error_expr {
+                        if is_main || ret_ty.is_result() {
+                            if let BasicValueEnum::IntValue(int_val) = llvm_val {
+                                let i64_type = self.context.i64_type();
+                                if int_val.get_type() != i64_type {
+                                    llvm_val = self
+                                        .builder
+                                        .build_int_cast(int_val, i64_type, "ret_i64")?
+                                        .into();
+                                }
+                            }
+                        } else if self.hir_expr_type(val) != &ret_ty {
+                            llvm_val = self.coerce_type(llvm_val, &ret_ty)?;
+                        }
                     }
+
+                    self.builder.build_return(Some(&llvm_val))?;
                 } else {
-                    self.builder.build_return(None)?;
+                    if let Some(default_ret) = self.default_llvm_return_value(&ret_ty, is_main) {
+                        self.builder.build_return(Some(&default_ret))?;
+                    } else {
+                        self.builder.build_return(None)?;
+                    }
                 }
                 Ok(())
             }
@@ -602,7 +768,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
 
                 self.generate_hir_stmt(then_branch)?;
-                self.builder.build_unconditional_branch(merge_block)?;
+                if !self.current_block_has_terminator() {
+                    self.builder.build_unconditional_branch(merge_block)?;
+                }
 
                 // Restore variable if it was shadowed
                 if let Some(ref name) = capture_name {
@@ -617,31 +785,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Else block
                 self.builder.position_at_end(else_block);
                 if let Some(eb) = else_branch {
-                    // Check if else_branch is another If statement (else-if)
-                    // If so, we need to create new blocks for it BEFORE generating
-                    let is_else_if = matches!(eb.as_ref(), hir::HirStmt::If { .. });
-
-                    if is_else_if {
-                        // For else-if, we need to handle it specially:
-                        // 1. Create a new condition block for the else-if
-                        // 2. Branch to it from else_block
-                        // 3. The else-if will generate its own then/else/merge blocks
-                        // 4. We need to make sure the else-if's merge block branches to our merge block
-                        let else_if_cond_block =
-                            self.context.append_basic_block(function, "else_if_cond");
-                        self.builder
-                            .build_unconditional_branch(else_if_cond_block)?;
-                        self.builder.position_at_end(else_if_cond_block);
-
-                        // Generate the else-if
-                        self.generate_hir_stmt(eb)?;
-
-                        // After generating else-if, we need to handle its merge block
-                        // The else-if generates its own merge block that we need to fix up
-                        // Since we can't easily track it, let's just create a new merge block
-                        // and have the else-if's internal merge block branch to it
-                    } else {
-                        self.generate_hir_stmt(eb)?;
+                    self.generate_hir_stmt(eb)?;
+                    if !self.current_block_has_terminator() {
                         self.builder.build_unconditional_branch(merge_block)?;
                     }
                 } else {
@@ -1611,7 +1756,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 }
 
                                 // Create function type for indirect call using existing method
-                                let fn_sig = self.build_function_type(&return_type, &params);
+                                let fn_sig =
+                                    self.build_function_type(&return_type, &params, false);
 
                                 // Cast pointer to function pointer type
                                 let casted_ptr = self
@@ -1869,11 +2015,27 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             hir::HirExpr::MemberAccess {
-                object,
-                member,
-                ty: _,
-                ..
+                object, member, ty, ..
             } => {
+                // Check if this is an error member access (e.g., SampleError.CodegenError)
+                if matches!(ty, Type::Error) {
+                    let error_name = match object.as_ref() {
+                        hir::HirExpr::Ident(name, _, _) => format!("{}.{}", name, member),
+                        _ => member.clone(),
+                    };
+                    self.set_last_error_message(&error_name)?;
+
+                    // For error member access, return a non-zero i64 value to indicate an error.
+                    // This works because void! functions return i64 in LLVM, and other functions
+                    // that return error types will handle the error appropriately.
+                    return Ok(self
+                        .context
+                        .i64_type()
+                        .const_int(1, false)
+                        .as_basic_value_enum()
+                        .into());
+                }
+
                 // For member access, we need to get the struct and extract the field
                 // First check if object is a simple identifier - we can handle it specially
 
@@ -2080,7 +2242,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                     // Error path - execute defer! and return error
                     self.builder.position_at_end(error_block);
                     self.execute_defer_bang_on_error()?;
-                    self.builder.build_return(Some(&int_val))?;
+                    if self.current_function_is_main() {
+                        self.emit_main_error_exit()?;
+                    } else {
+                        self.builder.build_return(Some(&int_val))?;
+                    }
 
                     // Success path - continue with the value (for void!, this is 0)
                     self.builder.position_at_end(continue_block);
@@ -2116,20 +2282,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         &mut self,
         args: &[hir::HirExpr],
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
-        let printf_type = self.context.i64_type().fn_type(
-            &[self
-                .context
-                .ptr_type(inkwell::AddressSpace::default())
-                .into()],
-            true,
-        );
-        let printf = self.module.get_function("printf").unwrap_or_else(|| {
-            self.module.add_function(
-                "printf",
-                printf_type,
-                Some(inkwell::module::Linkage::External),
-            )
-        });
+        let printf = self.get_or_create_printf();
 
         if args.is_empty() {
             let empty_str = unsafe { self.builder.build_global_string("\n", "empty") }?;
@@ -2398,7 +2551,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             param_types.extend(method.params.iter().map(|p| p.ty.clone()));
 
-            let fn_type = self.build_function_type(&method.return_ty, &param_types);
+            let fn_type = self.build_function_type(&method.return_ty, &param_types, false);
             let method_name = format!("{}_{}", struct_name, method.name);
             let mangled_name = self.mangle_name(&method_name, false);
             self.module.add_function(&mangled_name, fn_type, None);
@@ -2426,7 +2579,8 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Declare a function (create function signature)
     pub fn declare_function(&mut self, fn_def: &FnDef) -> CodegenResult<()> {
         let param_types: Vec<Type> = fn_def.params.iter().map(|p| p.ty.clone()).collect();
-        let fn_type = self.build_function_type(&fn_def.return_ty, &param_types);
+        let fn_type =
+            self.build_function_type(&fn_def.return_ty, &param_types, fn_def.name == "main");
         let mangled_name = self.mangle_name(&fn_def.name, fn_def.name == "main");
 
         self.module.add_function(&mangled_name, fn_type, None);
@@ -2441,7 +2595,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         target_module: &str,
     ) -> CodegenResult<()> {
         let param_types: Vec<Type> = fn_def.params.iter().map(|p| p.ty.clone()).collect();
-        let fn_type = self.build_function_type(&fn_def.return_ty, &param_types);
+        let fn_type = self.build_function_type(&fn_def.return_ty, &param_types, false);
         let mangled_name = format!("{}_{}", target_module, fn_def.name);
 
         self.module.add_function(
@@ -2456,7 +2610,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Declare a C library external function (FFI)
     pub fn declare_c_function(&mut self, ext_fn: &ExternalFnDef) -> CodegenResult<()> {
         let param_types: Vec<Type> = ext_fn.params.iter().map(|p| p.ty.clone()).collect();
-        let fn_type = self.build_function_type(&ext_fn.return_ty, &param_types);
+        let fn_type = self.build_function_type(&ext_fn.return_ty, &param_types, false);
 
         // Use the function name directly for C functions (no mangling)
         self.module.add_function(
