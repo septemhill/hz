@@ -1,0 +1,11 @@
+// Test case: Invalid - try on a function that returns (i64,i64)!
+fn tupleerror() (i64, i64)! {
+    return (1, 2);
+}
+
+fn main() i64! {
+    // Invalid: should trigger compile error
+    try tupleerror();
+    
+    return 0;
+}

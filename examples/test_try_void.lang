@@ -1,0 +1,11 @@
+// Test case: Valid - try on a function that returns void!
+fn voiderror() void! {
+    return;
+}
+
+fn main() i64! {
+    // Valid: void! can be used without consuming
+    try voiderror();
+    
+    return 0;
+}

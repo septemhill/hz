@@ -590,11 +590,37 @@ impl TypeInferrer {
         };
 
         match stmt {
-            Stmt::Expr { expr, span: _ } => {
+            Stmt::Expr { expr, span } => {
                 let typed_expr = self.infer_expr(expr)?;
+
+                // Check if this is a Try expression used as a statement
+                // If so, the return value must be consumed (unless it's void)
+                if let Expr::Try {
+                    expr: _try_expr,
+                    span: try_span,
+                } = expr
+                {
+                    // Get the type of the inner expression before Try unwrapping
+                    // The Try expression type is already unwrapped, so we need to check
+                    // if the original function returns a Result type
+                    let inner_ty = if let Type::Result(inner) = &typed_expr.ty {
+                        inner.as_ref().clone()
+                    } else {
+                        typed_expr.ty.clone()
+                    };
+
+                    // If the result type is not void, it must be consumed
+                    if inner_ty != Type::Void {
+                        return Err(AnalysisError::new_with_span(
+                            "Try expression returns a value that must be consumed. Use 'const x = try ...' or '_ = try ...' to consume the result.",
+                            try_span,
+                        ).with_module("infer"));
+                    }
+                }
+
                 Ok(TypedStmt {
                     stmt: TypedStmtKind::Expr { expr: typed_expr },
-                    span,
+                    span: *span,
                 })
             }
             Stmt::Import { packages, span: _ } => Ok(TypedStmt {

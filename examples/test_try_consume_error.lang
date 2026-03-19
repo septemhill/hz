@@ -1,0 +1,11 @@
+// Test case: Invalid - try without consuming the return value
+fn i32error() i32! {
+    return 123;
+}
+
+fn main() i64! {
+    // Invalid: should trigger compile error
+    try i32error();
+    
+    return 0;
+}

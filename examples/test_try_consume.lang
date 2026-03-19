@@ -1,0 +1,12 @@
+// Test case 1: Valid - consume the return value
+fn i32error() i32! {
+    return 123;
+}
+
+fn main() i64! {
+    // Valid: consume the return value
+    const i = try i32error();
+    io.println("i: {d}", i);
+    
+    return 0;
+}

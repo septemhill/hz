@@ -1,0 +1,11 @@
+// Test case: Valid - explicitly ignore the return value with _
+fn i32error() i32! {
+    return 123;
+}
+
+fn main() i64! {
+    // Valid: explicitly ignore with _
+    _ = try i32error();
+    
+    return 0;
+}
