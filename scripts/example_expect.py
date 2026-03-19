@@ -13,6 +13,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 EXPECT_TIMEOUT_HEADER = b"# expect: timeout\n"
 ANSI_RED = "\033[31m"
@@ -34,6 +35,29 @@ class ExampleResult:
     runtime_output_truncated: bool = False
     expect_exists: bool = False
     expect_matches: bool | None = None
+
+
+@dataclass
+class ProgressReporter:
+    enabled: bool
+    rendered_width: int = 0
+
+    def update(self, message: str) -> None:
+        if not self.enabled:
+            return
+        padding = ""
+        if self.rendered_width > len(message):
+            padding = " " * (self.rendered_width - len(message))
+        sys.stderr.write(f"\r{message}{padding}")
+        sys.stderr.flush()
+        self.rendered_width = len(message)
+
+    def clear(self) -> None:
+        if not self.enabled or self.rendered_width == 0:
+            return
+        sys.stderr.write("\r" + (" " * self.rendered_width) + "\r")
+        sys.stderr.flush()
+        self.rendered_width = 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -85,6 +109,25 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print compile/runtime error details.",
     )
+    parser.add_argument(
+        "--progress",
+        dest="progress",
+        action="store_true",
+        help="Print compiler/example progress updates to stderr.",
+    )
+    parser.add_argument(
+        "--no-progress",
+        dest="progress",
+        action="store_false",
+        help="Disable compiler/example progress updates.",
+    )
+    parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=1.0,
+        help="Seconds between runtime heartbeat updates for the current example.",
+    )
+    parser.set_defaults(progress=sys.stderr.isatty())
     if hasattr(parser, "parse_intermixed_args"):
         return parser.parse_intermixed_args()
     return parser.parse_args()
@@ -157,7 +200,9 @@ def resolve_requested_paths(
     return sorted(resolved)
 
 
-def ensure_compiler(root: Path, compiler: Path | None) -> Path:
+def ensure_compiler(
+    root: Path, compiler: Path | None, progress: ProgressReporter
+) -> Path:
     if compiler is not None:
         compiler_path = compiler if compiler.is_absolute() else (root / compiler)
         compiler_path = compiler_path.resolve()
@@ -173,6 +218,7 @@ def ensure_compiler(root: Path, compiler: Path | None) -> Path:
         text=True,
     )
     if build.returncode != 0:
+        progress.clear()
         sys.stdout.write(build.stdout)
         raise SystemExit(build.returncode)
 
@@ -221,6 +267,27 @@ def colorize(text: str, color: str) -> str:
     return f"{color}{text}{ANSI_RESET}"
 
 
+def display_path(path: Path, root: Path) -> Path:
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        return path
+
+
+def format_duration(seconds: float) -> str:
+    if seconds < 1:
+        return f"{seconds * 1000:.0f}ms"
+    if seconds < 10:
+        return f"{seconds:.2f}s"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, remainder = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{int(minutes)}m{remainder:04.1f}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{int(hours)}h{int(minutes):02d}m{remainder:02.0f}s"
+
+
 def format_case_status(ok: bool) -> str:
     if ok:
         return colorize("ok", ANSI_GREEN)
@@ -243,9 +310,12 @@ def run_examples(
     sources: list[Path],
     timeout_seconds: float,
     max_output_bytes: int,
+    progress: ProgressReporter,
+    progress_interval: float,
 ) -> list[ExampleResult]:
     results: list[ExampleResult] = []
     examples_dir = root / "examples"
+    total = len(sources)
 
     with tempfile.TemporaryDirectory(prefix="lang-example-check-") as temp_dir_raw:
         temp_dir = Path(temp_dir_raw)
@@ -254,12 +324,32 @@ def run_examples(
         shutil.copytree(examples_dir, temp_examples)
         temp_bins.mkdir(parents=True, exist_ok=True)
 
-        for source in sources:
+        for index, source in enumerate(sources, start=1):
             rel = source.relative_to(examples_dir)
             temp_source = temp_examples / rel
             expect_path = source.with_suffix(".expect")
             binary_path = temp_bins / sanitize_binary_name(root, source)
+            rel_source = display_path(source, root)
 
+            def report_runtime_progress(
+                elapsed: float,
+                captured_bytes: int,
+                truncated: bool,
+                *,
+                rel_source: Path = rel_source,
+                index: int = index,
+            ) -> None:
+                progress.update(
+                    (
+                        f"[{index}/{total}] still running {rel_source} "
+                        f"for {format_duration(elapsed)} "
+                        f"(captured {captured_bytes} bytes"
+                        f"{', truncated' if truncated else ''})"
+                    ),
+                )
+
+            progress.update(f"[{index}/{total}] compiling {rel_source}")
+            compile_started_at = time.monotonic()
             compile_proc = subprocess.run(
                 [str(compiler), "build", str(temp_source), "-o", str(binary_path)],
                 cwd=root,
@@ -267,6 +357,7 @@ def run_examples(
                 stderr=subprocess.STDOUT,
                 text=True,
             )
+            compile_elapsed = time.monotonic() - compile_started_at
 
             result = ExampleResult(
                 source=source,
@@ -277,16 +368,32 @@ def run_examples(
             )
 
             if not result.compile_ok:
+                progress.update(
+                    (
+                        f"[{index}/{total}] compile failed {rel_source} "
+                        f"after {format_duration(compile_elapsed)}"
+                    ),
+                )
                 results.append(result)
                 continue
 
             try:
+                progress.update(
+                    (
+                        f"[{index}/{total}] running {rel_source} "
+                        f"(compile {format_duration(compile_elapsed)})"
+                    ),
+                )
+                runtime_started_at = time.monotonic()
                 runtime_state, runtime_output, runtime_returncode, output_truncated = run_binary(
                     [str(binary_path)],
                     root,
                     timeout_seconds,
                     max_output_bytes,
+                    on_progress=report_runtime_progress,
+                    progress_interval=progress_interval,
                 )
+                runtime_elapsed = time.monotonic() - runtime_started_at
                 result.runtime_state = runtime_state
                 result.runtime_ok = runtime_state == "completed"
                 result.runtime_output = runtime_output
@@ -298,19 +405,34 @@ def run_examples(
                     result.runtime_error = f"timed out after {timeout_seconds:g}s"
                 evaluate_expect_match(result)
             except OSError as exc:
+                runtime_elapsed = time.monotonic() - runtime_started_at
                 result.runtime_ok = False
                 result.runtime_state = "signaled"
                 result.runtime_output = b""
                 result.runtime_error = str(exc)
                 evaluate_expect_match(result)
 
+            ok, detail = compiled_case_summary(result)
+            suffix = f" ({detail})" if detail else ""
+            status_text = "ok" if ok else "failed"
+            progress.update(
+                (
+                    f"[{index}/{total}] finished {rel_source} "
+                    f"[{status_text}] in {format_duration(runtime_elapsed)}{suffix}"
+                ),
+            )
             results.append(result)
 
     return results
 
 
 def run_binary(
-    argv: list[str], cwd: Path, timeout_seconds: float, max_output_bytes: int
+    argv: list[str],
+    cwd: Path,
+    timeout_seconds: float,
+    max_output_bytes: int,
+    on_progress: Callable[[float, int, bool], None] | None = None,
+    progress_interval: float = 1.0,
 ) -> tuple[str, bytes, int | None, bool]:
     proc = subprocess.Popen(
         argv,
@@ -320,14 +442,25 @@ def run_binary(
     )
     output = bytearray()
     output_truncated = False
-    deadline = time.monotonic() + timeout_seconds
+    started_at = time.monotonic()
+    deadline = started_at + timeout_seconds
+    next_progress_at = (
+        started_at + progress_interval
+        if on_progress is not None and progress_interval > 0
+        else None
+    )
 
     try:
         while True:
             if proc.stdout is None:
                 break
 
-            remaining = deadline - time.monotonic()
+            now = time.monotonic()
+            if next_progress_at is not None and now >= next_progress_at:
+                on_progress(now - started_at, len(output), output_truncated)
+                next_progress_at = now + progress_interval
+
+            remaining = deadline - now
             if remaining <= 0:
                 proc.kill()
                 proc.wait()
@@ -466,14 +599,23 @@ def main() -> int:
     root = repo_root()
     examples_dir = root / "examples"
     sources = resolve_requested_paths(args.paths, examples_dir, args.all_lang)
-    compiler = ensure_compiler(root, args.compiler)
-    results = run_examples(
-        root,
-        compiler,
-        sources,
-        args.timeout,
-        args.max_output_bytes,
-    )
+    progress = ProgressReporter(args.progress)
+
+    try:
+        progress.update(f"Building compiler for {len(sources)} example(s)...")
+        compiler = ensure_compiler(root, args.compiler, progress)
+        progress.update(f"Using compiler: {display_path(compiler, root)}")
+        results = run_examples(
+            root,
+            compiler,
+            sources,
+            args.timeout,
+            args.max_output_bytes,
+            progress,
+            args.progress_interval,
+        )
+    finally:
+        progress.clear()
 
     if args.command == "update":
         updated = write_expect_files(results)
