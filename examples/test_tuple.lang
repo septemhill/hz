@@ -9,7 +9,7 @@ fn return_tuple() (i64, i64, i64) {
 }
 
 fn return_optional_tuple() ?(i64, i64, i64) {
-    return (1, 2, 3);
+    return (1, 2, 7);
 }
 
 fn return_error_tuple() (i64, i64, i64)! {

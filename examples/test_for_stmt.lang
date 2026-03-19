@@ -27,8 +27,13 @@ fn main() i64 {
         io.println(e);
     }
 
+    var x = 0;
     for {
+        if (x > 3) {
+            break;
+        }
         io.println("infinite loop");
+        x += 1
     }
 
     outer: for (1..10) |v| {
@@ -37,8 +42,13 @@ fn main() i64 {
         }
     }
 
+    x = 0
     for (2 > 1) {
+        if (x > 5) {
+            break;
+        }
         io.println("true expression");
+        x += 1;
     }
 
     return 0;

@@ -217,7 +217,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         return_ty: &Type,
         is_main: bool,
     ) -> Option<BasicTypeEnum<'ctx>> {
-        if is_main || matches!(return_ty, Type::Result(_)) {
+        if is_main {
             Some(self.context.i64_type().into())
         } else if return_ty == &Type::Void {
             None
@@ -232,7 +232,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         is_main: bool,
     ) -> Option<BasicValueEnum<'ctx>> {
         match self.llvm_function_return_type(return_ty, is_main) {
-            Some(llvm_ty) if is_main || matches!(return_ty, Type::Result(_)) => {
+            Some(llvm_ty) if is_main => {
                 Some(self.context.i64_type().const_int(0, false).into())
             }
             Some(llvm_ty) => Some(llvm_ty.const_zero()),
@@ -702,8 +702,29 @@ impl<'ctx> CodeGenerator<'ctx> {
                         return Ok(());
                     }
 
-                    if !is_error_expr {
-                        if is_main || ret_ty.is_result() {
+                    if ret_ty.is_result() && !is_main {
+                        if is_error_expr {
+                            let result_type = self.llvm_type(&ret_ty).into_struct_type();
+                            let flag = self.context.bool_type().const_int(1, false);
+                            let result_val = self
+                                .builder
+                                .build_insert_value(
+                                    result_type.const_zero(),
+                                    flag,
+                                    1,
+                                    "ret_error",
+                                )?
+                                .into_struct_value()
+                                .as_basic_value_enum();
+                            self.builder.build_return(Some(&result_val))?;
+                            return Ok(());
+                        }
+
+                        if self.hir_expr_type(val) != &ret_ty {
+                            llvm_val = self.coerce_type(llvm_val, &ret_ty)?;
+                        }
+                    } else if !is_error_expr {
+                        if is_main {
                             if let BasicValueEnum::IntValue(int_val) = llvm_val {
                                 let i64_type = self.context.i64_type();
                                 if int_val.get_type() != i64_type {
@@ -752,6 +773,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Handle capture variable if present (e.g., if (opt) |data| { ... })
                 // This must be inside the then block
                 let mut old_var = None;
+                let mut old_ty = None;
                 let capture_name = capture.clone();
                 if let Some(ref name) = capture_name {
                     if let BasicValueEnum::StructValue(sv) = cond_val {
@@ -761,9 +783,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                         self.builder.build_store(alloca, val)?;
                         // Save old variable if it exists
                         old_var = self.variables.insert(name.clone(), alloca);
-                        // The type should be Option(inner), we need to store the inner type
-                        // For now, use i64 as default
-                        self.variable_types.insert(name.clone(), Type::I64);
+                        old_ty = self
+                            .variable_types
+                            .insert(name.clone(), self.llvm_type_to_lang(&val.get_type()));
                     }
                 }
 
@@ -778,6 +800,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                         self.variables.insert(name.clone(), old);
                     } else {
                         self.variables.remove(name);
+                    }
+
+                    if let Some(old) = old_ty {
+                        self.variable_types.insert(name.clone(), old);
+                    } else {
                         self.variable_types.remove(name);
                     }
                 }
@@ -1426,22 +1453,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::TupleIndex {
                 tuple, index, ty, ..
             } => {
-                // Get the tuple value
                 let tuple_val = self.generate_hir_expr(tuple)?;
-                // Extract the element at index
                 let _llvm_type = self.llvm_type(ty);
-                let alloca = self
-                    .builder
-                    .build_alloca(tuple_val.get_type(), "tuple_idx_temp")?;
-                self.builder.build_store(alloca, tuple_val)?;
-                let extracted = self.builder.build_extract_value(
-                    self.builder
-                        .build_load(tuple_val.get_type(), alloca, "t")?
-                        .into_struct_value(),
-                    *index as u32,
-                    "tuple_elem",
-                )?;
-                Ok(extracted.into())
+                match tuple_val {
+                    BasicValueEnum::StructValue(sv) => {
+                        let extracted =
+                            self.builder
+                                .build_extract_value(sv, *index as u32, "tuple_elem")?;
+                        Ok(extracted.into())
+                    }
+                    _ => Err("Tuple index access requires a tuple value".into()),
+                }
             }
             hir::HirExpr::Array { vals, ty, .. } => {
                 // Create an LLVM array from values
@@ -2222,15 +2244,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .unwrap_or(false);
 
                 if is_result {
-                    // Check if expr_value is an error (non-zero)
-                    let int_val = expr_value.into_int_value();
-                    let zero = self.context.i64_type().const_int(0, false);
-                    let is_error = self.builder.build_int_compare(
-                        inkwell::IntPredicate::NE,
-                        int_val,
-                        zero,
-                        "is_error",
-                    )?;
+                    let result_struct = match expr_value {
+                        BasicValueEnum::StructValue(sv) => sv,
+                        _ => return Err("Try expression requires a result value".into()),
+                    };
+                    let is_error = self
+                        .builder
+                        .build_extract_value(result_struct, 1, "is_error")?
+                        .into_int_value();
 
                     let function = self.current_function.unwrap();
                     let error_block = self.context.append_basic_block(function, "try_error");
@@ -2245,12 +2266,16 @@ impl<'ctx> CodeGenerator<'ctx> {
                     if self.current_function_is_main() {
                         self.emit_main_error_exit()?;
                     } else {
-                        self.builder.build_return(Some(&int_val))?;
+                        let result_value = result_struct.as_basic_value_enum();
+                        self.builder.build_return(Some(&result_value))?;
                     }
 
-                    // Success path - continue with the value (for void!, this is 0)
+                    // Success path - continue with the unwrapped value
                     self.builder.position_at_end(continue_block);
-                    Ok(expr_value)
+                    let value = self
+                        .builder
+                        .build_extract_value(result_struct, 0, "try_value")?;
+                    Ok(value.into())
                 } else {
                     // Not a result type, just return the value
                     Ok(expr_value)
@@ -4004,43 +4029,48 @@ impl<'ctx> CodeGenerator<'ctx> {
         match expected_ty {
             Type::Option(_) | Type::Result(_) => {
                 let struct_type = expected_llvm_ty.into_struct_type();
-                // If it's a struct, it must be Null/Error fallback ({ i64, i1 } zeroinitializer)
-                if val.is_struct_value() {
-                    return Ok(struct_type.const_zero().into());
-                } else {
-                    // Wrap the inner value
-                    let mut struct_val = struct_type.get_undef();
-                    let field_type = struct_type.get_field_types()[0];
-                    let mut inner_val = val;
-                    if inner_val.get_type() != field_type {
-                        if field_type.is_int_type() && inner_val.is_int_value() {
-                            inner_val = self
-                                .builder
-                                .build_int_cast(
-                                    inner_val.into_int_value(),
-                                    field_type.into_int_type(),
-                                    "cast",
-                                )?
-                                .into();
-                        }
+                let mut struct_val = struct_type.get_undef();
+                let field_type = struct_type.get_field_types()[0];
+                let mut inner_val = val;
+                if inner_val.get_type() != field_type {
+                    if field_type.is_int_type() && inner_val.is_int_value() {
+                        inner_val = self
+                            .builder
+                            .build_int_cast(
+                                inner_val.into_int_value(),
+                                field_type.into_int_type(),
+                                "cast",
+                            )?
+                            .into();
+                    } else if field_type.is_float_type() && inner_val.is_float_value() {
+                        inner_val = self
+                            .builder
+                            .build_float_cast(
+                                inner_val.into_float_value(),
+                                field_type.into_float_type(),
+                                "cast",
+                            )?
+                            .into();
+                    } else if inner_val.is_struct_value() {
+                        return Ok(struct_type.const_zero().into());
                     }
-                    struct_val = self
-                        .builder
-                        .build_insert_value(struct_val, inner_val, 0, "ret_val")?
-                        .into_struct_value();
-
-                    let flag_val = if matches!(expected_ty, Type::Option(_)) {
-                        self.context.bool_type().const_int(1, false) // is_valid = true
-                    } else {
-                        self.context.bool_type().const_int(0, false) // is_error = false
-                    };
-                    struct_val = self
-                        .builder
-                        .build_insert_value(struct_val, flag_val, 1, "flag")?
-                        .into_struct_value();
-
-                    return Ok(struct_val.into());
                 }
+                struct_val = self
+                    .builder
+                    .build_insert_value(struct_val, inner_val, 0, "ret_val")?
+                    .into_struct_value();
+
+                let flag_val = if matches!(expected_ty, Type::Option(_)) {
+                    self.context.bool_type().const_int(1, false) // is_valid = true
+                } else {
+                    self.context.bool_type().const_int(0, false) // is_error = false
+                };
+                struct_val = self
+                    .builder
+                    .build_insert_value(struct_val, flag_val, 1, "flag")?
+                    .into_struct_value();
+
+                return Ok(struct_val.into());
             }
             _ => {
                 // Simple integer casting
@@ -4154,14 +4184,24 @@ impl<'ctx> CodeGenerator<'ctx> {
                 64 => Type::I64,
                 _ => Type::I64,
             },
-            BasicTypeEnum::FloatType(_) => Type::I64, // Default float to i64
-            BasicTypeEnum::PointerType(_) => Type::I64, // Default pointer to i64
-            BasicTypeEnum::StructType(_) => {
-                // For structs, create a placeholder tuple - the actual type
-                // should be specified explicitly or inferred from the expression
-                Type::Tuple(vec![Type::I64, Type::I64])
+            BasicTypeEnum::FloatType(ft) => {
+                if ft == &self.context.f32_type() {
+                    Type::F32
+                } else {
+                    Type::F64
+                }
             }
-            BasicTypeEnum::ArrayType(_) => Type::I64, // Default array to i64
+            BasicTypeEnum::PointerType(_) => Type::RawPtr,
+            BasicTypeEnum::StructType(st) => Type::Tuple(
+                st.get_field_types()
+                    .iter()
+                    .map(|field_ty| self.llvm_type_to_lang(field_ty))
+                    .collect(),
+            ),
+            BasicTypeEnum::ArrayType(at) => Type::Array {
+                size: Some(at.len() as usize),
+                element_type: Box::new(self.llvm_type_to_lang(&at.get_element_type())),
+            },
             BasicTypeEnum::VectorType(_) => Type::I64, // Default vector to i64
             BasicTypeEnum::ScalableVectorType(_) => Type::I64, // Default scalable vector to i64
         }

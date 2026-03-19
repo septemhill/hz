@@ -1,0 +1,6 @@
+Allocator test placeholder
+The allocator interface:
+  var alloc = malloc_allocator.new()
+  var ptr = alloc.alloc(size)
+  alloc.free(ptr)
+  alloc.deinit()

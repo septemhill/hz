@@ -1,0 +1,7 @@
+=== RawPtr Test ===
+Test 1: Allocating 8 bytes...
+  Got pointer
+  Allocation: SUCCESS
+  Freed
+
+All tests passed!

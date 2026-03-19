@@ -1,0 +1,4 @@
+test_defer_bang body
+defer! 2 cleanup called - error occurred
+defer! 1 cleanup called - error occurred
+SampleError.CodegenError

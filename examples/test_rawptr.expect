@@ -1,0 +1,10 @@
+=== RawPtr Test ===
+Test 1: Allocating 8 bytes...
+  Allocation: SUCCESS
+  Freed
+Test 2: Testing is_null with null...
+  is_null(null): true (correct)
+Test 3: Testing is_not_null with valid pointer...
+  is_not_null(valid): true (correct)
+
+All tests passed!

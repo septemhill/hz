@@ -4,13 +4,6 @@ struct Base {
     name: String,
     age: i32,
     married: bool,
-    inner: Inner,
-
-    // Considering support inner struct
-    //  struct Inner {
-    //      checked: bool,
-    //  }
-
 
     pub fn new(name: String, age: i32, married: bool) Base {
         return Base{ name, age, married };

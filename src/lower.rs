@@ -449,6 +449,8 @@ pub struct LoweringContext {
     // Context for lowering (e.g. current scope, type info)
     symbol_table: SymbolTable,
     errors: std::collections::HashMap<String, ast::ErrorDef>,
+    function_returns: std::collections::HashMap<String, ast::Type>,
+    local_scopes: Vec<std::collections::HashMap<String, ast::Type>>,
 }
 
 impl LoweringContext {
@@ -456,6 +458,8 @@ impl LoweringContext {
         LoweringContext {
             symbol_table: SymbolTable::new(),
             errors: std::collections::HashMap::new(),
+            function_returns: std::collections::HashMap::new(),
+            local_scopes: Vec::new(),
         }
     }
 
@@ -464,10 +468,61 @@ impl LoweringContext {
         self.symbol_table = symbol_table;
     }
 
+    fn enter_local_scope(&mut self) {
+        self.local_scopes.push(std::collections::HashMap::new());
+    }
+
+    fn exit_local_scope(&mut self) {
+        self.local_scopes.pop();
+    }
+
+    fn define_local(&mut self, name: String, ty: ast::Type) {
+        if name.is_empty() {
+            return;
+        }
+
+        if let Some(scope) = self.local_scopes.last_mut() {
+            scope.insert(name, ty);
+        }
+    }
+
+    fn resolve_local(&self, name: &str) -> Option<ast::Type> {
+        for scope in self.local_scopes.iter().rev() {
+            if let Some(ty) = scope.get(name) {
+                return Some(ty.clone());
+            }
+        }
+
+        None
+    }
+
     pub fn lower_program(&mut self, program: &ast::Program) -> hir::HirProgram {
+        self.errors.clear();
+        self.function_returns.clear();
+        self.local_scopes.clear();
+
         // Collect errors from the program
         for e in &program.errors {
             self.errors.insert(e.name.clone(), e.clone());
+        }
+
+        for f in &program.functions {
+            self.function_returns
+                .insert(f.name.clone(), f.return_ty.clone());
+        }
+
+        for s in &program.structs {
+            for m in &s.methods {
+                self.function_returns
+                    .insert(format!("{}_{}", s.name, m.name), m.return_ty.clone());
+            }
+        }
+
+        for e in &program.enums {
+            for m in &e.methods {
+                self.function_returns
+                    .insert(format!("{}_{}", e.name, m.name), m.return_ty.clone());
+            }
         }
 
         let mut functions: Vec<hir::HirFn> = program
@@ -500,6 +555,14 @@ impl LoweringContext {
             f.name.clone()
         };
 
+        self.enter_local_scope();
+        for param in &f.params {
+            self.define_local(param.name.clone(), param.ty.clone());
+        }
+
+        let body = f.body.iter().map(|s| self.lower_stmt(s)).collect();
+        self.exit_local_scope();
+
         hir::HirFn {
             name,
             params: f
@@ -508,7 +571,7 @@ impl LoweringContext {
                 .map(|p| (p.name.clone(), p.ty.clone()))
                 .collect(),
             return_ty: f.return_ty.clone(),
-            body: f.body.iter().map(|s| self.lower_stmt(s)).collect(),
+            body,
             visibility: f.visibility,
             span: f.span,
         }
@@ -518,6 +581,10 @@ impl LoweringContext {
     fn infer_type(&self, expr: &ast::Expr) -> Option<ast::Type> {
         match expr {
             ast::Expr::Ident(name, _) => {
+                if let Some(ty) = self.resolve_local(name) {
+                    return Some(ty);
+                }
+
                 // Look up identifier in symbol table
                 if let Some(symbol) = self.symbol_table.resolve(name) {
                     Some(self.lang_type_to_ast_type(&symbol.ty))
@@ -528,15 +595,44 @@ impl LoweringContext {
             ast::Expr::Call {
                 name, namespace, ..
             } => {
-                // For function calls, we can't easily infer the return type
-                // without a symbol table - just return None
-                let _ = (name, namespace); // suppress unused warnings
-                None
+                if let Some(ns) = namespace {
+                    let qualified = format!("{}_{}", ns, name);
+                    if let Some(ty) = self.function_returns.get(&qualified) {
+                        return Some(ty.clone());
+                    }
+                } else if let Some(ty) = self.function_returns.get(name) {
+                    return Some(ty.clone());
+                }
+
+                let resolved = if let Some(ns) = namespace {
+                    let qualified = format!("{}::{}", ns, name);
+                    self.symbol_table
+                        .resolve(&qualified)
+                        .or_else(|| self.symbol_table.resolve(name))
+                } else {
+                    self.symbol_table.resolve(name)
+                };
+
+                resolved.and_then(|symbol| match &symbol.ty {
+                    ast::Type::Function { return_type, .. } => Some((**return_type).clone()),
+                    ty => Some(ty.clone()),
+                })
             }
-            ast::Expr::Try { expr, span: _ } => {
-                // For try expressions, try to get inner type
-                self.infer_type(expr)
-            }
+            ast::Expr::Try { expr, span: _ } => match self.infer_type(expr) {
+                Some(ast::Type::Result(inner)) => Some(*inner),
+                Some(ty) => Some(ty),
+                None => None,
+            },
+            ast::Expr::Tuple(elements, _) => Some(ast::Type::Tuple(
+                elements
+                    .iter()
+                    .map(|element| self.infer_type(element).unwrap_or(ast::Type::I64))
+                    .collect(),
+            )),
+            ast::Expr::TupleIndex { tuple, index, .. } => match self.infer_type(tuple) {
+                Some(ast::Type::Tuple(types)) => types.get(*index).cloned(),
+                _ => None,
+            },
             ast::Expr::Struct { name, .. } => Some(ast::Type::Custom {
                 name: name.clone(),
                 generic_args: vec![],
@@ -580,6 +676,7 @@ impl LoweringContext {
             ast::Stmt::Expr { expr, .. } => hir::HirStmt::Expr(self.lower_expr(expr)),
             ast::Stmt::Let {
                 name,
+                names,
                 ty,
                 value,
                 mutability,
@@ -591,11 +688,26 @@ impl LoweringContext {
                 let inferred_ty = value.as_ref().and_then(|v| self.infer_type(v));
 
                 let ty = ty.clone().or(inferred_ty).unwrap_or(ast::Type::I64);
+                let lowered_value = value.as_ref().map(|v| self.lower_expr(v));
+
+                if let Some(bindings) = names {
+                    if let ast::Type::Tuple(element_tys) = &ty {
+                        for (index, binding) in bindings.iter().enumerate() {
+                            if let Some(binding_name) = binding {
+                                let binding_ty =
+                                    element_tys.get(index).cloned().unwrap_or(ast::Type::I64);
+                                self.define_local(binding_name.clone(), binding_ty);
+                            }
+                        }
+                    }
+                } else {
+                    self.define_local(name.clone(), ty.clone());
+                }
 
                 hir::HirStmt::Let {
                     name: name.clone(),
                     ty,
-                    value: value.as_ref().map(|v| self.lower_expr(v)),
+                    value: lowered_value,
                     mutability: *mutability,
                     span: *span,
                 }
@@ -604,10 +716,14 @@ impl LoweringContext {
                 hir::HirStmt::Return(value.as_ref().map(|v| self.lower_expr(v)), *span)
             }
             ast::Stmt::Block { stmts, span } => {
+                self.enter_local_scope();
+                let lowered_stmts = stmts.iter().map(|s| self.lower_stmt(s)).collect();
+                self.exit_local_scope();
+
                 // For now, simplify Stmt::Block into a nested sequence or stay as is
                 // In a real HIR, we might flatten this
                 hir::HirStmt::Expr(hir::HirExpr::Block {
-                    stmts: stmts.iter().map(|s| self.lower_stmt(s)).collect(),
+                    stmts: lowered_stmts,
                     expr: None,
                     ty: ast::Type::Void,
                     span: *span,
@@ -620,13 +736,34 @@ impl LoweringContext {
                 else_branch,
                 span,
                 ..
-            } => hir::HirStmt::If {
-                condition: self.lower_expr(condition),
-                capture: capture.clone(),
-                then_branch: Box::new(self.lower_stmt(then_branch)),
-                else_branch: else_branch.as_ref().map(|e| Box::new(self.lower_stmt(e))),
-                span: *span,
-            },
+            } => {
+                let condition_ty = self.infer_type(condition);
+                let lowered_condition = self.lower_expr(condition);
+
+                self.enter_local_scope();
+                if let (Some(capture_name), Some(ast::Type::Option(inner_ty))) =
+                    (capture.as_ref(), condition_ty.clone())
+                {
+                    self.define_local(capture_name.clone(), *inner_ty);
+                }
+                let lowered_then = Box::new(self.lower_stmt(then_branch));
+                self.exit_local_scope();
+
+                let lowered_else = else_branch.as_ref().map(|e| {
+                    self.enter_local_scope();
+                    let lowered = Box::new(self.lower_stmt(e));
+                    self.exit_local_scope();
+                    lowered
+                });
+
+                hir::HirStmt::If {
+                    condition: lowered_condition,
+                    capture: capture.clone(),
+                    then_branch: lowered_then,
+                    else_branch: lowered_else,
+                    span: *span,
+                }
+            }
             ast::Stmt::Defer { stmt, span } => {
                 // Lower the deferred statement
                 hir::HirStmt::Defer {
@@ -795,13 +932,15 @@ impl LoweringContext {
             },
             ast::Expr::Tuple(vals, span) => hir::HirExpr::Tuple {
                 vals: vals.iter().map(|v| self.lower_expr(v)).collect(),
-                ty: ast::Type::Tuple(vals.iter().map(|_| ast::Type::I64).collect()), // Placeholder
+                ty: self
+                    .infer_type(e)
+                    .unwrap_or_else(|| ast::Type::Tuple(vals.iter().map(|_| ast::Type::I64).collect())),
                 span: *span,
             },
             ast::Expr::TupleIndex { tuple, index, span } => hir::HirExpr::TupleIndex {
                 tuple: Box::new(self.lower_expr(tuple)),
                 index: *index,
-                ty: ast::Type::I64, // Placeholder
+                ty: self.infer_type(e).unwrap_or(ast::Type::I64),
                 span: *span,
             },
             ast::Expr::Array(vals, explicit_ty, span) => {
@@ -823,11 +962,10 @@ impl LoweringContext {
                 }
             }
             ast::Expr::Ident(name, span) => {
-                // Look up the type from the symbol table
+                // Look up the type from the current local scopes first, then the symbol table.
                 let ty = self
-                    .symbol_table
-                    .resolve(name)
-                    .map(|s| s.ty.clone())
+                    .resolve_local(name)
+                    .or_else(|| self.symbol_table.resolve(name).map(|s| s.ty.clone()))
                     .unwrap_or(ast::Type::I64); // Default to i64 if not found
 
                 // If the resolved type is a primitive type (not a function),
@@ -875,7 +1013,7 @@ impl LoweringContext {
                     name: name.clone(),
                     namespace: namespace.clone(),
                     args: args.iter().map(|a| self.lower_expr(a)).collect(),
-                    return_ty: ast::Type::Void, // Placeholder
+                    return_ty: self.infer_type(e).unwrap_or(ast::Type::Void),
                     span: *span,
                 }
             }
@@ -886,18 +1024,38 @@ impl LoweringContext {
                 else_branch,
                 span,
             } => {
+                let condition_ty = self.infer_type(condition);
+                let lowered_condition = self.lower_expr(condition);
+
+                self.enter_local_scope();
+                if let (Some(capture_name), Some(ast::Type::Option(inner_ty))) =
+                    (capture.as_ref(), condition_ty.clone())
+                {
+                    self.define_local(capture_name.clone(), *inner_ty);
+                }
+                let lowered_then = Box::new(self.lower_expr(then_branch));
+                self.exit_local_scope();
+
+                self.enter_local_scope();
+                let lowered_else = Box::new(self.lower_expr(else_branch));
+                self.exit_local_scope();
+
                 hir::HirExpr::If {
-                    condition: Box::new(self.lower_expr(condition)),
+                    condition: Box::new(lowered_condition),
                     capture: capture.clone(),
-                    then_branch: Box::new(self.lower_expr(then_branch)),
-                    else_branch: Box::new(self.lower_expr(else_branch)),
+                    then_branch: lowered_then,
+                    else_branch: lowered_else,
                     ty: ast::Type::Void, // Placeholder
                     span: *span,
                 }
             }
             ast::Expr::Block { stmts, span } => {
+                self.enter_local_scope();
+                let lowered_stmts = stmts.iter().map(|s| self.lower_stmt(s)).collect();
+                self.exit_local_scope();
+
                 hir::HirExpr::Block {
-                    stmts: stmts.iter().map(|s| self.lower_stmt(s)).collect(),
+                    stmts: lowered_stmts,
                     expr: None,
                     ty: ast::Type::Void, // Placeholder
                     span: *span,

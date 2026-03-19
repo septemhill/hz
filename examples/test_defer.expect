@@ -1,0 +1,5 @@
+test_defer body
+cleanup3 called
+cleanup2 called
+cleanup1 called
+main done
