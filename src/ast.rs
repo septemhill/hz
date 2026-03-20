@@ -18,6 +18,10 @@ pub enum Type {
     U64,
     F32,
     F64,
+    /// Immediate integer value (unresolved literal)
+    ImmInt,
+    /// Immediate float value (unresolved literal)
+    ImmFloat,
     Bool,
     Void,
     /// Raw pointer type (opaque pointer, similar to C's void*)
@@ -93,6 +97,11 @@ impl Type {
     /// Check if this type is a signed integer type
     pub fn is_signed_integer(&self) -> bool {
         matches!(self, Type::I8 | Type::I16 | Type::I32 | Type::I64)
+    }
+
+    /// Check if this type is a float type
+    pub fn is_float(&self) -> bool {
+        matches!(self, Type::F32 | Type::F64)
     }
 
     /// Check whether an integer literal can be represented by this type
@@ -200,6 +209,8 @@ impl fmt::Display for Type {
             Type::U64 => write!(f, "u64"),
             Type::F32 => write!(f, "f32"),
             Type::F64 => write!(f, "f64"),
+            Type::ImmInt => write!(f, "imm_int"),
+            Type::ImmFloat => write!(f, "imm_float"),
             Type::Bool => write!(f, "bool"),
             Type::Void => write!(f, "void"),
             Type::RawPtr => write!(f, "rawptr"),

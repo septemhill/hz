@@ -4174,6 +4174,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             Type::U64 => self.context.i64_type().into(),
             Type::F32 => self.context.f32_type().into(),
             Type::F64 => self.context.f64_type().into(),
+            Type::ImmInt => self.context.i64_type().into(),
+            Type::ImmFloat => self.context.f64_type().into(),
             Type::Bool => self.context.bool_type().into(),
             Type::RawPtr => self
                 .context

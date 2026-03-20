@@ -343,6 +343,8 @@ pub struct TypeInferrer {
     errors: HashMap<String, crate::ast::ErrorDef>,
     /// Expected type for the current expression being inferred (used for array literals)
     expected_type: Option<Type>,
+    /// Expected return type for the current function being inferred
+    expected_return_type: Option<Type>,
 }
 
 impl TypeInferrer {
@@ -354,6 +356,7 @@ impl TypeInferrer {
             enums: HashMap::new(),
             errors: HashMap::new(),
             expected_type: None,
+            expected_return_type: None,
         }
     }
 
@@ -365,6 +368,18 @@ impl TypeInferrer {
     /// Get the expected type for the current expression being inferred
     fn get_expected_type(&self) -> Option<&Type> {
         self.expected_type.as_ref()
+    }
+
+    /// Get the effective expected type including return type context
+    fn get_effective_expected_type(&self) -> Option<Type> {
+        // Prefer explicitly set expected type, fall back to return type
+        if let Some(ref ty) = self.expected_type {
+            Some(ty.clone())
+        } else if let Some(ref ret_ty) = self.expected_return_type {
+            Some(ret_ty.clone())
+        } else {
+            None
+        }
     }
 
     /// Validate io.println format string arguments
@@ -511,24 +526,78 @@ impl TypeInferrer {
     }
 
     fn infer_int_literal_type(&self, value: i64, span: &Span) -> AnalysisResult<Type> {
-        if let Some(expected_ty) = self.get_expected_type() {
-            if expected_ty.is_integer() {
-                if expected_ty.can_represent_int_literal(value) {
-                    return Ok(expected_ty.clone());
-                }
+        if let Some(expected_ty) = self.get_effective_expected_type() {
+            // Handle Result types by extracting the inner (success) type
+            let inner_ty = if expected_ty.is_result() {
+                expected_ty.result_inner()
+            } else {
+                Some(&expected_ty)
+            };
 
-                return Err(AnalysisError::new_with_span(
-                    &format!(
-                        "Integer literal {} is out of range for {}",
-                        value, expected_ty
-                    ),
-                    span,
-                )
-                .with_module("infer"));
+            if let Some(inner_ty) = inner_ty {
+                if inner_ty.is_integer() {
+                    if inner_ty.can_represent_int_literal(value) {
+                        // Return the inner type, not the Result type
+                        return Ok(inner_ty.clone());
+                    }
+
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Integer literal {} is out of range for {}", value, inner_ty),
+                        span,
+                    )
+                    .with_module("infer"));
+                }
+                // If expected type is not integer but exists (e.g., float), try to convert
+                if inner_ty.is_float() {
+                    return Ok(inner_ty.clone());
+                }
             }
         }
 
-        Ok(Type::I64)
+        // No expected type - cannot infer type for integer literal
+        Err(AnalysisError::new_with_span(
+            &format!(
+                "Cannot infer type for integer literal {}. Add an explicit type annotation (e.g., ': i64')",
+                value
+            ),
+            span,
+        )
+        .with_module("infer"))
+    }
+
+    /// Infer type for float literal
+    fn infer_float_literal_type(&self, value: f64, span: &Span) -> AnalysisResult<Type> {
+        if let Some(expected_ty) = self.get_effective_expected_type() {
+            if expected_ty.is_float() {
+                // Check if value fits in f32 if expected type is f32
+                if matches!(expected_ty, Type::F32) {
+                    if value.is_nan() || value.is_infinite() {
+                        return Ok(expected_ty.clone());
+                    }
+                    let abs_val = value.abs();
+                    if abs_val > f32::MAX as f64
+                        || (abs_val != 0.0 && abs_val < f32::MIN_POSITIVE as f64)
+                    {
+                        return Err(AnalysisError::new_with_span(
+                            &format!("Float literal {} is out of range for f32", value),
+                            span,
+                        )
+                        .with_module("infer"));
+                    }
+                }
+                return Ok(expected_ty.clone());
+            }
+        }
+
+        // No expected type - cannot infer type for float literal
+        Err(AnalysisError::new_with_span(
+            &format!(
+                "Cannot infer type for float literal {}. Add an explicit type annotation (e.g., ': f64')",
+                value
+            ),
+            span,
+        )
+        .with_module("infer"))
     }
 
     /// Check if two types are compatible for assignment-like contexts.
@@ -654,12 +723,19 @@ impl TypeInferrer {
             );
         }
 
+        // Set expected return type for return statements
+        let previous_return_type = self.expected_return_type.clone();
+        self.expected_return_type = Some(f.return_ty.clone());
+
         // Infer types for the function body
         let mut body = Vec::new();
         for stmt in &f.body {
             let typed_stmt = self.infer_stmt(stmt)?;
             body.push(typed_stmt);
         }
+
+        // Restore previous return type
+        self.expected_return_type = previous_return_type;
 
         self.symbol_table.exit_scope();
 
@@ -1073,7 +1149,7 @@ impl TypeInferrer {
             }),
             Expr::Float(value, _) => Ok(TypedExpr {
                 expr: TypedExprKind::Float(*value),
-                ty: Type::F64,
+                ty: self.infer_float_literal_type(*value, &span)?,
                 span,
             }),
             Expr::Bool(value, _) => Ok(TypedExpr {
@@ -1258,8 +1334,24 @@ impl TypeInferrer {
                 right,
                 span,
             } => {
+                // For binary operations, we need to infer the left operand first
+                // If there's no expected type from context, use i64 as default for the first operand
+                let previous_expected = self.get_expected_type().cloned();
+
+                if previous_expected.is_none() {
+                    self.set_expected_type(Some(Type::I64));
+                }
+
+                // First infer left operand
                 let typed_left = self.infer_expr(left)?;
+
+                // Use left operand's type as expected type for right operand
+                self.set_expected_type(Some(typed_left.ty.clone()));
+
                 let typed_right = self.infer_expr(right)?;
+
+                // Restore previous expected type
+                self.set_expected_type(previous_expected);
 
                 let ty = self.infer_binary_op_type(op, &typed_left.ty, &typed_right.ty, span)?;
 
@@ -1292,10 +1384,43 @@ impl TypeInferrer {
                 args,
                 span,
             } => {
+                // Build the full function name for lookup
+                let fn_name = if let Some(ns) = namespace {
+                    format!("{}_{}", ns, name)
+                } else {
+                    name.clone()
+                };
+
+                // Try to resolve the function to get parameter types for expected type inference
+                let param_types: Option<Vec<Type>> =
+                    self.symbol_table.resolve(&fn_name).and_then(|s| {
+                        if let Type::Function { params, .. } = &s.ty {
+                            Some(params.clone())
+                        } else {
+                            None
+                        }
+                    });
+
                 let mut typed_args = Vec::new();
-                for arg in args {
-                    typed_args.push(self.infer_expr(arg)?);
+                let previous_expected = self.get_expected_type().cloned();
+
+                // If we have parameter types, set them as expected types for arguments
+                if let Some(ref params) = param_types {
+                    for (i, arg) in args.iter().enumerate() {
+                        if i < params.len() {
+                            self.set_expected_type(Some(params[i].clone()));
+                        }
+                        typed_args.push(self.infer_expr(arg)?);
+                    }
+                } else {
+                    // Fall back to original behavior
+                    for arg in args {
+                        typed_args.push(self.infer_expr(arg)?);
+                    }
                 }
+
+                // Restore previous expected type
+                self.set_expected_type(previous_expected);
 
                 // Check for special cases
                 if namespace.as_deref() == Some("io") && name == "println" {
@@ -1677,8 +1802,31 @@ impl TypeInferrer {
             }
             Expr::Struct { name, fields, span } => {
                 let mut typed_fields = Vec::new();
+
+                // Look up the struct definition to get field types
+                let field_types: std::collections::HashMap<String, Type> =
+                    if let Some(struct_def) = self.structs.get(name) {
+                        struct_def
+                            .fields
+                            .iter()
+                            .map(|f| (f.name.clone(), f.ty.clone()))
+                            .collect()
+                    } else {
+                        std::collections::HashMap::new()
+                    };
+
                 for (field_name, field_expr) in fields {
-                    typed_fields.push((field_name.clone(), self.infer_expr(field_expr)?));
+                    // Set expected type based on struct field definition
+                    let previous_expected = self.get_expected_type().cloned();
+                    if let Some(field_ty) = field_types.get(field_name) {
+                        self.set_expected_type(Some(field_ty.clone()));
+                    }
+
+                    let typed_field = self.infer_expr(field_expr)?;
+                    typed_fields.push((field_name.clone(), typed_field));
+
+                    // Restore previous expected type
+                    self.set_expected_type(previous_expected);
                 }
 
                 Ok(TypedExpr {

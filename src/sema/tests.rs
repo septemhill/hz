@@ -91,9 +91,9 @@ fn main() void {
 fn test_function_with_variables() {
     let source = r#"
 fn main() void {
-    var x = 10;
-    var y = 20;
-    var z = x + y;
+    var x: i64 = 10;
+    var y: i64 = 20;
+    var z: i64 = x + y;
 }
 "#;
     let result = analyze_source(source);
@@ -178,9 +178,9 @@ fn main() void {
 fn test_scope_shadowing_allowed() {
     let source = r#"
 fn main() void {
-    var x = 10;
+    var x: i64 = 10;
     {
-        var x = 20;
+        var x: i64 = 20;
     }
 }
 "#;
@@ -303,10 +303,10 @@ fn main() void {
 fn test_binary_expression_types() {
     let source = r#"
 fn main() void {
-    const a = 10 + 20;
-    const b = 30 - 5;
-    const c = 4 * 7;
-    const d = 100 / 10;
+    const a: i64 = 10 + 20;
+    const b: i64 = 30 - 5;
+    const c: i64 = 4 * 7;
+    const d: i64 = 100 / 10;
 }
 "#;
     let result = analyze_source(source);
@@ -361,7 +361,7 @@ fn main() void {
 fn test_function_call() {
     let source = r#"
 fn greet() void {
-    var name = 1;
+    var name: i64 = 1;
 }
 
 fn main() void {
@@ -534,11 +534,11 @@ fn main() void {
 fn test_nested_blocks() {
     let source = r#"
 fn main() void {
-    var a = 1;
+    var a: i64 = 1;
     {
-        var b = 2;
+        var b: i64 = 2;
         {
-            var c = 3;
+            var c: i64 = 3;
         }
     }
 }
@@ -674,7 +674,7 @@ fn main() void {
 fn test_assignment_type_mismatch() {
     let source = r#"
 fn main() void {
-    const x = 10;
+    const x: i64 = 10;
     // Note: This tests type mismatch in a different way since var reassignment has issues
 }
 "#;
