@@ -374,12 +374,18 @@ impl TypeInferrer {
     fn get_effective_expected_type(&self) -> Option<Type> {
         // Prefer explicitly set expected type, fall back to return type
         if let Some(ref ty) = self.expected_type {
-            Some(ty.clone())
-        } else if let Some(ref ret_ty) = self.expected_return_type {
-            Some(ret_ty.clone())
-        } else {
-            None
+            // Don't use void or error types for type inference
+            if !matches!(ty, Type::Void | Type::Error) {
+                return Some(ty.clone());
+            }
         }
+        if let Some(ref ret_ty) = self.expected_return_type {
+            // Don't use void or error types for type inference
+            if !matches!(ret_ty, Type::Void | Type::Error) {
+                return Some(ret_ty.clone());
+            }
+        }
+        None
     }
 
     /// Validate io.println format string arguments
@@ -554,15 +560,8 @@ impl TypeInferrer {
             }
         }
 
-        // No expected type - cannot infer type for integer literal
-        Err(AnalysisError::new_with_span(
-            &format!(
-                "Cannot infer type for integer literal {}. Add an explicit type annotation (e.g., ': i64')",
-                value
-            ),
-            span,
-        )
-        .with_module("infer"))
+        // No expected type - default to i64 for integer literals
+        Ok(Type::I64)
     }
 
     /// Infer type for float literal
@@ -589,15 +588,8 @@ impl TypeInferrer {
             }
         }
 
-        // No expected type - cannot infer type for float literal
-        Err(AnalysisError::new_with_span(
-            &format!(
-                "Cannot infer type for float literal {}. Add an explicit type annotation (e.g., ': f64')",
-                value
-            ),
-            span,
-        )
-        .with_module("infer"))
+        // No expected type - default to f64 for float literals
+        Ok(Type::F64)
     }
 
     /// Check if two types are compatible for assignment-like contexts.
