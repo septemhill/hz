@@ -219,6 +219,87 @@ fn main() void {
 }
 
 #[test]
+fn test_typed_u8_array_literal_preserves_element_types() {
+    use crate::ast::Type;
+    use crate::sema::infer::{TypedExprKind, TypedStmtKind};
+
+    let source = r#"
+fn main() void {
+    const g = [3]u8{1, 2, 3};
+}
+"#;
+
+    let typed_program = analyze_source_typed(source).expect("semantic analysis should succeed");
+    let main_fn = typed_program
+        .functions
+        .iter()
+        .find(|f| f.name == "main")
+        .expect("main function should exist");
+
+    let let_stmt = main_fn
+        .body
+        .iter()
+        .find(|stmt| matches!(&stmt.stmt, TypedStmtKind::Let { name, .. } if name == "g"))
+        .expect("main should contain g declaration");
+
+    let value = match &let_stmt.stmt {
+        TypedStmtKind::Let {
+            value: Some(value), ..
+        } => value,
+        other => panic!("expected let statement with initializer, got {:?}", other),
+    };
+
+    match &value.expr {
+        TypedExprKind::Array(elements) => {
+            assert!(elements.iter().all(|elem| elem.ty == Type::U8));
+        }
+        other => panic!("expected array literal, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_u8_array_literal_out_of_range_errors() {
+    let source = r#"
+fn main() void {
+    const g = [3]u8{1, 999, 3};
+}
+"#;
+
+    let result = analyze_source(source);
+    assert!(
+        result.is_err(),
+        "Expected error for out-of-range u8 array literal"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("out of range") && err.message.contains("u8"),
+        "Error should mention u8 range overflow: {}",
+        err
+    );
+}
+
+#[test]
+fn test_typed_u8_literal_out_of_range_errors() {
+    let source = r#"
+fn main() void {
+    const value: u8 = 999;
+}
+"#;
+
+    let result = analyze_source(source);
+    assert!(
+        result.is_err(),
+        "Expected error for out-of-range u8 literal"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("out of range") && err.message.contains("u8"),
+        "Error should mention u8 range overflow: {}",
+        err
+    );
+}
+
+#[test]
 fn test_binary_expression_types() {
     let source = r#"
 fn main() void {

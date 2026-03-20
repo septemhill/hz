@@ -510,6 +510,27 @@ impl TypeInferrer {
         matches!(ty, Type::F32 | Type::F64)
     }
 
+    fn infer_int_literal_type(&self, value: i64, span: &Span) -> AnalysisResult<Type> {
+        if let Some(expected_ty) = self.get_expected_type() {
+            if expected_ty.is_integer() {
+                if expected_ty.can_represent_int_literal(value) {
+                    return Ok(expected_ty.clone());
+                }
+
+                return Err(AnalysisError::new_with_span(
+                    &format!(
+                        "Integer literal {} is out of range for {}",
+                        value, expected_ty
+                    ),
+                    span,
+                )
+                .with_module("infer"));
+            }
+        }
+
+        Ok(Type::I64)
+    }
+
     /// Check if two types are compatible for assignment-like contexts.
     fn types_compatible(&self, expected: &Type, actual: &Type) -> bool {
         if expected == actual {
@@ -1047,7 +1068,7 @@ impl TypeInferrer {
         match expr {
             Expr::Int(value, _) => Ok(TypedExpr {
                 expr: TypedExprKind::Int(*value),
-                ty: Type::I64,
+                ty: self.infer_int_literal_type(*value, &span)?,
                 span,
             }),
             Expr::Float(value, _) => Ok(TypedExpr {
@@ -1165,16 +1186,51 @@ impl TypeInferrer {
                 // Prefer explicit type from AST, then context type
                 let expected_element_type = explicit_element_type.or(context_element_type);
 
+                let previous_expected_type = self.get_expected_type().cloned();
                 let mut typed_elements = Vec::new();
-                for elem in elements {
+                for (index, elem) in elements.iter().enumerate() {
                     // Set expected type for each element if we have an expected element type
                     if let Some(ref elem_ty) = expected_element_type {
                         self.set_expected_type(Some(elem_ty.clone()));
                     }
-                    typed_elements.push(self.infer_expr(elem)?);
-                    // Clear expected type after each element
-                    self.set_expected_type(None);
+                    let typed_elem = self.infer_expr(elem)?;
+                    self.set_expected_type(previous_expected_type.clone());
+
+                    if let Some(ref elem_ty) = expected_element_type {
+                        if !self.types_compatible(elem_ty, &typed_elem.ty) {
+                            return Err(AnalysisError::new_with_span(
+                                &format!(
+                                    "Array element #{} has type {}, expected {}",
+                                    index + 1,
+                                    typed_elem.ty,
+                                    elem_ty
+                                ),
+                                &typed_elem.span,
+                            )
+                            .with_module("infer"));
+                        }
+                    } else if let Some(first_ty) =
+                        typed_elements.first().map(|e: &TypedExpr| e.ty.clone())
+                    {
+                        if !self.types_compatible(&first_ty, &typed_elem.ty) {
+                            return Err(AnalysisError::new_with_span(
+                                &format!(
+                                    "Array element #{} has type {}, expected {}",
+                                    index + 1,
+                                    typed_elem.ty,
+                                    first_ty
+                                ),
+                                &typed_elem.span,
+                            )
+                            .with_module("infer"));
+                        }
+                    }
+
+                    typed_elements.push(typed_elem);
                 }
+
+                self.set_expected_type(previous_expected_type);
+
                 // Determine the element type: prefer explicit type, then context type, otherwise use first element's type
                 let element_type = if let Some(elem_ty) = expected_element_type {
                     elem_ty

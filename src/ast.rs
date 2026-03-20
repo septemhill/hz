@@ -75,6 +75,41 @@ impl Type {
         }
     }
 
+    /// Check if this type is an integer type
+    pub fn is_integer(&self) -> bool {
+        matches!(
+            self,
+            Type::I8
+                | Type::I16
+                | Type::I32
+                | Type::I64
+                | Type::U8
+                | Type::U16
+                | Type::U32
+                | Type::U64
+        )
+    }
+
+    /// Check if this type is a signed integer type
+    pub fn is_signed_integer(&self) -> bool {
+        matches!(self, Type::I8 | Type::I16 | Type::I32 | Type::I64)
+    }
+
+    /// Check whether an integer literal can be represented by this type
+    pub fn can_represent_int_literal(&self, value: i64) -> bool {
+        match self {
+            Type::I8 => i8::try_from(value).is_ok(),
+            Type::I16 => i16::try_from(value).is_ok(),
+            Type::I32 => i32::try_from(value).is_ok(),
+            Type::I64 => true,
+            Type::U8 => u8::try_from(value).is_ok(),
+            Type::U16 => u16::try_from(value).is_ok(),
+            Type::U32 => u32::try_from(value).is_ok(),
+            Type::U64 => value >= 0,
+            _ => false,
+        }
+    }
+
     /// Recursively replace `SelfType` and `Custom("Self")` with the given struct name
     pub fn replace_self(&mut self, struct_name: &str) {
         match self {

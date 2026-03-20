@@ -133,6 +133,38 @@ mod tests {
     }
 
     #[test]
+    fn test_lower_typed_array_uses_declared_element_type_for_literals() {
+        let mut ctx = LoweringContext::new();
+        let expr = Expr::Array(
+            vec![
+                Expr::Int(1, dummy_span()),
+                Expr::Int(2, dummy_span()),
+                Expr::Int(3, dummy_span()),
+            ],
+            Some(Type::U8),
+            dummy_span(),
+        );
+        let hir_expr = ctx.lower_expr(&expr);
+
+        match hir_expr {
+            hir::HirExpr::Array { vals, ty, .. } => {
+                assert_eq!(
+                    ty,
+                    Type::Array {
+                        size: Some(3),
+                        element_type: Box::new(Type::U8),
+                    }
+                );
+                assert!(
+                    vals.iter()
+                        .all(|val| matches!(val, hir::HirExpr::Int(_, Type::U8, _)))
+                );
+            }
+            _ => panic!("Expected Array expression"),
+        }
+    }
+
+    #[test]
     fn test_lower_ident() {
         let mut ctx = LoweringContext::new();
         let expr = Expr::Ident("my_var".to_string(), dummy_span());
@@ -491,6 +523,7 @@ pub struct LoweringContext {
     errors: std::collections::HashMap<String, ast::ErrorDef>,
     function_returns: std::collections::HashMap<String, ast::Type>,
     local_scopes: Vec<std::collections::HashMap<String, ast::Type>>,
+    expected_type: Option<ast::Type>,
 }
 
 impl LoweringContext {
@@ -500,6 +533,7 @@ impl LoweringContext {
             errors: std::collections::HashMap::new(),
             function_returns: std::collections::HashMap::new(),
             local_scopes: Vec::new(),
+            expected_type: None,
         }
     }
 
@@ -536,10 +570,23 @@ impl LoweringContext {
         None
     }
 
+    fn with_expected_type<T>(
+        &mut self,
+        expected_type: Option<ast::Type>,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let previous_expected_type = self.expected_type.clone();
+        self.expected_type = expected_type;
+        let result = f(self);
+        self.expected_type = previous_expected_type;
+        result
+    }
+
     pub fn lower_program(&mut self, program: &ast::Program) -> hir::HirProgram {
         self.errors.clear();
         self.function_returns.clear();
         self.local_scopes.clear();
+        self.expected_type = None;
 
         // Collect errors from the program
         for e in &program.errors {
@@ -793,7 +840,9 @@ impl LoweringContext {
                 let inferred_ty = value.as_ref().and_then(|v| self.infer_type(v));
 
                 let ty = ty.clone().or(inferred_ty).unwrap_or(ast::Type::I64);
-                let lowered_value = value.as_ref().map(|v| self.lower_expr(v));
+                let lowered_value = value
+                    .as_ref()
+                    .map(|v| self.with_expected_type(Some(ty.clone()), |ctx| ctx.lower_expr(v)));
 
                 if let Some(bindings) = names {
                     if let ast::Type::Tuple(element_tys) = &ty {
@@ -941,9 +990,17 @@ impl LoweringContext {
                         span: *span,
                     }
                 } else {
+                    let target_expected_ty = if target.contains('.') {
+                        None
+                    } else {
+                        self.resolve_local(target)
+                            .or_else(|| self.symbol_table.resolve(target).map(|s| s.ty.clone()))
+                    };
+
                     hir::HirStmt::Assign {
                         target: target.clone(),
-                        value: self.lower_expr(value),
+                        value: self
+                            .with_expected_type(target_expected_ty, |ctx| ctx.lower_expr(value)),
                         span: *span,
                     }
                 }
@@ -1029,7 +1086,15 @@ impl LoweringContext {
 
     fn lower_expr(&mut self, e: &ast::Expr) -> hir::HirExpr {
         match e {
-            ast::Expr::Int(v, span) => hir::HirExpr::Int(*v, ast::Type::I64, *span),
+            ast::Expr::Int(v, span) => {
+                let ty = self
+                    .expected_type
+                    .as_ref()
+                    .filter(|ty| ty.is_integer())
+                    .cloned()
+                    .unwrap_or(ast::Type::I64);
+                hir::HirExpr::Int(*v, ty, *span)
+            }
             ast::Expr::Float(v, span) => hir::HirExpr::Float(*v, ast::Type::F64, *span),
             ast::Expr::Bool(v, span) => hir::HirExpr::Bool(*v, ast::Type::Bool, *span),
             ast::Expr::String(v, span) => hir::HirExpr::String(
@@ -1040,7 +1105,15 @@ impl LoweringContext {
                 },
                 *span,
             ),
-            ast::Expr::Char(v, span) => hir::HirExpr::Char(*v, ast::Type::I8, *span),
+            ast::Expr::Char(v, span) => {
+                let ty = self
+                    .expected_type
+                    .as_ref()
+                    .filter(|ty| ty.is_integer())
+                    .cloned()
+                    .unwrap_or(ast::Type::I8);
+                hir::HirExpr::Char(*v, ty, *span)
+            }
             ast::Expr::Null(span) => {
                 hir::HirExpr::Null(ast::Type::Pointer(Box::new(ast::Type::Void)), *span)
             }
@@ -1073,16 +1146,32 @@ impl LoweringContext {
                 span: *span,
             },
             ast::Expr::Array(vals, explicit_ty, span) => {
-                // Use explicit type if provided, otherwise infer from first element
+                let context_element_type = match self.expected_type.as_ref() {
+                    Some(ast::Type::Array { element_type, .. }) => {
+                        Some(element_type.as_ref().clone())
+                    }
+                    _ => None,
+                };
+
+                // Use explicit type if provided, otherwise infer from context or first element.
                 let element_type = if let Some(ty) = explicit_ty {
                     ty.clone()
+                } else if let Some(ty) = context_element_type {
+                    ty
                 } else if let Some(first) = vals.first() {
                     self.infer_type(first).unwrap_or(ast::Type::I64)
                 } else {
                     ast::Type::I64
                 };
                 hir::HirExpr::Array {
-                    vals: vals.iter().map(|v| self.lower_expr(v)).collect(),
+                    vals: vals
+                        .iter()
+                        .map(|v| {
+                            self.with_expected_type(Some(element_type.clone()), |ctx| {
+                                ctx.lower_expr(v)
+                            })
+                        })
+                        .collect(),
                     ty: ast::Type::Array {
                         size: Some(vals.len()),
                         element_type: Box::new(element_type),

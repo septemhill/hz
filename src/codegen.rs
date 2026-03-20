@@ -11,8 +11,7 @@ use inkwell::execution_engine::ExecutionEngine;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
-    PointerValue,
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, PointerValue,
 };
 
 use crate::ast::*;
@@ -72,6 +71,13 @@ pub struct CodeGenerator<'ctx> {
 
 /// Result of code generation
 pub type CodegenResult<T> = Result<T, Box<dyn Error>>;
+
+#[derive(Clone, Copy)]
+enum PrintfArgKind {
+    String,
+    Integer,
+    Float,
+}
 
 #[allow(unused)]
 impl<'ctx> CodeGenerator<'ctx> {
@@ -232,9 +238,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         is_main: bool,
     ) -> Option<BasicValueEnum<'ctx>> {
         match self.llvm_function_return_type(return_ty, is_main) {
-            Some(llvm_ty) if is_main => {
-                Some(self.context.i64_type().const_int(0, false).into())
-            }
+            Some(llvm_ty) if is_main => Some(self.context.i64_type().const_int(0, false).into()),
             Some(llvm_ty) => Some(llvm_ty.const_zero()),
             None => None,
         }
@@ -276,9 +280,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             .get_global("__lang_last_error_message")
             .unwrap_or_else(|| {
                 let ptr_ty = self.context.ptr_type(inkwell::AddressSpace::default());
-                let global =
-                    self.module
-                        .add_global(ptr_ty, None, "__lang_last_error_message");
+                let global = self
+                    .module
+                    .add_global(ptr_ty, None, "__lang_last_error_message");
                 global.set_initializer(&ptr_ty.const_null());
                 global
             })
@@ -294,10 +298,14 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     fn set_last_error_message(&mut self, message: &str) -> CodegenResult<()> {
         let last_error = self.get_or_create_last_error_global();
-        let message_ptr =
-            unsafe { self.builder.build_global_string(message, "last_error_message") }?;
-        self.builder
-            .build_store(last_error.as_pointer_value(), message_ptr.as_pointer_value())?;
+        let message_ptr = unsafe {
+            self.builder
+                .build_global_string(message, "last_error_message")
+        }?;
+        self.builder.build_store(
+            last_error.as_pointer_value(),
+            message_ptr.as_pointer_value(),
+        )?;
         Ok(())
     }
 
@@ -318,11 +326,15 @@ impl<'ctx> CodeGenerator<'ctx> {
             .builder
             .build_is_not_null(last_error_ptr, "has_last_error_message")?;
 
-        let print_block = self.context.append_basic_block(function, "main_error_print");
+        let print_block = self
+            .context
+            .append_basic_block(function, "main_error_print");
         let fallback_block = self
             .context
             .append_basic_block(function, "main_error_print_fallback");
-        let merge_block = self.context.append_basic_block(function, "main_error_print_done");
+        let merge_block = self
+            .context
+            .append_basic_block(function, "main_error_print_done");
 
         self.builder
             .build_conditional_branch(has_message, print_block, fallback_block)?;
@@ -381,6 +393,55 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .result_inner()
                 .unwrap_or_else(|| self.hir_expr_type(expr)),
             hir::HirExpr::Catch { expr, .. } => self.hir_expr_type(expr),
+        }
+    }
+
+    fn build_typed_int_constant(&self, value: i64, ty: &Type) -> BasicValueEnum<'ctx> {
+        match self.llvm_type(ty) {
+            BasicTypeEnum::IntType(int_ty) => int_ty
+                .const_int(value as u64, ty.is_signed_integer())
+                .into(),
+            _ => self.context.i64_type().const_int(value as u64, true).into(),
+        }
+    }
+
+    fn promote_printf_arg(
+        &self,
+        value: BasicValueEnum<'ctx>,
+        kind: PrintfArgKind,
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        match kind {
+            PrintfArgKind::String => Ok(value),
+            PrintfArgKind::Integer => {
+                if value.is_int_value() {
+                    let int_val = value.into_int_value();
+                    if int_val.get_type().get_bit_width() == 64 {
+                        Ok(value)
+                    } else {
+                        Ok(self
+                            .builder
+                            .build_int_cast(int_val, self.context.i64_type(), "printf_int")?
+                            .into())
+                    }
+                } else {
+                    Ok(value)
+                }
+            }
+            PrintfArgKind::Float => {
+                if value.is_float_value() {
+                    let float_val = value.into_float_value();
+                    if float_val.get_type().get_bit_width() == 64 {
+                        Ok(value)
+                    } else {
+                        Ok(self
+                            .builder
+                            .build_float_cast(float_val, self.context.f64_type(), "printf_float")?
+                            .into())
+                    }
+                } else {
+                    Ok(value)
+                }
+            }
         }
     }
 
@@ -485,7 +546,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.generate_hir_stmt(stmt)?;
                     // Execute defers AFTER the last statement
                     self.pop_defer_scope()?;
-                    if let Some(default_ret) = self.default_llvm_return_value(&hir_fn.return_ty, is_main)
+                    if let Some(default_ret) =
+                        self.default_llvm_return_value(&hir_fn.return_ty, is_main)
                     {
                         self.builder.build_return(Some(&default_ret))?;
                     } else {
@@ -708,12 +770,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                             let flag = self.context.bool_type().const_int(1, false);
                             let result_val = self
                                 .builder
-                                .build_insert_value(
-                                    result_type.const_zero(),
-                                    flag,
-                                    1,
-                                    "ret_error",
-                                )?
+                                .build_insert_value(result_type.const_zero(), flag, 1, "ret_error")?
                                 .into_struct_value()
                                 .as_basic_value_enum();
                             self.builder.build_return(Some(&result_val))?;
@@ -1399,9 +1456,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     fn generate_hir_expr(&mut self, expr: &hir::HirExpr) -> CodegenResult<BasicValueEnum<'ctx>> {
         match expr {
-            hir::HirExpr::Int(v, _, _) => {
-                Ok(self.context.i64_type().const_int(*v as u64, false).into())
-            }
+            hir::HirExpr::Int(v, ty, _) => Ok(self.build_typed_int_constant(*v, ty)),
             hir::HirExpr::Float(v, _, _) => Ok(self.context.f64_type().const_float(*v).into()),
             hir::HirExpr::Bool(v, _, _) => Ok(self
                 .context
@@ -1416,7 +1471,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::Char(v, ty, _) => {
                 // Use the type from the HIR expression if available
                 match self.llvm_type(ty) {
-                    BasicTypeEnum::IntType(t) => Ok(t.const_int(*v as u64, false).into()),
+                    BasicTypeEnum::IntType(_) => Ok(self.build_typed_int_constant(*v as i64, ty)),
                     _ => Ok(self.context.i64_type().const_int(*v as u64, false).into()),
                 }
             }
@@ -1468,11 +1523,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::Array { vals, ty, .. } => {
                 // Create an LLVM array from values
                 let llvm_type = self.llvm_type(ty);
+                let expected_element_type = match ty {
+                    Type::Array { element_type, .. } => element_type.as_ref(),
+                    _ => return Err("Array expression is missing an array type".into()),
+                };
 
                 // Generate element values
                 let mut elem_vals: Vec<inkwell::values::BasicValueEnum> = Vec::new();
                 for v in vals {
-                    elem_vals.push(self.generate_hir_expr(v)?);
+                    let raw_val = self.generate_hir_expr(v)?;
+                    elem_vals.push(self.coerce_type(raw_val, expected_element_type)?);
                 }
 
                 // Create array constant using const_array
@@ -1778,8 +1838,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 }
 
                                 // Create function type for indirect call using existing method
-                                let fn_sig =
-                                    self.build_function_type(&return_type, &params, false);
+                                let fn_sig = self.build_function_type(&return_type, &params, false);
 
                                 // Cast pointer to function pointer type
                                 let casted_ptr = self
@@ -2317,7 +2376,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Check if first argument is a string literal for format string handling
             if let hir::HirExpr::String(format_str_value, _, _) = &args[0] {
                 // Parse format string and handle placeholders
-                let (printf_format, arg_indices) =
+                let (printf_format, arg_specs) =
                     self.parse_hir_format_string(format_str_value, args.len() - 1)?;
 
                 // Create format string for printf
@@ -2327,9 +2386,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let mut llvm_args: Vec<BasicMetadataValueEnum<'_>> =
                     vec![fmt_str.as_basic_value_enum().into()];
 
-                for &idx in &arg_indices {
+                for &(idx, kind) in &arg_specs {
                     if idx + 1 < args.len() {
-                        let val = self.generate_hir_expr(&args[idx + 1])?;
+                        let raw_val = self.generate_hir_expr(&args[idx + 1])?;
+                        let val = self.promote_printf_arg(raw_val, kind)?;
                         llvm_args.push(val.into());
                     }
                 }
@@ -2337,23 +2397,22 @@ impl<'ctx> CodeGenerator<'ctx> {
                 self.builder.build_call(printf, &llvm_args, "")?;
             } else {
                 // Generate the format string and argument based on the argument type
-                let arg = self.generate_hir_expr(&args[0])?;
+                let raw_arg = self.generate_hir_expr(&args[0])?;
 
                 // Determine the format specifier based on the type
-                let (format_str, arg_val) = match arg {
-                    BasicValueEnum::IntValue(int_val) => {
-                        let bit_width = int_val.get_type().get_bit_width();
-                        if bit_width == 1 || bit_width == 32 {
-                            ("%d\n", arg)
-                        } else {
-                            ("%lld\n", arg)
-                        }
-                    }
+                let (format_str, arg_val) = match raw_arg {
                     BasicValueEnum::PointerValue(_) => {
                         // String pointers use %s format
-                        ("%s\n", arg)
+                        ("%s\n", raw_arg)
                     }
-                    _ => ("%lld\n", arg),
+                    BasicValueEnum::FloatValue(_) => (
+                        "%f\n",
+                        self.promote_printf_arg(raw_arg, PrintfArgKind::Float)?,
+                    ),
+                    _ => (
+                        "%lld\n",
+                        self.promote_printf_arg(raw_arg, PrintfArgKind::Integer)?,
+                    ),
                 };
 
                 let format_ptr = unsafe { self.builder.build_global_string(format_str, "fmt") }?;
@@ -2374,11 +2433,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         &self,
         format_str: &str,
         num_args: usize,
-    ) -> CodegenResult<(String, Vec<usize>)> {
+    ) -> CodegenResult<(String, Vec<(usize, PrintfArgKind)>)> {
         let mut result = String::new();
         let mut arg_index = 0;
         let mut chars = format_str.chars().peekable();
-        let mut arg_indices: Vec<usize> = Vec::new();
+        let mut arg_specs: Vec<(usize, PrintfArgKind)> = Vec::new();
 
         while let Some(c) = chars.next() {
             if c == '{' {
@@ -2399,7 +2458,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // String (ASCII) - requires u8 array/slice
                         result.push_str("%s");
                         if arg_index < num_args {
-                            arg_indices.push(arg_index);
+                            arg_specs.push((arg_index, PrintfArgKind::String));
                             arg_index += 1;
                         }
                     }
@@ -2407,7 +2466,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // Integer
                         result.push_str("%lld");
                         if arg_index < num_args {
-                            arg_indices.push(arg_index);
+                            arg_specs.push((arg_index, PrintfArgKind::Integer));
                             arg_index += 1;
                         }
                     }
@@ -2415,7 +2474,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // Float
                         result.push_str("%f");
                         if arg_index < num_args {
-                            arg_indices.push(arg_index);
+                            arg_specs.push((arg_index, PrintfArgKind::Float));
                             arg_index += 1;
                         }
                     }
@@ -2423,7 +2482,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // Hex
                         result.push_str("%llx");
                         if arg_index < num_args {
-                            arg_indices.push(arg_index);
+                            arg_specs.push((arg_index, PrintfArgKind::Integer));
                             arg_index += 1;
                         }
                     }
@@ -2431,7 +2490,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // Empty placeholder - just {}
                         result.push_str("%lld");
                         if arg_index < num_args {
-                            arg_indices.push(arg_index);
+                            arg_specs.push((arg_index, PrintfArgKind::Integer));
                             arg_index += 1;
                         }
                     }
@@ -2477,7 +2536,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Add newline at the end
         result.push('\n');
 
-        Ok((result, arg_indices))
+        Ok((result, arg_specs))
     }
 
     /// Generate code for is_null and is_not_null built-in functions
@@ -3680,7 +3739,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             // Check if first argument is a string literal
             if let Expr::String(format_str, _) = format_arg {
                 // Parse format string and handle placeholders
-                let (printf_format, arg_indices) =
+                let (printf_format, arg_specs) =
                     self.parse_format_string(format_str, args.len() - 1)?;
 
                 // Create format string for printf
@@ -3690,23 +3749,33 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let mut llvm_args: Vec<BasicMetadataValueEnum<'_>> =
                     vec![fmt_str.as_basic_value_enum().into()];
 
-                for &idx in &arg_indices {
-                    let val = self.generate_expr(&args[idx + 1])?;
+                for &(idx, kind) in &arg_specs {
+                    let raw_val = self.generate_expr(&args[idx + 1])?;
+                    let val = self.promote_printf_arg(raw_val, kind)?;
                     llvm_args.push(val.into());
                 }
 
                 self.builder.build_call(printf, &llvm_args, "")?;
             } else {
                 // Not a string literal - generate as before (simple print)
-                let arg = self.generate_expr(&args[0])?;
-                let arg_type = arg.get_type();
+                let raw_arg = self.generate_expr(&args[0])?;
+                let arg_type = raw_arg.get_type();
 
                 if let BasicTypeEnum::PointerType(_) = arg_type {
                     // It's a string pointer - use %s format
                     let fmt_str = unsafe { self.builder.build_global_string("%s\n", "fmt") }?;
                     let metadata_arg: inkwell::values::BasicMetadataValueEnum<'_> =
                         fmt_str.as_basic_value_enum().into();
-                    let arg_metadata: inkwell::values::BasicMetadataValueEnum<'_> = arg.into();
+                    let arg_metadata: inkwell::values::BasicMetadataValueEnum<'_> = raw_arg.into();
+                    self.builder
+                        .build_call(printf, &[metadata_arg, arg_metadata], "")?;
+                } else if raw_arg.is_float_value() {
+                    let fmt_str = unsafe { self.builder.build_global_string("%f\n", "fmt") }?;
+                    let metadata_arg: inkwell::values::BasicMetadataValueEnum<'_> =
+                        fmt_str.as_basic_value_enum().into();
+                    let arg_metadata: inkwell::values::BasicMetadataValueEnum<'_> = self
+                        .promote_printf_arg(raw_arg, PrintfArgKind::Float)?
+                        .into();
                     self.builder
                         .build_call(printf, &[metadata_arg, arg_metadata], "")?;
                 } else {
@@ -3714,7 +3783,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     let fmt_str = unsafe { self.builder.build_global_string("%lld\n", "fmt") }?;
                     let metadata_arg: inkwell::values::BasicMetadataValueEnum<'_> =
                         fmt_str.as_basic_value_enum().into();
-                    let arg_metadata: inkwell::values::BasicMetadataValueEnum<'_> = arg.into();
+                    let arg_metadata: inkwell::values::BasicMetadataValueEnum<'_> = self
+                        .promote_printf_arg(raw_arg, PrintfArgKind::Integer)?
+                        .into();
                     self.builder
                         .build_call(printf, &[metadata_arg, arg_metadata], "")?;
                 }
@@ -3730,11 +3801,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         &self,
         format_str: &str,
         num_args: usize,
-    ) -> CodegenResult<(String, Vec<usize>)> {
+    ) -> CodegenResult<(String, Vec<(usize, PrintfArgKind)>)> {
         let mut result = String::new();
         let mut arg_index = 0;
         let mut chars = format_str.chars().peekable();
-        let mut arg_indices: Vec<usize> = Vec::new();
+        let mut arg_specs: Vec<(usize, PrintfArgKind)> = Vec::new();
 
         while let Some(c) = chars.next() {
             if c == '{' {
@@ -3755,7 +3826,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // String (ASCII) - requires u8 array/slice
                         result.push_str("%s");
                         if arg_index < num_args {
-                            arg_indices.push(arg_index);
+                            arg_specs.push((arg_index, PrintfArgKind::String));
                             arg_index += 1;
                         }
                     }
@@ -3763,7 +3834,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // Integer
                         result.push_str("%lld");
                         if arg_index < num_args {
-                            arg_indices.push(arg_index);
+                            arg_specs.push((arg_index, PrintfArgKind::Integer));
                             arg_index += 1;
                         }
                     }
@@ -3771,7 +3842,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // Float
                         result.push_str("%f");
                         if arg_index < num_args {
-                            arg_indices.push(arg_index);
+                            arg_specs.push((arg_index, PrintfArgKind::Float));
                             arg_index += 1;
                         }
                     }
@@ -3779,7 +3850,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // Hex
                         result.push_str("%llx");
                         if arg_index < num_args {
-                            arg_indices.push(arg_index);
+                            arg_specs.push((arg_index, PrintfArgKind::Integer));
                             arg_index += 1;
                         }
                     }
@@ -3787,7 +3858,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // Empty placeholder - just {}
                         result.push_str("%lld");
                         if arg_index < num_args {
-                            arg_indices.push(arg_index);
+                            arg_specs.push((arg_index, PrintfArgKind::Integer));
                             arg_index += 1;
                         }
                     }
@@ -3833,7 +3904,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         // Add newline at the end
         result.push('\n');
 
-        Ok((result, arg_indices))
+        Ok((result, arg_specs))
     }
 
     /// Generate if statement

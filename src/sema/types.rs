@@ -13,7 +13,9 @@ pub struct TypeAnalyzer {
 
 fn destructured_binding_type(aggregate_ty: &crate::ast::Type, index: usize) -> crate::ast::Type {
     match aggregate_ty {
-        crate::ast::Type::Tuple(types) => types.get(index).cloned().unwrap_or(crate::ast::Type::I64),
+        crate::ast::Type::Tuple(types) => {
+            types.get(index).cloned().unwrap_or(crate::ast::Type::I64)
+        }
         _ => aggregate_ty.clone(),
     }
 }
@@ -132,6 +134,84 @@ impl TypeAnalyzer {
             crate::ast::Stmt::Assign { value, .. } => self.expr_find_try(value),
             crate::ast::Stmt::Import { .. } => None,
             crate::ast::Stmt::Break { .. } => None,
+        }
+    }
+
+    fn validate_expr_against_type(
+        &mut self,
+        expr: &crate::ast::Expr,
+        expected: &crate::ast::Type,
+    ) -> AnalysisResult<()> {
+        match expr {
+            crate::ast::Expr::Int(value, span) if expected.is_integer() => {
+                if expected.can_represent_int_literal(*value) {
+                    Ok(())
+                } else {
+                    Err(AnalysisError::new_with_span(
+                        &format!("Integer literal {} is out of range for {}", value, expected),
+                        span,
+                    )
+                    .with_module("types"))
+                }
+            }
+            crate::ast::Expr::Array(elements, explicit_ty, span) => {
+                let expected_element_type = match expected {
+                    crate::ast::Type::Array { element_type, .. } => {
+                        Some(element_type.as_ref().clone())
+                    }
+                    _ => explicit_ty.clone(),
+                };
+
+                if let (
+                    crate::ast::Type::Array {
+                        size: Some(expected_size),
+                        ..
+                    },
+                    elements_len,
+                ) = (expected, elements.len())
+                {
+                    if *expected_size != elements_len {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "Array literal expected {} elements, found {}",
+                                expected_size, elements_len
+                            ),
+                            span,
+                        )
+                        .with_module("types"));
+                    }
+                }
+
+                if let Some(element_type) = expected_element_type {
+                    for elem in elements {
+                        self.validate_expr_against_type(elem, &element_type)?;
+                    }
+                }
+
+                Ok(())
+            }
+            crate::ast::Expr::Tuple(elements, span) => {
+                if let crate::ast::Type::Tuple(expected_types) = expected {
+                    if elements.len() != expected_types.len() {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "Tuple literal expected {} elements, found {}",
+                                expected_types.len(),
+                                elements.len()
+                            ),
+                            span,
+                        )
+                        .with_module("types"));
+                    }
+
+                    for (elem, elem_ty) in elements.iter().zip(expected_types.iter()) {
+                        self.validate_expr_against_type(elem, elem_ty)?;
+                    }
+                }
+
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 
@@ -275,6 +355,7 @@ impl TypeAnalyzer {
                     // (like try/catch) and type mismatches are validated.
                     let explicit_ty = ty.clone().unwrap();
                     let value_ty = if let Some(val_expr) = value {
+                        self.validate_expr_against_type(val_expr, &explicit_ty)?;
                         Some(self.analyze_expression(val_expr)?)
                     } else {
                         None
@@ -373,6 +454,7 @@ impl TypeAnalyzer {
                                 )
                                 .with_module("types")
                             })?;
+                        self.validate_expr_against_type(value, &symbol_ty)?;
                         let expr_ty = self.analyze_expression(value)?;
                         if !self.types_compatible(&symbol_ty, &expr_ty) {
                             return Err(AnalysisError::new_with_span(
@@ -567,11 +649,38 @@ impl TypeAnalyzer {
                         )
                     })
             }
-            crate::ast::Expr::Array(elements, _, _) => {
-                for elem in elements {
-                    self.analyze_expression(elem)?;
+            crate::ast::Expr::Array(elements, explicit_ty, span) => {
+                let mut element_type = explicit_ty.clone();
+
+                for (index, elem) in elements.iter().enumerate() {
+                    if let Some(expected_elem_ty) = element_type.as_ref() {
+                        self.validate_expr_against_type(elem, expected_elem_ty)?;
+                    }
+
+                    let elem_ty = self.analyze_expression(elem)?;
+
+                    if let Some(expected_elem_ty) = element_type.as_ref() {
+                        if !self.types_compatible(expected_elem_ty, &elem_ty) {
+                            return Err(AnalysisError::new_with_span(
+                                &format!(
+                                    "Array element #{} has type {}, expected {}",
+                                    index + 1,
+                                    elem_ty,
+                                    expected_elem_ty
+                                ),
+                                span,
+                            )
+                            .with_module("types"));
+                        }
+                    } else {
+                        element_type = Some(elem_ty);
+                    }
                 }
-                Ok(crate::ast::Type::I64)
+
+                Ok(crate::ast::Type::Array {
+                    size: Some(elements.len()),
+                    element_type: Box::new(element_type.unwrap_or(crate::ast::Type::I8)),
+                })
             }
             crate::ast::Expr::Binary {
                 op,
