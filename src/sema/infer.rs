@@ -510,6 +510,27 @@ impl TypeInferrer {
         matches!(ty, Type::F32 | Type::F64)
     }
 
+    /// Check if two types are compatible for assignment-like contexts.
+    fn types_compatible(&self, expected: &Type, actual: &Type) -> bool {
+        if expected == actual {
+            return true;
+        }
+
+        if let Type::Option(inner) = expected {
+            if self.types_compatible(inner, actual) {
+                return true;
+            }
+        }
+
+        if let Type::Option(inner) = actual {
+            if self.types_compatible(expected, inner) {
+                return true;
+            }
+        }
+
+        self.is_integer_type(expected) && self.is_integer_type(actual)
+    }
+
     /// Infer types for an entire program
     pub fn infer_program(&mut self, program: &Program) -> AnalysisResult<TypedProgram> {
         // Populate structs, enums and errors maps for exhaustiveness checking and member access refinement
@@ -751,6 +772,21 @@ impl TypeInferrer {
                 } else {
                     None
                 };
+
+                if let Some(explicit_ty) = ty {
+                    if let Some(typed_value) = &typed_value {
+                        if !self.types_compatible(explicit_ty, &typed_value.ty) {
+                            return Err(AnalysisError::new_with_span(
+                                &format!(
+                                    "Type mismatch in declaration '{}': expected {}, found {}",
+                                    name, explicit_ty, typed_value.ty
+                                ),
+                                span,
+                            )
+                            .with_module("infer"));
+                        }
+                    }
+                }
 
                 Ok(TypedStmt {
                     stmt: TypedStmtKind::Let {
@@ -1609,7 +1645,14 @@ impl TypeInferrer {
                 let ty = if let Type::Result(inner) = &typed_expr.ty {
                     inner.as_ref().clone()
                 } else {
-                    typed_expr.ty.clone()
+                    return Err(AnalysisError::new_with_span(
+                        &format!(
+                            "Try expression requires Result type, found {}",
+                            typed_expr.ty
+                        ),
+                        span,
+                    )
+                    .with_module("infer"));
                 };
 
                 Ok(TypedExpr {
@@ -1627,30 +1670,57 @@ impl TypeInferrer {
                 span,
             } => {
                 let typed_expr = self.infer_expr(expr)?;
+                let result_inner_ty = if let Type::Result(inner) = &typed_expr.ty {
+                    inner.as_ref().clone()
+                } else {
+                    return Err(AnalysisError::new_with_span(
+                        &format!(
+                            "catch expression requires a Result type, expected Result<T> but found {}",
+                            typed_expr.ty
+                        ),
+                        span,
+                    )
+                    .with_module("infer"));
+                };
 
                 // Handle error variable scope
                 let has_error_var = error_var.is_some();
                 if let Some(ev) = error_var {
+                    self.symbol_table.enter_scope();
                     self.symbol_table
                         .define(ev.clone(), Type::Error, Visibility::Private, false);
                 }
 
-                let typed_body = self.infer_expr(body)?;
+                let previous_expected_type = self.get_expected_type().cloned();
+                self.set_expected_type(Some(result_inner_ty.clone()));
+                let typed_body_result = self.infer_expr(body);
+                self.set_expected_type(previous_expected_type);
 
                 // Remove error variable from scope
                 if has_error_var {
                     self.symbol_table.exit_scope();
                 }
 
-                // Catch expression returns the body type
-                let body_ty = typed_body.ty.clone();
+                let typed_body = typed_body_result?;
+
+                if !self.types_compatible(&result_inner_ty, &typed_body.ty) {
+                    return Err(AnalysisError::new_with_span(
+                        &format!(
+                            "catch body type mismatch: expected {}, found {}",
+                            result_inner_ty, typed_body.ty
+                        ),
+                        span,
+                    )
+                    .with_module("infer"));
+                }
+
                 Ok(TypedExpr {
                     expr: TypedExprKind::Catch {
                         expr: Box::new(typed_expr),
                         error_var: error_var.clone(),
                         body: Box::new(typed_body),
                     },
-                    ty: body_ty,
+                    ty: result_inner_ty,
                     span: *span,
                 })
             }

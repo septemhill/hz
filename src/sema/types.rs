@@ -271,8 +271,14 @@ impl TypeAnalyzer {
                         );
                     }
                 } else {
-                    // Has explicit type - skip detailed checking, just define in symbol table
+                    // Has explicit type - still analyze the initializer so nested expressions
+                    // (like try/catch) and type mismatches are validated.
                     let explicit_ty = ty.clone().unwrap();
+                    let value_ty = if let Some(val_expr) = value {
+                        Some(self.analyze_expression(val_expr)?)
+                    } else {
+                        None
+                    };
 
                     // Define the variable in the symbol table
                     if let Some(ns) = names {
@@ -310,6 +316,19 @@ impl TypeAnalyzer {
                             Visibility::Private,
                             matches!(mutability, crate::ast::Mutability::Const),
                         );
+                    }
+
+                    if let Some(value_ty) = value_ty {
+                        if !self.types_compatible(&explicit_ty, &value_ty) {
+                            return Err(AnalysisError::new_with_span(
+                                &format!(
+                                    "Type mismatch in declaration '{}': expected {}, found {}",
+                                    name, explicit_ty, value_ty
+                                ),
+                                span,
+                            )
+                            .with_module("types"));
+                        }
                     }
                 }
 
@@ -779,7 +798,11 @@ impl TypeAnalyzer {
                         AnalysisError::new_with_span("Try expression requires Result type", span)
                     })
                 } else {
-                    Ok(expr_ty)
+                    Err(AnalysisError::new_with_span(
+                        &format!("Try expression requires Result type, found {}", expr_ty),
+                        span,
+                    )
+                    .with_module("types"))
                 }
             }
             crate::ast::Expr::Catch {
