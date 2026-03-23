@@ -1267,13 +1267,29 @@ impl LoweringContext {
             }
             ast::Expr::Block { stmts, span } => {
                 self.enter_local_scope();
-                let lowered_stmts = stmts.iter().map(|s| self.lower_stmt(s)).collect();
+                let mut lowered_stmts = Vec::new();
+                let mut block_expr = None;
+                let mut block_ty = ast::Type::Void;
+
+                for (i, s) in stmts.iter().enumerate() {
+                    if i == stmts.len() - 1 {
+                        if let ast::Stmt::Expr { expr, .. } = s {
+                            block_ty = self.infer_type(expr).unwrap_or(ast::Type::Void);
+                            let lowered_e = self.with_expected_type(self.expected_type.clone(), |ctx| {
+                                ctx.lower_expr(expr)
+                            });
+                            block_expr = Some(Box::new(lowered_e));
+                            continue;
+                        }
+                    }
+                    lowered_stmts.push(self.lower_stmt(s));
+                }
                 self.exit_local_scope();
 
                 hir::HirExpr::Block {
                     stmts: lowered_stmts,
-                    expr: None,
-                    ty: ast::Type::Void, // Placeholder
+                    expr: block_expr,
+                    ty: block_ty,
                     span: *span,
                 }
             }

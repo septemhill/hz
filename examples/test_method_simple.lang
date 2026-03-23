@@ -1,3 +1,0 @@
-pub fn create() i32 {
-    return 42;
-}

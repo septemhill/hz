@@ -20,6 +20,58 @@ ANSI_RED = "\033[31m"
 ANSI_GREEN = "\033[32m"
 ANSI_RESET = "\033[0m"
 
+# Examples that are expected to compile successfully and have .expect output files
+EXPECTED_TO_COMPILE: list[str] = [
+    "examples/test_break_inner_loop.lang",
+    "examples/test_defer.lang",
+    "examples/test_defer_bang.lang",
+    "examples/test_duplicate_import.lang",
+    "examples/test_features.lang",
+    "examples/test_ffi2.lang",
+    "examples/test_fndec_as_type.lang",
+    "examples/test_for_stmt.lang",
+    "examples/test_hello_world.lang",
+    "examples/test_if_else_stmt.lang",
+    "examples/test_import_error.lang",
+    "examples/test_math_cal.lang",
+    "examples/test_my_allocator.lang",
+    "examples/test_one_for.lang",
+    "examples/test_operators.lang",
+    "examples/test_rawptr_basic.lang",
+    "examples/test_rawptr_call.lang",
+    "examples/test_rawptr_declare.lang",
+    "examples/test_rawptr_minimal.lang",
+    "examples/test_rawptr_simple.lang",
+    "examples/test_return_simple.lang",
+    "examples/test_return_simple2.lang",
+    "examples/test_simple_ret.lang",
+    "examples/test_try_consume.lang",
+    "examples/test_try_discard.lang",
+    "examples/test_try_void.lang",
+    "examples/test_tuple.lang",
+    "examples/test_tuple_ret.lang",
+    "examples/test_var_no_type.lang",
+    "examples/test_var_reassign.lang",
+    "examples/test_without_import.lang",
+    "examples/test_optional.lang",
+    "examples/test_switch_stmt.lang",
+]
+
+# Examples that are intentionally designed to fail compilation (error test cases)
+EXPECTED_TO_FAIL_COMPILE: list[str] = [
+    "examples/test_try_consume_error.lang",  # Invalid: try without consuming return value
+    "examples/test_try_tuple.lang",  # Invalid: try on tuple return type
+    "examples/test_switch_non_exhaust.lang",  # Non-exhaustive switch should error
+    "examples/test_builtin_conflict.lang",  # Cannot override builtin functions
+    "examples/test_rawptr_isnull_only.lang",  # is_null requires rawptr, not i64
+    "examples/test_const_reassign_error.lang",  # const reassignment should error
+    "examples/test_var_no_init2.lang",  # var without init should error
+    "examples/test_var_no_init3.lang",  # var with empty init should error
+    "examples/test_array_decl.lang",  # element value out of range of type
+    "examples/test_catch_check.lang", # try/catch cannot catch non-error types
+    "examples/test_unmatch_if_expr.lang", # if/else blocks with mismatched types
+]
+
 
 @dataclass
 class ExampleResult:
@@ -579,6 +631,97 @@ def print_check_failures(results: list[ExampleResult], root: Path) -> None:
                 sys.stdout.write(diff)
 
 
+def validate_expectations(results: list[ExampleResult], root: Path) -> tuple[list[ExampleResult], list[ExampleResult], list[ExampleResult], list[ExampleResult], list[ExampleResult]]:
+    """
+    Validate compilation results against expected lists.
+    Returns:
+        - expected_compile_ok: Files expected to compile and did compile
+        - expected_compile_fail: Files expected to fail and did fail
+        - unexpected_compile_ok: Files NOT expected to compile but did compile (should not happen)
+        - unexpected_compile_fail: Files NOT expected to compile but failed (need to fix)
+        - unclassified: Files not in either list
+    """
+    expected_compile_ok: list[ExampleResult] = []
+    expected_compile_fail: list[ExampleResult] = []
+    unexpected_compile_ok: list[ExampleResult] = []  # Expected fail but compiled (shouldn't happen)
+    unexpected_compile_fail: list[ExampleResult] = []  # Expected to compile but failed
+    unclassified: list[ExampleResult] = []  # Not in either list
+
+    for result in results:
+        rel_path = str(result.source.relative_to(root))
+        
+        if rel_path in EXPECTED_TO_COMPILE:
+            if result.compile_ok:
+                expected_compile_ok.append(result)
+            else:
+                unexpected_compile_fail.append(result)
+        elif rel_path in EXPECTED_TO_FAIL_COMPILE:
+            if not result.compile_ok:
+                expected_compile_fail.append(result)
+            else:
+                unexpected_compile_ok.append(result)
+        else:
+            # Not in either list - treat as unclassified
+            unclassified.append(result)
+
+    return expected_compile_ok, expected_compile_fail, unexpected_compile_ok, unexpected_compile_fail, unclassified
+
+
+def print_expectation_summary(
+    expected_compile_ok: list[ExampleResult],
+    expected_compile_fail: list[ExampleResult],
+    unexpected_compile_ok: list[ExampleResult],
+    unexpected_compile_fail: list[ExampleResult],
+    unclassified: list[ExampleResult],
+    root: Path,
+) -> None:
+    print()
+    print("=" * 60)
+    print("EXPECTATION VALIDATION SUMMARY")
+    print("=" * 60)
+    
+    print()
+    print(f"Expected to compile and compiled OK ({len(expected_compile_ok)}):")
+    for result in expected_compile_ok:
+        rel_source = result.source.relative_to(root)
+        rel_expect = result.expect.relative_to(root)
+        ok, detail = compiled_case_summary(result)
+        status = format_case_status(ok)
+        suffix = f" {detail}" if detail else ""
+        print(f"  - {rel_source} -> {rel_expect} [{status}]{suffix}")
+    
+    print()
+    print(f"Expected to fail and failed as expected ({len(expected_compile_fail)}):")
+    for result in expected_compile_fail:
+        rel_source = result.source.relative_to(root)
+        print(f"  - {rel_source} [{format_case_status(True)}] (expected compile error)")
+    
+    if unexpected_compile_ok:
+        print()
+        print(f"UNEXPECTED: Compiled but expected to fail ({len(unexpected_compile_ok)}):")
+        for result in unexpected_compile_ok:
+            rel_source = result.source.relative_to(root)
+            print(f"  - {rel_source} [{format_case_status(True)}]")
+    
+    if unexpected_compile_fail:
+        print()
+        print(f"UNEXPECTED: Failed to compile but expected to succeed ({len(unexpected_compile_fail)}):")
+        for result in unexpected_compile_fail:
+            rel_source = result.source.relative_to(root)
+            print(f"  - {rel_source} [{format_case_status(False)}]")
+    
+    if unclassified:
+        print()
+        print(f"Unclassified (not in any list) ({len(unclassified)}):")
+        for result in unclassified:
+            rel_source = result.source.relative_to(root)
+            status = format_case_status(result.compile_ok)
+            print(f"  - {rel_source} [{status}]")
+    
+    print()
+    print("=" * 60)
+
+
 def has_check_failures(results: list[ExampleResult]) -> bool:
     for result in results:
         if not result.compile_ok and result.expect_exists:
@@ -622,7 +765,22 @@ def main() -> int:
         print(f"Updated {updated} .expect file(s).")
         print()
 
-    print_results(results, root, args.show_errors)
+    # Validate expectations using the two lists
+    expected_compile_ok, expected_compile_fail, unexpected_compile_ok, unexpected_compile_fail, unclassified = validate_expectations(results, root)
+    
+    # Only show full results for check/update commands, skip for list command
+    if args.command != "list":
+        print_results(results, root, args.show_errors)
+    
+    # Always show expectation validation summary
+    print_expectation_summary(
+        expected_compile_ok,
+        expected_compile_fail,
+        unexpected_compile_ok,
+        unexpected_compile_fail,
+        unclassified,
+        root,
+    )
 
     if args.command == "check":
         print_check_failures(results, root)

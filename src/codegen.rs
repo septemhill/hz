@@ -65,6 +65,9 @@ pub struct CodeGenerator<'ctx> {
     // Current module name for mangling
     module_name: String,
 
+    // Enum variants (enum_name -> variant_name -> variant_index)
+    enum_variants: HashMap<String, HashMap<String, u32>>,
+
     // Struct field indices (struct_name -> field_name -> field_index)
     struct_field_indices: HashMap<String, HashMap<String, u32>>,
 }
@@ -105,6 +108,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             stdlib,
             imported_packages: HashMap::new(),
             module_name: module_name.to_string(),
+            enum_variants: HashMap::new(),
             struct_field_indices: HashMap::new(),
         })
     }
@@ -417,10 +421,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                     let int_val = value.into_int_value();
                     if int_val.get_type().get_bit_width() == 64 {
                         Ok(value)
+                    } else if int_val.get_type().get_bit_width() == 1 {
+                        Ok(self
+                            .builder
+                            .build_int_z_extend(int_val, self.context.i64_type(), "printf_bool")?
+                            .into())
                     } else {
                         Ok(self
                             .builder
-                            .build_int_cast(int_val, self.context.i64_type(), "printf_int")?
+                            .build_int_s_extend(int_val, self.context.i64_type(), "printf_int")?
                             .into())
                     }
                 } else {
@@ -1344,12 +1353,45 @@ impl<'ctx> CodeGenerator<'ctx> {
                         let mut combined_cond: Option<inkwell::values::IntValue> = None;
                         for pattern in &case.patterns {
                             let pattern_val = self.generate_hir_expr(pattern)?;
-                            let cmp = self.builder.build_int_compare(
-                                inkwell::IntPredicate::EQ,
-                                cond_val.into_int_value(),
-                                pattern_val.into_int_value(),
-                                "case_cmp",
-                            )?;
+
+                            // Check if pattern is a Range (BinaryOp::Range)
+                            let cmp = if let hir::HirExpr::Binary {
+                                op: crate::ast::BinaryOp::Range,
+                                left,
+                                right,
+                                ..
+                            } = pattern
+                            {
+                                // Range pattern: check if value is in range [start, end)
+                                let start = self.generate_hir_expr(left)?;
+                                let end = self.generate_hir_expr(right)?;
+                                let start_int = start.into_int_value();
+                                let end_int = end.into_int_value();
+                                let cond_int = cond_val.into_int_value();
+
+                                // Check: start <= cond < end
+                                let ge = self.builder.build_int_compare(
+                                    inkwell::IntPredicate::UGE,
+                                    cond_int,
+                                    start_int,
+                                    "range_ge",
+                                )?;
+                                let lt = self.builder.build_int_compare(
+                                    inkwell::IntPredicate::ULT,
+                                    cond_int,
+                                    end_int,
+                                    "range_lt",
+                                )?;
+                                self.builder.build_and(ge, lt, "range_check")?
+                            } else {
+                                // Regular equality comparison
+                                self.builder.build_int_compare(
+                                    inkwell::IntPredicate::EQ,
+                                    cond_val.into_int_value(),
+                                    pattern_val.into_int_value(),
+                                    "case_cmp",
+                                )?
+                            };
                             combined_cond = if let Some(c) = combined_cond {
                                 Some(self.builder.build_or(c, cmp, "or")?)
                             } else {
@@ -2047,6 +2089,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
             hir::HirExpr::If {
                 condition,
+                capture,
                 then_branch,
                 else_branch,
                 ty,
@@ -2067,19 +2110,62 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 // Then branch
                 self.builder.position_at_end(then_block);
+
+                // Handle capture variable if present (e.g., if (opt) |data| { ... })
+                let mut old_var = None;
+                let mut old_ty = None;
+                let capture_name = capture.clone();
+                if let Some(ref name) = capture_name {
+                    if let BasicValueEnum::StructValue(sv) = cond_val {
+                        // Extract the value (first element) from the struct
+                        let val = self.builder.build_extract_value(sv, 0, "captured")?;
+                        let alloca = self.builder.build_alloca(val.get_type(), name)?;
+                        self.builder.build_store(alloca, val)?;
+                        // Save old variable if it exists
+                        old_var = self.variables.insert(name.clone(), alloca);
+                        old_ty = self
+                            .variable_types
+                            .insert(name.clone(), self.llvm_type_to_lang(&val.get_type()));
+                    }
+                }
+
+                let result_type = self.llvm_type(ty);
+
                 let then_val = self.generate_hir_expr(then_branch)?;
+                let then_val_coerced = self.coerce_to_llvm_type(then_val, result_type)?;
+                let then_actual_block = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_block)?;
+
+                // Restore variable if it was shadowed
+                if let Some(ref name) = capture_name {
+                    if let Some(old) = old_var {
+                        self.variables.insert(name.clone(), old);
+                    } else {
+                        self.variables.remove(name);
+                    }
+
+                    if let Some(old) = old_ty {
+                        self.variable_types.insert(name.clone(), old);
+                    } else {
+                        self.variable_types.remove(name);
+                    }
+                }
 
                 // Else branch
                 self.builder.position_at_end(else_block);
                 let else_val = self.generate_hir_expr(else_branch)?;
+                let else_val_coerced = self.coerce_to_llvm_type(else_val, result_type)?;
+                let else_actual_block = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_block)?;
 
                 // Merge - create phi node for the result
                 self.builder.position_at_end(merge_block);
-                let result_type = self.llvm_type(ty);
+
                 let phi = self.builder.build_phi(result_type, "if_result")?;
-                phi.add_incoming(&[(&then_val, then_block), (&else_val, else_block)]);
+                phi.add_incoming(&[
+                    (&then_val_coerced, then_actual_block),
+                    (&else_val_coerced, else_actual_block),
+                ]);
 
                 Ok(phi.as_basic_value())
             }
@@ -2115,6 +2201,17 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .const_int(1, false)
                         .as_basic_value_enum()
                         .into());
+                }
+
+                // Check if this is an enum variant access
+                if let hir::HirExpr::Ident(obj_name, _, _) = object.as_ref() {
+                    if let Some(variants) = self.enum_variants.get(obj_name) {
+                        if let Some(&idx) = variants.get(member) {
+                            return Ok(self.context.i64_type().const_int(idx as u64, false).into());
+                        } else {
+                            return Err(format!("Enum variant not found: {}.{}", obj_name, member).into());
+                        }
+                    }
                 }
 
                 // For member access, we need to get the struct and extract the field
@@ -2646,6 +2743,12 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Declare an enum type in LLVM
     pub fn declare_enum(&mut self, enum_def: &EnumDef) -> CodegenResult<()> {
+        let mut variant_map = HashMap::new();
+        for (idx, variant) in enum_def.variants.iter().enumerate() {
+            variant_map.insert(variant.name.clone(), idx as u32);
+        }
+        self.enum_variants.insert(enum_def.name.clone(), variant_map);
+
         // Only generate code for exported (public) enums
         if !enum_def.visibility.is_public() {
             return Ok(());
@@ -4278,6 +4381,65 @@ impl<'ctx> CodeGenerator<'ctx> {
             BasicTypeEnum::VectorType(_) => Type::I64, // Default vector to i64
             BasicTypeEnum::ScalableVectorType(_) => Type::I64, // Default scalable vector to i64
         }
+    }
+
+    /// Coerce a BasicValueEnum to a specific LLVM type
+    fn coerce_to_llvm_type(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        target_ty: inkwell::types::BasicTypeEnum<'ctx>,
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        let val_ty = val.get_type();
+        if val_ty == target_ty {
+            return Ok(val);
+        }
+
+        // Handle int to int coercion
+        if let BasicTypeEnum::IntType(target_int) = target_ty {
+            if let BasicValueEnum::IntValue(int_val) = val {
+                if int_val.get_type() != target_int {
+                    return Ok(self
+                        .builder
+                        .build_int_cast(int_val, target_int, "coerce_int")?
+                        .into());
+                }
+            }
+        }
+
+        // Handle float to float coercion
+        if let BasicTypeEnum::FloatType(target_float) = target_ty {
+            if let BasicValueEnum::FloatValue(float_val) = val {
+                if float_val.get_type() != target_float {
+                    return Ok(self
+                        .builder
+                        .build_float_cast(float_val, target_float, "coerce_float")?
+                        .into());
+                }
+            }
+        }
+
+        // Handle int to float coercion
+        if let BasicTypeEnum::FloatType(target_float) = target_ty {
+            if let BasicValueEnum::IntValue(int_val) = val {
+                return Ok(self
+                    .builder
+                    .build_unsigned_int_to_float(int_val, target_float, "coerce_int_to_float")?
+                    .into());
+            }
+        }
+
+        // Handle float to int coercion
+        if let BasicTypeEnum::IntType(target_int) = target_ty {
+            if let BasicValueEnum::FloatValue(float_val) = val {
+                return Ok(self
+                    .builder
+                    .build_float_to_unsigned_int(float_val, target_int, "coerce_float_to_int")?
+                    .into());
+            }
+        }
+
+        // Default: just return the original value if we can't coerce
+        Ok(val)
     }
 
     /// Print the generated LLVM IR

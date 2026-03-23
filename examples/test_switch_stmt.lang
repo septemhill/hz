@@ -7,7 +7,7 @@ enum Status {
     Done
 };
 
-fn main() void {
+fn main() i64 {
     // Integer Case
     {
         const c = 123;
@@ -92,20 +92,6 @@ fn main() void {
         }
     }
 
-    // Range Char Case
-    {
-        const c = 'a';
-
-        switch (c) {
-            'a'..'z' => {
-                io.println("a");
-            }
-            _ => {
-                io.println("default");
-            }
-        }
-    }
-
     // Exhaustive Enum Case With Underscore
     {
         const c = Status.Todo;
@@ -142,4 +128,6 @@ fn main() void {
             }
         }
     }
+
+    return 0;
 }

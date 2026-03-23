@@ -2,12 +2,14 @@ fn main () void {
     {
         const g: ?i32 = 432;
         const z = if (g) |v| v else 10;
+        io.println("[1] block: {d}", z);
     }
 
     {
         const g: ?i32 = 332;
         const c = 4;
         const z = if (g) |v| v * c else 100 * c;
+        io.println("[2] block: {d}", z);
     }
 
     {
@@ -17,6 +19,7 @@ fn main () void {
             c += 330;
             c
         };
+        io.println("[3] block: {d}", z);
     }
 
     {
@@ -25,10 +28,11 @@ fn main () void {
             const temp = v * 100;
             temp + 30
         } else 10;
+        io.println("[4] block: {d}", z);
     }
 
     {
-        const c: ?i32 = 332;
+        const c: ?i32 = null;
         const z = if (c) |v| {
             const temp = v * 100;
             temp + 30
@@ -37,10 +41,12 @@ fn main () void {
             c += 330;
             c
         };
+        io.println("[5] block: {d}", z);
     }
 
     {
         const d: ?u8 = 'a';
         const z = if (d) |v| v else '_';
-    }
+        io.println("[6] block: {d}", z);
+   }
 }
