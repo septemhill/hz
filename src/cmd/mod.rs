@@ -20,3 +20,20 @@ pub use lsp::run_lsp;
 
 // Re-export run_jit from run module for use by Run and Jit commands
 pub use run::run_jit;
+
+use std::path::PathBuf;
+
+/// Resolve the standard library path from CLI argument, environment variable, or fallback
+pub fn resolve_std_path(cli_std_path: Option<PathBuf>) -> PathBuf {
+    if let Some(path) = cli_std_path {
+        return path;
+    }
+    if let Ok(env_path) = std::env::var("LANG_STD_PATH") {
+        return PathBuf::from(env_path);
+    }
+    let local_std = PathBuf::from("./std");
+    if local_std.exists() {
+        return local_std;
+    }
+    PathBuf::from("/usr/local/lib/lang/std")
+}

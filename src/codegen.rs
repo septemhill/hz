@@ -70,6 +70,11 @@ pub struct CodeGenerator<'ctx> {
 
     // Struct field indices (struct_name -> field_name -> field_index)
     struct_field_indices: HashMap<String, HashMap<String, u32>>,
+
+    // Struct, Enum, and Error definitions for type lookup
+    pub structs: HashMap<String, StructDef>,
+    pub enums: HashMap<String, EnumDef>,
+    pub errors: HashMap<String, ErrorDef>,
 }
 
 /// Result of code generation
@@ -86,7 +91,14 @@ enum PrintfArgKind {
 impl<'ctx> CodeGenerator<'ctx> {
     #[allow(unused)]
     /// Create a new code generator
-    pub fn new(context: &'ctx Context, module_name: &str, stdlib: StdLib) -> CodegenResult<Self> {
+    pub fn new(
+        context: &'ctx Context,
+        module_name: &str,
+        stdlib: StdLib,
+        structs: HashMap<String, StructDef>,
+        enums: HashMap<String, EnumDef>,
+        errors: HashMap<String, ErrorDef>,
+    ) -> CodegenResult<Self> {
         let module = context.create_module(module_name);
         let execution_engine =
             module.create_jit_execution_engine(inkwell::OptimizationLevel::None)?;
@@ -110,6 +122,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             module_name: module_name.to_string(),
             enum_variants: HashMap::new(),
             struct_field_indices: HashMap::new(),
+            structs,
+            enums,
+            errors,
         })
     }
 
@@ -1947,19 +1962,16 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                                 (format!("{}_{}", actual_package, name), true, false, false)
                             }
-                        } else {
-                            // Namespace is not a known variable - treat as package namespace
-                            let actual_package = self
-                                .imported_packages
-                                .get(ns)
-                                .map(|s| s.as_str())
-                                .unwrap_or(ns);
-
+                        } else if let Some(actual_package) = self.imported_packages.get(ns) {
+                            // Namespace is an imported package
                             if actual_package == "io" && name == "println" {
                                 return self.generate_hir_io_println(args);
                             }
-
                             (format!("{}_{}", actual_package, name), true, false, false)
+                        } else {
+                            // Namespace is not a known variable or package - likely a local struct/enum
+                            let combined_name = format!("{}_{}", ns, name);
+                            (self.mangle_name(&combined_name, false), false, false, false)
                         }
                     } else {
                         if name == "main" {
@@ -2070,7 +2082,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                     if let Some(ns) = namespace.as_deref() {
                         if let Some(ptr) = self.variables.get(ns) {
                             // For methods, self is usually a pointer to the struct
-                            llvm_args.push(BasicMetadataValueEnum::from(*ptr));
+                            // ONLY add self if the function actually expects it
+                            if function.count_params() == args.len() as u32 + 1 {
+                                llvm_args.push(BasicMetadataValueEnum::from(*ptr));
+                            }
                         }
                     }
                 }
@@ -2372,22 +2387,54 @@ impl<'ctx> CodeGenerator<'ctx> {
                 name, fields, ty, ..
             } => {
                 // Create a struct instance
-                let struct_type = self.llvm_type(ty);
+                let struct_type = self.llvm_type(ty).into_struct_type();
+                let struct_name = match ty {
+                    Type::Custom { name, .. } => name.clone(),
+                    _ => name.clone(),
+                };
 
-                // Get field types
-                let mut field_values: Vec<BasicValueEnum> = Vec::new();
-                for (_, v) in fields {
-                    field_values.push(self.generate_hir_expr(v)?);
+                // Initialize with undefined value
+                let mut struct_val = struct_type.get_undef();
+
+                // Build the struct by inserting field values dynamically
+                for (field_name, field_expr) in fields {
+                    let field_val = self.generate_hir_expr(field_expr)?;
+
+                    // Look up the field index and type
+                    let (field_idx, field_ty) = self
+                        .struct_field_indices
+                        .get(&struct_name)
+                        .and_then(|m| {
+                            m.get(field_name).map(|idx| {
+                                // Find the AST type from the struct definition
+                                let ast_ty = self
+                                    .structs
+                                    .get(&struct_name)
+                                    .and_then(|s| s.fields.get(*idx as usize))
+                                    .map(|f| f.ty.clone())
+                                    .unwrap_or(Type::I64); // Fallback
+                                (*idx, ast_ty)
+                            })
+                        })
+                        .ok_or_else(|| {
+                            format!("Field '{}' not found in struct '{}'", field_name, struct_name)
+                        })?;
+
+                    // Coerce the field value to the expected AST type
+                    let coerced_val = self.coerce_type(field_val, &field_ty)?;
+
+                    struct_val = self
+                        .builder
+                        .build_insert_value(
+                            struct_val,
+                            coerced_val,
+                            field_idx,
+                            &format!("{}.{}", struct_name, field_name),
+                        )?
+                        .into_struct_value();
                 }
 
-                let struct_val = self.context.const_struct(&field_values, false);
-                let alloca = self.builder.build_alloca(struct_type, name)?;
-                self.builder.build_store(alloca, struct_val)?;
-
-                Ok(self
-                    .builder
-                    .build_load(struct_type, alloca, "struct_load")?
-                    .into())
+                Ok(struct_val.as_basic_value_enum())
             }
             hir::HirExpr::Try { expr, .. } => {
                 // Try expression: evaluate expr, if error propagate it up (return error)
@@ -2751,21 +2798,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         for method in &struct_def.methods {
             // For methods, add the struct as a first parameter (self) only if not already present
             // Check if the first parameter is 'self' (either named "self" or "Self")
-            let has_self_param = method
-                .params
-                .iter()
-                .any(|p| p.name == "self" || p.name == "Self");
-
             let mut param_types: Vec<Type> = Vec::new();
-
-            // Only add struct type as first parameter if there's no explicit self parameter
-            if !has_self_param {
-                param_types.push(Type::Pointer(Box::new(Type::Custom {
-                    name: struct_name.clone(),
-                    generic_args: vec![],
-                    is_exported: true,
-                })));
-            }
             param_types.extend(method.params.iter().map(|p| p.ty.clone()));
 
             let fn_type = self.build_function_type(&method.return_ty, &param_types, false);
@@ -2853,11 +2886,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.imported_packages
                 .insert(namespace.to_string(), package_name.clone());
 
-            // If it's loaded in stdlib, declare its functions
+            // If it's loaded in stdlib, declare its functions, structs, and enums
             if let Some(pkg) = self.stdlib.packages().get(package_name) {
                 // Clone to avoid borrow issues
                 let fn_defs = pkg.functions.clone();
                 let ext_fns = pkg.external_functions.clone();
+                let struct_defs = pkg.structs.clone();
+                let enum_defs = pkg.enums.clone();
 
                 // Declare regular functions
                 for f in fn_defs {
@@ -2867,13 +2902,29 @@ impl<'ctx> CodeGenerator<'ctx> {
                 for ext_fn in ext_fns {
                     self.declare_c_function(&ext_fn)?;
                 }
+                // Declare structs
+                for s in struct_defs {
+                    if s.visibility == Visibility::Public {
+                        let mut mangled_s = s.clone();
+                        mangled_s.name = format!("{}_{}", namespace, s.name);
+                        self.declare_struct(&mangled_s)?;
+                    }
+                }
+                // Declare enums
+                for e in enum_defs {
+                    if e.visibility == Visibility::Public {
+                        let mut mangled_e = e.clone();
+                        mangled_e.name = format!("{}_{}", namespace, e.name);
+                        self.declare_enum(&mangled_e)?;
+                    }
+                }
             }
         }
         Ok(())
     }
 
     /// Generate code for a function
-    fn generate_function(&mut self, fn_def: &FnDef) -> CodegenResult<()> {
+    pub fn generate_function(&mut self, fn_def: &FnDef) -> CodegenResult<()> {
         // Get or create the function
         let function = self
             .module

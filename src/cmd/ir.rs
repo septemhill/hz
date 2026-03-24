@@ -8,11 +8,12 @@ use crate::parser;
 use crate::stdlib;
 
 /// Generate LLVM IR only
-pub fn generate_ir(source: &str, output_path: Option<String>) -> Result<(), Box<dyn Error>> {
+pub fn generate_ir(source: &str, output_path: Option<String>, cli_std_path: Option<std::path::PathBuf>) -> Result<(), Box<dyn Error>> {
     // Initialize std library
     println!("Loading std library...");
     let mut stdlib = stdlib::StdLib::new();
-    stdlib.set_std_path("./std");
+    let stdlib_path = crate::cmd::resolve_std_path(cli_std_path);
+    stdlib.set_std_path(stdlib_path.to_str().unwrap());
 
     // Parse source code
     println!("Parsing source code...");
@@ -28,9 +29,20 @@ pub fn generate_ir(source: &str, output_path: Option<String>) -> Result<(), Box<
         stdlib.packages().keys().collect::<Vec<_>>()
     );
 
+    // Run semantic analysis to collect definitions
+    let mut analyzer = crate::sema::SemanticAnalyzer::new();
+    analyzer.analyze_with_stdlib(&program, Some(&stdlib))?;
+
     // Generate LLVM IR
     let context = inkwell::context::Context::create();
-    let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;
+    let mut codegen = codegen::CodeGenerator::new(
+        &context,
+        "lang",
+        stdlib,
+        analyzer.structs.clone(),
+        analyzer.enums.clone(),
+        analyzer.errors.clone(),
+    )?;
 
     // Process imports (declares functions from imported packages)
     codegen.process_imports(&program.imports)?;

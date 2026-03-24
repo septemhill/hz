@@ -304,9 +304,10 @@ mod tests {
         let hir_expr = ctx.lower_expr(&expr);
 
         match hir_expr {
-            hir::HirExpr::Block { stmts, ty, .. } => {
-                assert_eq!(stmts.len(), 2);
-                assert_eq!(ty, Type::Void);
+            hir::HirExpr::Block { stmts, expr, ty, .. } => {
+                assert_eq!(stmts.len(), 1);
+                assert!(expr.is_some());
+                assert_eq!(ty, Type::I64);
             }
             _ => panic!("Expected Block expression"),
         }

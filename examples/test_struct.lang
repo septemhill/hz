@@ -1,11 +1,11 @@
 import "io"
 
 struct Base {
-    name: String,
+    name: []const u8,
     age: i32,
     married: bool,
 
-    pub fn new(name: String, age: i32, married: bool) Base {
+    pub fn new(name: []const u8, age: i32, married: bool) Base {
         return Base{ name, age, married };
     }
 }

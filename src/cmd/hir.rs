@@ -8,11 +8,12 @@ use crate::sema;
 use crate::stdlib;
 
 /// Dump HIR (High-level Intermediate Representation)
-pub fn dump_hir(source: &str, output_path: Option<String>) -> Result<(), Box<dyn Error>> {
+pub fn dump_hir(source: &str, output_path: Option<String>, cli_std_path: Option<std::path::PathBuf>) -> Result<(), Box<dyn Error>> {
     // Initialize std library
     println!("Loading std library...");
     let mut stdlib = stdlib::StdLib::new();
-    stdlib.set_std_path("./std");
+    let stdlib_path = crate::cmd::resolve_std_path(cli_std_path);
+    stdlib.set_std_path(stdlib_path.to_str().unwrap());
     println!(
         "Loaded std packages: {:?}",
         stdlib.packages().keys().collect::<Vec<_>>()

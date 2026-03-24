@@ -10,8 +10,8 @@ use crate::sema::symbol::SymbolTable;
 pub struct SymbolResolver {
     symbol_table: SymbolTable,
     // Reference to structs for method visibility checks
-    structs: Vec<crate::ast::StructDef>,
-    enums: Vec<crate::ast::EnumDef>,
+    structs: std::collections::HashMap<String, crate::ast::StructDef>,
+    enums: std::collections::HashMap<String, crate::ast::EnumDef>,
     // Current struct context (if we're inside a struct method)
     current_struct: Option<String>,
 }
@@ -26,8 +26,8 @@ fn destructured_binding_type(aggregate_ty: &crate::ast::Type, index: usize) -> c
 impl SymbolResolver {
     pub fn new(
         symbol_table: SymbolTable,
-        structs: Vec<crate::ast::StructDef>,
-        enums: Vec<crate::ast::EnumDef>,
+        structs: std::collections::HashMap<String, crate::ast::StructDef>,
+        enums: std::collections::HashMap<String, crate::ast::EnumDef>,
     ) -> Self {
         SymbolResolver {
             symbol_table,
@@ -97,7 +97,7 @@ impl SymbolResolver {
         _span: Span,
     ) -> AnalysisResult<()> {
         // First, check if it's a struct
-        if let Some(struct_def) = self.structs.iter().find(|s| &s.name == struct_name) {
+        if let Some(struct_def) = self.structs.get(struct_name) {
             // Find the method
             if let Some(method) = struct_def.methods.iter().find(|m| &m.name == method_name) {
                 // Check if method is public
@@ -121,7 +121,7 @@ impl SymbolResolver {
         }
 
         // Check if it's an enum
-        if let Some(enum_def) = self.enums.iter().find(|e| &e.name == struct_name) {
+        if let Some(enum_def) = self.enums.get(struct_name) {
             // Find the method
             if let Some(method) = enum_def.methods.iter().find(|m| &m.name == method_name) {
                 // Check if method is public

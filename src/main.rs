@@ -28,6 +28,10 @@ use clap::Parser;
 #[command(version = "0.1.0")]
 #[command(about = "Lang Programming Language Compiler", long_about = None)]
 struct Cli {
+    /// Standard library path
+    #[arg(long = "std", value_name = "PATH", global = true)]
+    std_path: Option<std::path::PathBuf>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -100,7 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Run { source } => {
             let source_content = fs::read_to_string(&source)?;
-            cmd::run_jit(&source_content)?;
+            cmd::run_jit(&source_content, cli.std_path)?;
         }
         Commands::Build {
             source,
@@ -116,28 +120,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| "a".to_string())
                 });
-            cmd::build(&source, &output_path, &include)?;
+            cmd::build(&source, &output_path, &include, cli.std_path)?;
         }
         Commands::Jit { source } => {
             let source_content = fs::read_to_string(&source)?;
-            cmd::jit::run_jit_command(&source_content)?;
+            cmd::jit::run_jit_command(&source_content, cli.std_path)?;
         }
         Commands::Ir { source, output } => {
             let source_content = fs::read_to_string(&source)?;
             let output_path = output.map(|p| p.to_string_lossy().to_string());
-            cmd::generate_ir(&source_content, output_path)?;
+            cmd::generate_ir(&source_content, output_path, cli.std_path)?;
         }
         Commands::Hir { source, output } => {
             let source_content = fs::read_to_string(&source)?;
             let output_path = output.map(|p| p.to_string_lossy().to_string());
-            cmd::dump_hir(&source_content, output_path)?;
+            cmd::dump_hir(&source_content, output_path, cli.std_path)?;
         }
         Commands::Ast { source } => {
             let source_content = fs::read_to_string(&source)?;
-            cmd::dump_ast(&source_content)?;
+            cmd::dump_ast(&source_content, cli.std_path)?;
         }
         Commands::Lsp { verbose } => {
-            cmd::run_lsp(verbose);
+            cmd::run_lsp(verbose, cli.std_path);
         }
     }
 

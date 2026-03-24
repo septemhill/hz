@@ -1,6 +1,7 @@
 use crate::ast::{Span, Visibility};
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::SymbolTable;
+use std::collections::HashMap;
 
 // ============================================================================
 // Analysis Pass 2: Type Analyzer
@@ -9,6 +10,9 @@ use crate::sema::symbol::SymbolTable;
 
 pub struct TypeAnalyzer {
     symbol_table: SymbolTable,
+    structs: HashMap<String, crate::ast::StructDef>,
+    enums: HashMap<String, crate::ast::EnumDef>,
+    errors: HashMap<String, crate::ast::ErrorDef>,
 }
 
 fn destructured_binding_type(aggregate_ty: &crate::ast::Type, index: usize) -> crate::ast::Type {
@@ -21,8 +25,18 @@ fn destructured_binding_type(aggregate_ty: &crate::ast::Type, index: usize) -> c
 }
 
 impl TypeAnalyzer {
-    pub fn new(symbol_table: SymbolTable) -> Self {
-        TypeAnalyzer { symbol_table }
+    pub fn new(
+        symbol_table: SymbolTable,
+        structs: HashMap<String, crate::ast::StructDef>,
+        enums: HashMap<String, crate::ast::EnumDef>,
+        errors: HashMap<String, crate::ast::ErrorDef>,
+    ) -> Self {
+        TypeAnalyzer {
+            symbol_table,
+            structs,
+            enums,
+            errors,
+        }
     }
 
     pub fn analyze(&mut self, program: &crate::ast::Program) -> AnalysisResult<()> {
@@ -871,14 +885,15 @@ impl TypeAnalyzer {
                 self.symbol_table.exit_scope();
                 Ok(crate::ast::Type::I64)
             }
-            crate::ast::Expr::MemberAccess {
-                object, member: _, ..
-            } => {
+            crate::ast::Expr::MemberAccess { object, member, .. } => {
                 let obj_ty = self.analyze_expression(object)?;
-                if let crate::ast::Type::Custom { name: _, .. } = &obj_ty {
+                if let crate::ast::Type::Custom { name, .. } = &obj_ty {
                     // Try to find if it's a field
-                    // We need more info to resolve fields, for now return I64 if it's custom
-                    // But if we have the struct info we should check
+                    if let Some(struct_def) = self.structs.get(name) {
+                        if let Some(field) = struct_def.fields.iter().find(|f| &f.name == member) {
+                            return Ok(field.ty.clone());
+                        }
+                    }
                     Ok(crate::ast::Type::I64)
                 } else {
                     Ok(crate::ast::Type::I64)

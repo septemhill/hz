@@ -9,12 +9,12 @@ use crate::sema;
 use crate::stdlib;
 
 /// Run the compiled program (JIT)
-pub fn run_jit(source: &str) -> Result<(), Box<dyn Error>> {
+pub fn run_jit(source: &str, cli_std_path: Option<std::path::PathBuf>) -> Result<(), Box<dyn Error>> {
     // Initialize std library
     println!("Loading std library...");
     let mut stdlib = stdlib::StdLib::new();
-    // Set std path to ./std relative to current directory
-    stdlib.set_std_path("./std");
+    let stdlib_path = crate::cmd::resolve_std_path(cli_std_path);
+    stdlib.set_std_path(stdlib_path.to_str().unwrap());
     // Preload builtin package (contains is_null, is_not_null, etc.)
     let _ = stdlib.preload_builtins();
     // Don't preload packages - require explicit imports
@@ -31,11 +31,18 @@ pub fn run_jit(source: &str) -> Result<(), Box<dyn Error>> {
     // Semantic Analysis
     println!("Semantic Analysis...");
     let mut analyzer = sema::SemanticAnalyzer::new();
-    analyzer.analyze(&program)?;
+    analyzer.analyze_with_stdlib(&program, Some(&stdlib))?;
 
     // Generate LLVM IR
     let context = inkwell::context::Context::create();
-    let mut codegen = codegen::CodeGenerator::new(&context, "lang", stdlib)?;
+    let mut codegen = codegen::CodeGenerator::new(
+        &context,
+        "lang",
+        stdlib,
+        analyzer.structs.clone(),
+        analyzer.enums.clone(),
+        analyzer.errors.clone(),
+    )?;
 
     let mut lowering_ctx = lower::LoweringContext::new();
     lowering_ctx.set_symbol_table(analyzer.get_symbol_table().clone());

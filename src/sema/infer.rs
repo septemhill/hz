@@ -349,12 +349,17 @@ pub struct TypeInferrer {
 
 impl TypeInferrer {
     /// Create a new type inferrer
-    pub fn new(symbol_table: SymbolTable) -> Self {
+    pub fn new(
+        symbol_table: SymbolTable,
+        structs: HashMap<String, crate::ast::StructDef>,
+        enums: HashMap<String, crate::ast::EnumDef>,
+        errors: HashMap<String, crate::ast::ErrorDef>,
+    ) -> Self {
         TypeInferrer {
             symbol_table,
-            structs: HashMap::new(),
-            enums: HashMap::new(),
-            errors: HashMap::new(),
+            structs,
+            enums,
+            errors,
             expected_type: None,
             expected_return_type: None,
         }
@@ -615,7 +620,7 @@ impl TypeInferrer {
 
     /// Infer types for an entire program
     pub fn infer_program(&mut self, program: &Program) -> AnalysisResult<TypedProgram> {
-        // Populate structs, enums and errors maps for exhaustiveness checking and member access refinement
+        // Populate structs, enums and errors maps from program
         for s in &program.structs {
             self.structs.insert(s.name.clone(), s.clone());
         }
@@ -2148,8 +2153,14 @@ impl TypeInferrer {
 // ============================================================================
 
 /// Infer types for a program and produce a type-annotated AST
-pub fn infer_types(program: &Program, symbol_table: SymbolTable) -> AnalysisResult<TypedProgram> {
-    let mut inferrer = TypeInferrer::new(symbol_table);
+pub fn infer_types(
+    program: &Program,
+    symbol_table: SymbolTable,
+    structs: HashMap<String, crate::ast::StructDef>,
+    enums: HashMap<String, crate::ast::EnumDef>,
+    errors: HashMap<String, crate::ast::ErrorDef>,
+) -> AnalysisResult<TypedProgram> {
+    let mut inferrer = TypeInferrer::new(symbol_table, structs, enums, errors);
     inferrer.infer_program(program)
 }
 

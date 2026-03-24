@@ -686,93 +686,74 @@ impl Parser {
             //     self.current()
             // );
 
-            // Try to parse import statement
-            if self.match_token(Token::Import) {
-                self.set_state(ParserState::ParsingImport);
-                match self.parse_import_statement() {
-                    Ok(import_items) => imports.extend(import_items),
-                    Err(e) => return Err(e),
-                }
-                self.set_state(ParserState::Initial);
-                continue;
-            }
-
-            // Try to parse external function declaration (FFI)
-            if self.match_token(Token::External) {
-                self.set_state(ParserState::ParsingFunction);
-                match self.parse_external_function() {
-                    Ok(f) => external_functions.push(f),
-                    Err(e) => return Err(e),
-                }
-                self.set_state(ParserState::Initial);
-                continue;
-            }
-
-            // Try to parse struct definition
-            if self.match_token(Token::Struct)
-                || (self.match_token(Token::Pub) && self.match_token(Token::Struct))
-            {
-                self.set_state(ParserState::ParsingStruct);
-                match self.parse_struct() {
-                    Ok(s) => structs.push(s),
-                    Err(e) => return Err(e),
-                }
-                self.set_state(ParserState::Initial);
-                continue;
-            }
-
-            // Try to parse enum definition
-            if self.match_token(Token::Enum)
-                || (self.match_token(Token::Pub) && self.match_token(Token::Enum))
-            {
-                self.set_state(ParserState::ParsingEnum);
-                match self.parse_enum() {
-                    Ok(e) => enums.push(e),
-                    Err(e) => return Err(e),
-                }
-                self.set_state(ParserState::Initial);
-                continue;
-            }
-
-            // Try to parse error definition
-            if self.match_token(Token::ErrorKw)
-                || (self.match_token(Token::Pub) && self.match_token(Token::ErrorKw))
-            {
-                match self.parse_error() {
-                    Ok(e) => errors.push(e),
-                    Err(e) => return Err(e),
-                }
-                self.set_state(ParserState::Initial);
-                continue;
-            }
-
-            // Try to parse function definition (including pub fn)
-            // Check if we have 'fn' or 'pub fn'
+            // Try to parse top-level declarations
             let is_pub = self.peek(0).map(|t| t.token == Token::Pub).unwrap_or(false);
-            let is_fn = self
+            let next_token = self
                 .peek(if is_pub { 1 } else { 0 })
-                .map(|t| t.token == Token::Fn)
-                .unwrap_or(false);
+                .map(|t| t.token.clone());
 
-            if is_fn {
-                if is_pub {
-                    self.advance(); // consume pub, leave fn for parse_function
+            match next_token {
+                Some(Token::Import) => {
+                    self.advance(); // consume 'import'
+                    self.set_state(ParserState::ParsingImport);
+                    match self.parse_import_statement() {
+                        Ok(import_items) => imports.extend(import_items),
+                        Err(e) => return Err(e),
+                    }
+                    self.set_state(ParserState::Initial);
                 }
-                // Don't consume fn here - let parse_function handle it
-                self.set_state(ParserState::ParsingFunction);
-                match self.parse_function() {
-                    Ok(f) => functions.push(f),
-                    Err(e) => return Err(e),
+                Some(Token::External) => {
+                    // Pre-consume 'pub' if present so parse_external_function finds it if needed,
+                    // or better, let parse_external_function handle it.
+                    // The current parse_external_function expects to consume 'pub' if present.
+                    self.set_state(ParserState::ParsingFunction);
+                    match self.parse_external_function() {
+                        Ok(f) => external_functions.push(f),
+                        Err(e) => return Err(e),
+                    }
+                    self.set_state(ParserState::Initial);
                 }
-                self.set_state(ParserState::Initial);
-            } else {
-                // Try to parse function definition
-                self.set_state(ParserState::ParsingFunction);
-                match self.parse_function() {
-                    Ok(f) => functions.push(f),
-                    Err(e) => return Err(e),
+                Some(Token::Struct) => {
+                    self.set_state(ParserState::ParsingStruct);
+                    match self.parse_struct() {
+                        Ok(s) => structs.push(s),
+                        Err(e) => return Err(e),
+                    }
+                    self.set_state(ParserState::Initial);
                 }
-                self.set_state(ParserState::Initial);
+                Some(Token::Enum) => {
+                    self.set_state(ParserState::ParsingEnum);
+                    match self.parse_enum() {
+                        Ok(e) => enums.push(e),
+                        Err(e) => return Err(e),
+                    }
+                    self.set_state(ParserState::Initial);
+                }
+                Some(Token::ErrorKw) => {
+                    match self.parse_error() {
+                        Ok(e) => errors.push(e),
+                        Err(e) => return Err(e),
+                    }
+                    self.set_state(ParserState::Initial);
+                }
+                Some(Token::Fn) => {
+                    self.set_state(ParserState::ParsingFunction);
+                    match self.parse_function() {
+                        Ok(f) => functions.push(f),
+                        Err(e) => return Err(e),
+                    }
+                    self.set_state(ParserState::Initial);
+                }
+                _ => {
+                    // Fallback or unexpected token
+                    if self.is_at_end() {
+                        break;
+                    }
+                    return Err(ParseError {
+                        message: format!("Unexpected token at top level: {:?}", self.current()),
+                        location: self.current_token().map(|t| t.span.start),
+                    });
+                }
             }
         }
 
@@ -941,18 +922,21 @@ impl Parser {
     /// Parse an external C function declaration
     fn parse_external_function(&mut self) -> Result<ExternalFnDef, ParseError> {
         // Check for "pub" keyword
-        let visibility = if self
-            .current()
-            .map(|t| matches!(t, Token::Pub))
-            .unwrap_or(false)
-        {
-            self.advance();
+        let visibility = if self.match_token(Token::Pub) {
             Visibility::Public
         } else {
             Visibility::Private
         };
 
-        // Consume "cdecl" (we already consumed "external")
+        // Expect "external" keyword
+        if !self.match_token(Token::External) {
+            return Err(ParseError {
+                message: "Expected 'external' keyword".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        // Consume "cdecl"
         if !self.match_token(Token::Cdecl) {
             return Err(ParseError {
                 message: "Expected 'cdecl' keyword after 'external'".to_string(),
@@ -2304,6 +2288,13 @@ impl Parser {
                     }
                 }
 
+                // Get span from the expression being called
+                let call_span = match &expr {
+                    Expr::Ident(_, span) => *span,
+                    Expr::MemberAccess { span, .. } => *span,
+                    _ => Span { start: 0, end: 0 },
+                };
+
                 let (name, namespace) = match &expr {
                     Expr::Ident(n, _) => (n.clone(), None),
                     Expr::MemberAccess { object, member, .. } => {
@@ -2320,7 +2311,7 @@ impl Parser {
                     name,
                     namespace,
                     args,
-                    span: Span { start: 0, end: 0 },
+                    span: call_span,
                 };
                 continue;
             }
@@ -2336,6 +2327,17 @@ impl Parser {
                 // AND there's no colon (which would indicate a field definition)
                 let struct_name = match &expr {
                     Expr::Ident(n, _) => n.clone(),
+                    Expr::MemberAccess { object, member, .. } => {
+                        // Handle namespaced struct access: package.Struct
+                        if let Expr::Ident(ns, _) = &**object {
+                            format!("{}_{}", ns, member)
+                        } else {
+                            return Err(ParseError {
+                                message: "Expected struct type name".to_string(),
+                                location: self.current_token().map(|t| t.span.start),
+                            });
+                        }
+                    }
                     _ => {
                         return Err(ParseError {
                             message: "Expected struct type name".to_string(),
@@ -2794,6 +2796,11 @@ impl Parser {
             return Ok(Type::Option(Box::new(inner)));
         }
 
+        // Check for const keyword (skip it as Lang doesn't have a Const variant in Type yet)
+        if self.match_token(Token::Const) {
+            return self.parse_type();
+        }
+
         // Check for error type suffix: Type! (e.g., i32! or void!)
         // This needs to be checked after parsing the base type
         let base_type = self.parse_base_type()?;
@@ -3018,8 +3025,20 @@ impl Parser {
 
     /// Parse a struct definition
     fn parse_struct(&mut self) -> Result<StructDef, ParseError> {
-        // "pub" and "struct" already consumed
-        let visibility = Visibility::Public;
+        // Check for "pub" keyword
+        let visibility = if self.match_token(Token::Pub) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        // Expect "struct" keyword
+        if !self.match_token(Token::Struct) {
+            return Err(ParseError {
+                message: "Expected 'struct' keyword".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
 
         // Parse generic parameters
         let generic_params = self.parse_generic_params()?;
@@ -3176,8 +3195,20 @@ impl Parser {
 
     /// Parse an enum definition
     fn parse_enum(&mut self) -> Result<EnumDef, ParseError> {
-        // "pub" and "enum" already consumed
-        let visibility = Visibility::Public;
+        // Check for "pub" keyword
+        let visibility = if self.match_token(Token::Pub) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        // Expect "enum" keyword
+        if !self.match_token(Token::Enum) {
+            return Err(ParseError {
+                message: "Expected 'enum' keyword".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
 
         // Parse generic parameters
         let generic_params = self.parse_generic_params()?;
@@ -3304,8 +3335,20 @@ impl Parser {
 
     /// Parse an error definition
     fn parse_error(&mut self) -> Result<ErrorDef, ParseError> {
-        // "pub" already consumed if present, "error" consumed
-        let visibility = Visibility::Public;
+        // Check for "pub" keyword
+        let visibility = if self.match_token(Token::Pub) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        // Expect "error" keyword
+        if !self.match_token(Token::ErrorKw) {
+            return Err(ParseError {
+                message: "Expected 'error' keyword".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
 
         // Parse error name
         let name = if let Token::Ident(n) = self.current().cloned().ok_or_else(|| ParseError {

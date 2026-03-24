@@ -75,4 +75,19 @@ impl SymbolTable {
         }
         None
     }
+
+    /// Merge another symbol table's global scope into this one
+    pub fn merge(&mut self, other: SymbolTable) {
+        // Merge global scope (index 0) symbols from other table
+        if let Some(global_scope) = other.scopes.first() {
+            for (name, symbol) in &global_scope.symbols {
+                // Only add if not already defined in current scope
+                if !self.scopes[self.current_scope].symbols.contains_key(name) {
+                    self.scopes[self.current_scope]
+                        .symbols
+                        .insert(name.clone(), symbol.clone());
+                }
+            }
+        }
+    }
 }
