@@ -33,7 +33,8 @@ pub fn dump_hir(source: &str, output_path: Option<String>, cli_std_path: Option<
     println!("Lowering to HIR...");
     let mut lowering_ctx = lower::LoweringContext::new();
     lowering_ctx.set_symbol_table(analyzer.get_symbol_table().clone());
-    let hir_program = lowering_ctx.lower_program(&program);
+    let typed_program = analyzer.get_typed_program().ok_or("No typed program found")?;
+    let hir_program = lowering_ctx.lower_program(&program, typed_program);
 
     // Format HIR using Debug
     let hir_debug = format!("{:?}", hir_program);

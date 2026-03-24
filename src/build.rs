@@ -195,7 +195,8 @@ impl BuildSystem {
         // 3. Lower
         let mut lowering_ctx = lower::LoweringContext::new();
         lowering_ctx.set_symbol_table(analyzer.get_symbol_table().clone());
-        let mut hir_program = lowering_ctx.lower_program(&program);
+        let typed_program = analyzer.get_typed_program().ok_or("No typed program found")?;
+        let mut hir_program = lowering_ctx.lower_program(&program, typed_program);
 
         // 4. Opt
         opt::optimize(&mut hir_program);
@@ -203,11 +204,17 @@ impl BuildSystem {
 
         // 5. Codegen
         let context = inkwell::context::Context::create();
+        let typed_program = analyzer.get_typed_program().ok_or("No typed program found")?;
+        let mut monomorphized_structs = std::collections::HashMap::new();
+        for s in &typed_program.structs {
+            monomorphized_structs.insert(s.name.clone(), s.clone());
+        }
+
         let mut codegen = codegen::CodeGenerator::new(
             &context,
             &unit.name,
             stdlib,
-            analyzer.structs.clone(),
+            monomorphized_structs,
             analyzer.enums.clone(),
             analyzer.errors.clone(),
         )?;
@@ -220,13 +227,13 @@ impl BuildSystem {
         // For now, we rely on the functions being declared as external.
 
         // Declarations
-        for s in &program.structs {
+        for s in &typed_program.structs {
             codegen.declare_struct(s)?;
         }
         for e in &program.enums {
             codegen.declare_enum(e)?;
         }
-        for f in &program.functions {
+        for f in &typed_program.functions {
             codegen.declare_function(f)?;
         }
         // Declare external C functions (FFI)

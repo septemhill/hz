@@ -4,9 +4,9 @@
 //! where every expression has its inferred type explicitly stored.
 
 use crate::ast::Visibility;
-use crate::ast::{AssignOp, BinaryOp, Expr, FnDef, Program, Span, Stmt, Type, UnaryOp};
+use crate::ast::{AssignOp, BinaryOp, Expr, FnDef, FnParam, Program, Span, Stmt, Type, UnaryOp};
 use crate::sema::error::{AnalysisError, AnalysisResult};
-use crate::sema::symbol::SymbolTable;
+use crate::sema::symbol::{Symbol, SymbolTable};
 use std::collections::{HashMap, HashSet};
 
 // ============================================================================
@@ -329,6 +329,10 @@ pub struct TypedProgram {
     pub enums: Vec<TypedEnumDef>,
     pub errors: Vec<TypedErrorDef>,
     pub imports: Vec<(Option<String>, String)>,
+    /// Original AST-level function definitions (including monomorphized ones) for the lowering pass
+    pub ast_functions: Vec<crate::ast::FnDef>,
+    /// Original AST-level struct definitions (including monomorphized ones) for the lowering pass
+    pub ast_structs: Vec<crate::ast::StructDef>,
 }
 
 // ============================================================================
@@ -338,13 +342,32 @@ pub struct TypedProgram {
 /// Type inference engine that traverses the AST and infers types
 pub struct TypeInferrer {
     symbol_table: SymbolTable,
+    /// Map of struct name to its definition
     structs: HashMap<String, crate::ast::StructDef>,
+    /// Map of enum name to its definition
     enums: HashMap<String, crate::ast::EnumDef>,
+    /// Map of error name to its definition
     errors: HashMap<String, crate::ast::ErrorDef>,
-    /// Expected type for the current expression being inferred (used for array literals)
+    /// Map of function name to its definition
+    functions: HashMap<String, crate::ast::FnDef>,
+    /// Expected type for the current expression being inferred
     expected_type: Option<Type>,
     /// Expected return type for the current function being inferred
     expected_return_type: Option<Type>,
+    /// Current type parameter mappings (for monomorphization)
+    type_mappings: HashMap<String, Type>,
+    /// Monomorphized function instantiations: (original_name, type_args) -> mangled_name
+    fn_instantiations: HashMap<(String, Vec<Type>), String>,
+    /// Monomorphized struct instantiations: (original_name, type_args) -> mangled_name
+    struct_instantiations: HashMap<(String, Vec<Type>), String>,
+    /// New functions created during monomorphization
+    new_functions: Vec<TypedFnDef>,
+    /// New structs created during monomorphization
+    new_structs: Vec<TypedStructDef>,
+    /// New AST-level functions (monomorphized) for lowering pass
+    new_ast_functions: Vec<crate::ast::FnDef>,
+    /// New AST-level structs (monomorphized) for lowering pass
+    new_ast_structs: Vec<crate::ast::StructDef>,
 }
 
 impl TypeInferrer {
@@ -354,14 +377,151 @@ impl TypeInferrer {
         structs: HashMap<String, crate::ast::StructDef>,
         enums: HashMap<String, crate::ast::EnumDef>,
         errors: HashMap<String, crate::ast::ErrorDef>,
+        functions: HashMap<String, crate::ast::FnDef>,
     ) -> Self {
         TypeInferrer {
             symbol_table,
             structs,
             enums,
             errors,
+            functions,
             expected_type: None,
             expected_return_type: None,
+            type_mappings: HashMap::new(),
+            fn_instantiations: HashMap::new(),
+            struct_instantiations: HashMap::new(),
+            new_functions: Vec::new(),
+            new_structs: Vec::new(),
+            new_ast_functions: Vec::new(),
+            new_ast_structs: Vec::new(),
+        }
+    }
+
+    /// Substitute generic parameters in a type with concrete types
+    fn substitute_type(&mut self, ty: &Type, mappings: &HashMap<String, Type>) -> Type {
+        // Use self.type_mappings if mappings is empty but we have active mappings
+        let effective_mappings = if mappings.is_empty() && !self.type_mappings.is_empty() {
+            self.type_mappings.clone()
+        } else {
+            mappings.clone()
+        };
+
+        eprintln!(
+            "DEBUG substitute_type: ty={:?}, mappings={:?}, effective_mappings={:?}",
+            ty, mappings, effective_mappings
+        );
+        match ty {
+            Type::GenericParam(name) => effective_mappings.get(name).cloned().unwrap_or(ty.clone()),
+            Type::Pointer(inner) => {
+                let substituted = self.substitute_type(inner, &effective_mappings);
+                Type::Pointer(Box::new(substituted))
+            }
+            Type::Option(inner) => {
+                let substituted = self.substitute_type(inner, &effective_mappings);
+                Type::Option(Box::new(substituted))
+            }
+            Type::Result(inner) => {
+                let substituted = self.substitute_type(inner, &effective_mappings);
+                Type::Result(Box::new(substituted))
+            }
+            Type::Array { size, element_type } => {
+                let substituted = self.substitute_type(element_type, &effective_mappings);
+                Type::Array {
+                    size: *size,
+                    element_type: Box::new(substituted),
+                }
+            }
+            Type::Tuple(types) => {
+                let mut substituted = Vec::new();
+                for t in types {
+                    substituted.push(self.substitute_type(t, &effective_mappings));
+                }
+                Type::Tuple(substituted)
+            }
+            Type::Custom {
+                name,
+                generic_args,
+                is_exported,
+            } => {
+                let mut substituted_args = Vec::new();
+                for t in generic_args {
+                    substituted_args.push(self.substitute_type(t, &effective_mappings));
+                }
+
+                eprintln!(
+                    "DEBUG substitute_type Custom: name={}, generic_args={:?}, substituted_args={:?}",
+                    name, generic_args, substituted_args
+                );
+
+                // Check if we should mangle the name (only if all args are concrete and it had generic params)
+                let has_generic_params = self
+                    .structs
+                    .get(name)
+                    .map(|s| !s.generic_params.is_empty())
+                    .unwrap_or(false)
+                    || self
+                        .enums
+                        .get(name)
+                        .map(|e| !e.generic_params.is_empty())
+                        .unwrap_or(false);
+
+                eprintln!(
+                    "DEBUG Custom type: name={}, has_generic_params={}, substituted_args={:?}",
+                    name, has_generic_params, substituted_args
+                );
+
+                if has_generic_params
+                    && !substituted_args.is_empty()
+                    && substituted_args.iter().all(|t| !t.is_generic())
+                {
+                    let mangled = self.get_mangled_name(name, &substituted_args);
+
+                    // Ensure the monomorphized struct is instantiated - but only if all args are concrete
+                    let key = (name.clone(), substituted_args.clone());
+                    let all_concrete = !substituted_args.iter().any(|t| t.is_generic());
+                    if all_concrete
+                        && !self.struct_instantiations.contains_key(&key)
+                        && self.structs.contains_key(name)
+                    {
+                        self.struct_instantiations.insert(key, mangled.clone());
+                        // We need to be careful here: instantiate_struct calls substitute_type
+                        // but only on fields, and it uses a different mappings.
+                        // It should be fine as long as we don't have infinite recursion.
+                        let _ = self.instantiate_struct(name, &substituted_args, &mangled);
+                    }
+
+                    Type::Custom {
+                        name: mangled,
+                        generic_args: Vec::new(),
+                        is_exported: *is_exported,
+                    }
+                } else {
+                    eprintln!(
+                        "DEBUG NOT mangling: name={}, has_generic_params={}",
+                        name, has_generic_params
+                    );
+                    Type::Custom {
+                        name: name.clone(),
+                        generic_args: substituted_args,
+                        is_exported: *is_exported,
+                    }
+                }
+            }
+            Type::Function {
+                params,
+                return_type,
+            } => {
+                let mut substituted_params = Vec::new();
+                for t in params {
+                    substituted_params.push(self.substitute_type(t, &effective_mappings));
+                }
+                let substituted_return = self.substitute_type(return_type, &effective_mappings);
+                Type::Function {
+                    params: substituted_params,
+                    return_type: Box::new(substituted_return),
+                }
+            }
+            _ => ty.clone(),
         }
     }
 
@@ -622,6 +782,10 @@ impl TypeInferrer {
     pub fn infer_program(&mut self, program: &Program) -> AnalysisResult<TypedProgram> {
         // Populate structs, enums and errors maps from program
         for s in &program.structs {
+            eprintln!(
+                "DEBUG: inserting struct into self.structs: {:?}, generic_params={:?}",
+                s.name, s.generic_params
+            );
             self.structs.insert(s.name.clone(), s.clone());
         }
         for e in &program.enums {
@@ -630,15 +794,40 @@ impl TypeInferrer {
         for e in &program.errors {
             self.errors.insert(e.name.clone(), e.clone());
         }
+        for f in &program.functions {
+            self.functions.insert(f.name.clone(), f.clone());
+        }
+        for s in &program.structs {
+            for m in &s.methods {
+                let full_name = format!("{}_{}", s.name, m.name);
+                eprintln!(
+                    "DEBUG: inserting struct method: {} (struct={}, method={}, struct_generic_params={:?}, method_generic_params={:?})",
+                    full_name, s.name, m.name, s.generic_params, m.generic_params
+                );
+                // Combine struct's generic params with method's generic params
+                let mut combined_params = s.generic_params.clone();
+                combined_params.extend(m.generic_params.clone());
+
+                let mut method_with_params = m.clone();
+                method_with_params.generic_params = combined_params;
+                self.functions.insert(full_name, method_with_params);
+            }
+        }
 
         let mut functions = Vec::new();
         for f in &program.functions {
-            functions.push(self.infer_fn(f)?);
+            if f.generic_params.is_empty() {
+                functions.push(self.infer_fn(f)?);
+            }
         }
 
+        // Handle initial structs/enums/errors - only non-generic ones for now?
+        // Actually, structs are types, we still need them in the TypedProgram.
         let mut structs = Vec::new();
         for s in &program.structs {
-            structs.push(self.infer_struct(s)?);
+            if s.generic_params.is_empty() {
+                structs.push(self.infer_struct(s)?);
+            }
         }
 
         let mut enums = Vec::new();
@@ -651,13 +840,69 @@ impl TypeInferrer {
             errors.push(self.infer_error(e)?);
         }
 
+        // Finalize functions and structs including instantiations
+        functions.extend(std::mem::take(&mut self.new_functions));
+        eprintln!(
+            "DEBUG final functions: {:?}",
+            functions
+                .iter()
+                .map(|f| (&f.name, &f.return_ty))
+                .collect::<Vec<_>>()
+        );
+        structs.extend(std::mem::take(&mut self.new_structs));
+        eprintln!(
+            "DEBUG final structs: {:?}",
+            structs
+                .iter()
+                .map(|s| (&s.name, &s.generic_params, s.methods.len()))
+                .collect::<Vec<_>>()
+        );
+
+        // Build ast_structs: all original structs (including generic) + monomorphized ones
+        let mut ast_structs: Vec<crate::ast::StructDef> = program.structs.iter().cloned().collect();
+        ast_structs.extend(std::mem::take(&mut self.new_ast_structs));
+
+        // Build ast_functions: original non-generic functions + monomorphized ones
+        let mut ast_functions: Vec<crate::ast::FnDef> = program
+            .functions
+            .iter()
+            .filter(|f| f.generic_params.is_empty())
+            .cloned()
+            .collect();
+        // Filter out struct methods from ast_functions
+        let ast_struct_names: std::collections::HashSet<String> =
+            ast_structs.iter().map(|s| s.name.clone()).collect();
+        let new_ast_functions: Vec<crate::ast::FnDef> = std::mem::take(&mut self.new_ast_functions)
+            .into_iter()
+            .filter(|f| {
+                for struct_name in &ast_struct_names {
+                    if f.name.starts_with(&format!("{}_", struct_name)) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
+        ast_functions.extend(new_ast_functions);
+
+        // Build ast_structs: original non-generic structs + monomorphized ones
+        let mut ast_structs: Vec<crate::ast::StructDef> = program
+            .structs
+            .iter()
+            .filter(|s| s.generic_params.is_empty())
+            .cloned()
+            .collect();
+        ast_structs.extend(std::mem::take(&mut self.new_ast_structs));
+
         Ok(TypedProgram {
             functions,
-            external_functions: Vec::new(), // TODO: Handle external functions
+            external_functions: Vec::new(),
             structs,
             enums,
             errors,
             imports: program.imports.clone(),
+            ast_functions,
+            ast_structs,
         })
     }
 
@@ -706,23 +951,248 @@ impl TypeInferrer {
         })
     }
 
+    fn infer_type_args(
+        &self,
+        params: &[String],
+        param_types: &[Type],
+        arg_types: &[Type],
+    ) -> AnalysisResult<Vec<Type>> {
+        let mut mappings = HashMap::new();
+
+        for (p_ty, a_ty) in param_types.iter().zip(arg_types.iter()) {
+            self.match_type_params(p_ty, a_ty, &mut mappings);
+        }
+
+        let mut result = Vec::new();
+        for p_name in params {
+            if let Some(ty) = mappings.get(p_name) {
+                result.push(ty.clone());
+            } else {
+                return Err(AnalysisError::new(&format!(
+                    "Could not infer type argument for '{}'",
+                    p_name
+                ))
+                .with_module("infer"));
+            }
+        }
+        Ok(result)
+    }
+
+    fn match_type_params(&self, p_ty: &Type, a_ty: &Type, mappings: &mut HashMap<String, Type>) {
+        match (p_ty, a_ty) {
+            (Type::GenericParam(name), _) => {
+                if !mappings.contains_key(name) {
+                    mappings.insert(name.clone(), a_ty.clone());
+                }
+            }
+            (Type::Pointer(p_inner), Type::Pointer(a_inner)) => {
+                self.match_type_params(p_inner, a_inner, mappings);
+            }
+            (Type::Option(p_inner), Type::Option(a_inner)) => {
+                self.match_type_params(p_inner, a_inner, mappings);
+            }
+            (Type::Result(p_inner), Type::Result(a_inner)) => {
+                self.match_type_params(p_inner, a_inner, mappings);
+            }
+            (
+                Type::Array {
+                    element_type: p_elem,
+                    ..
+                },
+                Type::Array {
+                    element_type: a_elem,
+                    ..
+                },
+            ) => {
+                self.match_type_params(p_elem, a_elem, mappings);
+            }
+            (Type::Tuple(p_types), Type::Tuple(a_types)) if p_types.len() == a_types.len() => {
+                for (pt, at) in p_types.iter().zip(a_types.iter()) {
+                    self.match_type_params(pt, at, mappings);
+                }
+            }
+            (
+                Type::Custom {
+                    name: p_name,
+                    generic_args: p_args,
+                    ..
+                },
+                Type::Custom {
+                    name: a_name,
+                    generic_args: a_args,
+                    ..
+                },
+            ) if p_name == a_name && p_args.len() == a_args.len() => {
+                for (pa, aa) in p_args.iter().zip(a_args.iter()) {
+                    self.match_type_params(pa, aa, mappings);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn get_mangled_name(&self, name: &str, type_args: &[Type]) -> String {
+        let mut mangled = name.to_string();
+        for ty in type_args {
+            mangled.push('_');
+            mangled.push_str(
+                &ty.to_string()
+                    .replace("<", "_")
+                    .replace(">", "_")
+                    .replace(",", "_")
+                    .replace(" ", ""),
+            );
+        }
+        mangled
+    }
+
+    fn instantiate_fn(
+        &mut self,
+        name: &str,
+        type_args: &[Type],
+        mangled_name: &str,
+    ) -> AnalysisResult<()> {
+        eprintln!(
+            "DEBUG instantiate_fn: name={}, type_args={:?}, mangled_name={}, type_mappings_before={:?}",
+            name, type_args, mangled_name, self.type_mappings
+        );
+        let f_def = self.functions.get(name).cloned().ok_or_else(|| {
+            AnalysisError::new(&format!("Original function '{}' not found", name))
+        })?;
+        eprintln!(
+            "DEBUG instantiate_fn: f_def.return_ty = {:?}",
+            f_def.return_ty
+        );
+
+        let mut mappings = HashMap::new();
+        for (i, p_name) in f_def.generic_params.iter().enumerate() {
+            mappings.insert(p_name.clone(), type_args[i].clone());
+        }
+        eprintln!(
+            "DEBUG instantiate_fn: f_def.generic_params={:?}, mappings={:?}",
+            f_def.generic_params, mappings
+        );
+
+        // Save current type mappings
+        let old_mappings = self.type_mappings.clone();
+        self.type_mappings = mappings.clone();
+
+        // Perform substitution on parameters and return type
+        let mappings = self.type_mappings.clone();
+        let instantiated_f = FnDef {
+            name: mangled_name.to_string(),
+            visibility: f_def.visibility,
+            params: f_def
+                .params
+                .iter()
+                .map(|p| FnParam {
+                    name: p.name.clone(),
+                    ty: self.substitute_type(&p.ty, &mappings),
+                })
+                .collect(),
+            return_ty: self.substitute_type(&f_def.return_ty, &mappings),
+            body: f_def.body.clone(),
+            generic_params: Vec::new(),
+            span: f_def.span,
+        };
+
+        // Store the AST-level FnDef for the lowering pass
+        self.new_ast_functions.push(instantiated_f.clone());
+
+        // Infer the instantiated function - keep the type mappings for inference
+        // Note: We temporarily keep the mappings active for inference
+        let typed_f = self.infer_fn(&instantiated_f)?;
+        self.new_functions.push(typed_f);
+
+        // Restore type mappings
+        self.type_mappings = old_mappings;
+        Ok(())
+    }
+
+    fn instantiate_struct(
+        &mut self,
+        name: &str,
+        type_args: &[Type],
+        mangled_name: &str,
+    ) -> AnalysisResult<()> {
+        eprintln!(
+            "DEBUG instantiate_struct: name={}, type_args={:?}, mangled_name={}",
+            name, type_args, mangled_name
+        );
+        let s_def =
+            self.structs.get(name).cloned().ok_or_else(|| {
+                AnalysisError::new(&format!("Original struct '{}' not found", name))
+            })?;
+
+        let mut mappings = HashMap::new();
+        for (i, p_name) in s_def.generic_params.iter().enumerate() {
+            mappings.insert(p_name.clone(), type_args[i].clone());
+        }
+
+        let old_mappings = self.type_mappings.clone();
+        self.type_mappings = mappings;
+
+        let mappings = self.type_mappings.clone();
+        let instantiated_s = crate::ast::StructDef {
+            name: mangled_name.to_string(),
+            fields: s_def
+                .fields
+                .iter()
+                .map(|f| crate::ast::StructField {
+                    name: f.name.clone(),
+                    ty: self.substitute_type(&f.ty, &mappings),
+                    visibility: f.visibility,
+                })
+                .collect(),
+            methods: s_def.methods.clone(),
+            visibility: s_def.visibility,
+            generic_params: Vec::new(),
+            span: s_def.span,
+        };
+
+        // Store the AST-level StructDef for the lowering pass
+        self.new_ast_structs.push(instantiated_s.clone());
+        self.structs
+            .insert(mangled_name.to_string(), instantiated_s.clone());
+
+        let typed_s = self.infer_struct(&instantiated_s);
+        if let Ok(ts) = typed_s {
+            self.new_structs.push(ts);
+        }
+
+        self.type_mappings = old_mappings;
+        Ok(())
+    }
+
     /// Infer types for a function definition
     fn infer_fn(&mut self, f: &FnDef) -> AnalysisResult<TypedFnDef> {
         // Enter function scope and add parameters
         self.symbol_table.enter_scope();
 
+        let mappings = self.type_mappings.clone();
+        eprintln!(
+            "DEBUG infer_fn: f.name={}, type_mappings={:?}, f.return_ty={:?}",
+            f.name, mappings, f.return_ty
+        );
+        let mut typed_params = Vec::new();
         for param in &f.params {
+            let substituted_ty = self.substitute_type(&param.ty, &mappings);
             self.symbol_table.define(
                 param.name.clone(),
-                param.ty.clone(),
+                substituted_ty.clone(),
                 Visibility::Private,
                 false,
             );
+            typed_params.push(TypedFnParam {
+                name: param.name.clone(),
+                ty: substituted_ty,
+            });
         }
 
         // Set expected return type for return statements
         let previous_return_type = self.expected_return_type.clone();
-        self.expected_return_type = Some(f.return_ty.clone());
+        let substituted_return_ty = self.substitute_type(&f.return_ty, &mappings);
+        self.expected_return_type = Some(substituted_return_ty.clone());
 
         // Infer types for the function body
         let mut body = Vec::new();
@@ -739,15 +1209,8 @@ impl TypeInferrer {
         Ok(TypedFnDef {
             name: f.name.clone(),
             visibility: f.visibility,
-            params: f
-                .params
-                .iter()
-                .map(|p| TypedFnParam {
-                    name: p.name.clone(),
-                    ty: p.ty.clone(),
-                })
-                .collect(),
-            return_ty: f.return_ty.clone(),
+            params: typed_params,
+            return_ty: substituted_return_ty,
             body,
             span: f.span,
         })
@@ -1379,52 +1842,54 @@ impl TypeInferrer {
                 name,
                 namespace,
                 args,
+                generic_args,
                 span,
             } => {
-                // Build the full function name for lookup
-                let fn_name = if let Some(ns) = namespace {
-                    format!("{}_{}", ns, name)
-                } else {
-                    name.clone()
-                };
-
-                // Try to resolve the function to get parameter types for expected type inference
-                let param_types: Option<Vec<Type>> =
-                    self.symbol_table.resolve(&fn_name).and_then(|s| {
-                        if let Type::Function { params, .. } = &s.ty {
-                            Some(params.clone())
-                        } else {
-                            None
-                        }
-                    });
-
+                // Pre-infer argument types as they are needed for built-ins and resolution
                 let mut typed_args = Vec::new();
-                let previous_expected = self.get_expected_type().cloned();
+                for arg in args {
+                    typed_args.push(self.infer_expr(arg)?);
+                }
 
-                // If we have parameter types, set them as expected types for arguments
-                if let Some(ref params) = param_types {
-                    for (i, arg) in args.iter().enumerate() {
-                        if i < params.len() {
-                            self.set_expected_type(Some(params[i].clone()));
+                // 1. Handle Built-in functions
+                if namespace.is_none() {
+                    match name.as_str() {
+                        "println" => {
+                            // Validation (Special handling for io prefix might be needed if moved from io::println)
+                            // But usually it's io::println. Let's keep existing io::println check below.
                         }
-                        typed_args.push(self.infer_expr(arg)?);
-                    }
-                } else {
-                    // Fall back to original behavior
-                    for arg in args {
-                        typed_args.push(self.infer_expr(arg)?);
+                        "is_null" | "is_not_null" => {
+                            if typed_args.len() != 1 {
+                                return Err(AnalysisError::new_with_span(
+                                    &format!("{} requires exactly one argument", name),
+                                    span,
+                                )
+                                .with_module("infer"));
+                            }
+                            if !matches!(typed_args[0].ty, Type::RawPtr | Type::Pointer(_)) {
+                                return Err(AnalysisError::new_with_span(
+                                    &format!("{} requires a pointer argument", name),
+                                    span,
+                                )
+                                .with_module("infer"));
+                            }
+                            return Ok(TypedExpr {
+                                expr: TypedExprKind::Call {
+                                    name: name.clone(),
+                                    namespace: None,
+                                    args: typed_args,
+                                },
+                                ty: Type::Bool,
+                                span: *span,
+                            });
+                        }
+                        _ => {}
                     }
                 }
 
-                // Restore previous expected type
-                self.set_expected_type(previous_expected);
-
-                // Check for special cases
                 if namespace.as_deref() == Some("io") && name == "println" {
-                    // Validate format string arguments if first arg is a string literal
                     if let Some(first_arg) = args.first() {
                         if let Expr::String(format_str, _) = first_arg {
-                            // Parse format string and validate argument types
                             self.validate_io_println_format(format_str, &typed_args[1..], span)?;
                         }
                     }
@@ -1438,77 +1903,117 @@ impl TypeInferrer {
                         span: *span,
                     });
                 }
-                // Check for is_null built-in function
-                // Usage: is_null(ptr) returns true if ptr is null
-                // Note: Only rawptr can be null because language pointers from allocators
-                // never return null - they throw an error on allocation failure
-                if namespace.is_none() && name == "is_null" {
-                    if typed_args.len() != 1 {
+
+                // 2. Resolve as a normal function (with Generics)
+                let fn_lookup_name = if let Some(ns) = namespace {
+                    format!("{}_{}", ns, name)
+                } else {
+                    name.clone()
+                };
+
+                if let Some(symbol) = self.symbol_table.resolve(&fn_lookup_name).cloned() {
+                    let (actual_generic_args, mangled_name) = if !symbol.generic_params.is_empty() {
+                        let mut type_args = generic_args.clone();
+                        if type_args.is_empty() {
+                            if let Type::Function { params, .. } = &symbol.ty {
+                                let inferred_arg_types: Vec<Type> =
+                                    typed_args.iter().map(|e| e.ty.clone()).collect();
+                                type_args = self.infer_type_args(
+                                    &symbol.generic_params,
+                                    params,
+                                    &inferred_arg_types,
+                                )?;
+                            }
+                        }
+                        let key = (fn_lookup_name.clone(), type_args.clone());
+                        if let Some(mangled) = self.fn_instantiations.get(&key) {
+                            (type_args, mangled.clone())
+                        } else {
+                            let mangled = if let Some(ns) = namespace {
+                                if let Some(s_def) = self.structs.get(ns) {
+                                    let s_len = s_def.generic_params.len();
+                                    let s_mangled = self.get_mangled_name(ns, &type_args[..s_len]);
+                                    if s_len < type_args.len() {
+                                        let m_mangled = self.get_mangled_name(name, &type_args[s_len..]);
+                                        format!("{}_{}", s_mangled, m_mangled)
+                                    } else {
+                                        format!("{}_{}", s_mangled, name)
+                                    }
+                                } else if let Some(e_def) = self.enums.get(ns) {
+                                    let e_len = e_def.generic_params.len();
+                                    let e_mangled = self.get_mangled_name(ns, &type_args[..e_len]);
+                                    if e_len < type_args.len() {
+                                        let m_mangled = self.get_mangled_name(name, &type_args[e_len..]);
+                                        format!("{}_{}", e_mangled, m_mangled)
+                                    } else {
+                                        format!("{}_{}", e_mangled, name)
+                                    }
+                                } else {
+                                    self.get_mangled_name(&fn_lookup_name, &type_args)
+                                }
+                            } else {
+                                self.get_mangled_name(&fn_lookup_name, &type_args)
+                            };
+                            self.fn_instantiations.insert(key, mangled.clone());
+                            self.instantiate_fn(&fn_lookup_name, &type_args, &mangled)?;
+                            (type_args, mangled)
+                        }
+                    } else {
+                        (Vec::new(), fn_lookup_name.clone())
+                    };
+
+                    let final_symbol = if mangled_name != fn_lookup_name {
+                        let mut mappings = HashMap::new();
+                        for (i, p_name) in symbol.generic_params.iter().enumerate() {
+                            mappings.insert(p_name.clone(), actual_generic_args[i].clone());
+                        }
+                        let substituted_ty = self.substitute_type(&symbol.ty, &mappings);
+                        Symbol {
+                            name: mangled_name.clone(),
+                            ty: substituted_ty,
+                            visibility: symbol.visibility,
+                            is_const: symbol.is_const,
+                            generic_params: Vec::new(),
+                        }
+                    } else {
+                        symbol
+                    };
+
+                    let return_type = if let Type::Function { return_type, .. } = &final_symbol.ty {
+                        return_type.as_ref().clone()
+                    } else {
                         return Err(AnalysisError::new_with_span(
-                            "is_null requires exactly one argument",
+                            &format!("'{}' is not a function", fn_lookup_name),
                             span,
                         )
                         .with_module("infer"));
-                    }
-                    let arg_ty = &typed_args[0].ty;
-                    // Only allow rawptr - language pointers never return null
-                    if !matches!(arg_ty, Type::RawPtr) {
-                        return Err(AnalysisError::new_with_span(
-                            "is_null requires a rawptr argument",
-                            span,
-                        )
-                        .with_module("infer"));
-                    }
+                    };
+
                     return Ok(TypedExpr {
                         expr: TypedExprKind::Call {
-                            name: name.clone(),
-                            namespace: None,
+                            name: if mangled_name != fn_lookup_name {
+                                mangled_name.clone()
+                            } else {
+                                name.clone()
+                            },
+                            namespace: if mangled_name != fn_lookup_name {
+                                None
+                            } else {
+                                namespace.clone()
+                            },
                             args: typed_args,
                         },
-                        ty: Type::Bool,
-                        span: *span,
-                    });
-                }
-                // Check for is_not_null built-in function
-                // Usage: is_not_null(ptr) returns true if ptr is not null
-                // Note: Only rawptr can be null because language pointers from allocators
-                // never return null - they throw an error on allocation failure
-                if namespace.is_none() && name == "is_not_null" {
-                    if typed_args.len() != 1 {
-                        return Err(AnalysisError::new_with_span(
-                            "is_not_null requires exactly one argument",
-                            span,
-                        )
-                        .with_module("infer"));
-                    }
-                    let arg_ty = &typed_args[0].ty;
-                    // Only allow rawptr - language pointers never return null
-                    if !matches!(arg_ty, Type::RawPtr) {
-                        return Err(AnalysisError::new_with_span(
-                            "is_not_null requires a rawptr argument",
-                            span,
-                        )
-                        .with_module("infer"));
-                    }
-                    return Ok(TypedExpr {
-                        expr: TypedExprKind::Call {
-                            name: name.clone(),
-                            namespace: None,
-                            args: typed_args,
-                        },
-                        ty: Type::Bool,
+                        ty: return_type,
                         span: *span,
                     });
                 }
 
-                // Try to resolve function return type
-                let fn_name = if let Some(ns) = namespace {
-                    // First check if the namespace is a variable in scope (struct instance)
-                    // If so, we need to look up the field in the struct type
+                // 3. Resolve as a method call or field function
+                if let Some(ns) = namespace {
                     if let Some(var_symbol) = self.symbol_table.resolve(ns) {
-                        // The namespace is a variable - look up the field in its type
-                        if let Some(struct_name) = custom_type_name(&var_symbol.ty) {
-                            if let Some(struct_def) = self.structs.get(struct_name) {
+                        if let Some(struct_full_name) = custom_type_name(&var_symbol.ty) {
+                            // Split into package and struct name if needed, but for now we look up by full name
+                            if let Some(struct_def) = self.structs.get(struct_full_name) {
                                 if let Some(method) =
                                     struct_def.methods.iter().find(|m| &m.name == name)
                                 {
@@ -1522,77 +2027,102 @@ impl TypeInferrer {
                                         span: *span,
                                     });
                                 }
-
-                                if let Some(field) =
-                                    struct_def.fields.iter().find(|f| &f.name == name)
-                                {
-                                    // Found the field - extract return type if it's a function
-                                    if let Type::Function { return_type, .. } = &field.ty {
-                                        return Ok(TypedExpr {
-                                            expr: TypedExprKind::Call {
-                                                name: name.clone(),
-                                                namespace: namespace.clone(),
-                                                args: typed_args,
-                                            },
-                                            ty: return_type.as_ref().clone(),
-                                            span: *span,
-                                        });
-                                    }
-                                }
-                            } else if let Some(enum_def) = self.enums.get(struct_name) {
-                                if let Some(method) =
-                                    enum_def.methods.iter().find(|m| &m.name == name)
-                                {
-                                    return Ok(TypedExpr {
-                                        expr: TypedExprKind::Call {
-                                            name: name.clone(),
-                                            namespace: namespace.clone(),
-                                            args: typed_args,
-                                        },
-                                        ty: method.return_ty.clone(),
-                                        span: *span,
-                                    });
-                                }
                             }
                         }
-                        // If we couldn't find the field, fall through to regular handling
                     }
-                    format!("{}_{}", ns, name)
+                }
+
+                Err(AnalysisError::new_with_span(
+                    &format!("Undefined function '{}'", fn_lookup_name),
+                    span,
+                )
+                .with_module("infer"))
+            }
+            Expr::Struct {
+                name,
+                fields,
+                generic_args,
+                span,
+            } => {
+                let s_def = self.structs.get(name).cloned().ok_or_else(|| {
+                    AnalysisError::new_with_span(&format!("Undefined struct '{}'", name), span)
+                        .with_module("infer")
+                })?;
+
+                let (actual_generic_args, mangled_name) = if !s_def.generic_params.is_empty() {
+                    let type_args = if generic_args.is_empty() {
+                        return Err(AnalysisError::new_with_span(
+                            &format!("Generic arguments required for struct '{}'", name),
+                            span,
+                        )
+                        .with_module("infer"));
+                    } else {
+                        generic_args.clone()
+                    };
+
+                    // Substitute type args using current mappings
+                    let substituted_type_args: Vec<Type> = type_args
+                        .iter()
+                        .map(|t| self.substitute_type(t, &HashMap::new()))
+                        .collect();
+
+                    // Skip instantiation if any type_arg is generic - these will be handled during instantiation
+                    let any_generic = substituted_type_args.iter().any(|t| t.is_generic());
+
+                    if any_generic {
+                        // Don't instantiate - just return the original name
+                        (Vec::new(), name.clone())
+                    } else {
+                        let key = (name.clone(), substituted_type_args.clone());
+                        if let Some(mangled) = self.struct_instantiations.get(&key) {
+                            (substituted_type_args, mangled.clone())
+                        } else {
+                            let mangled = self.get_mangled_name(name, &substituted_type_args);
+                            self.struct_instantiations.insert(key, mangled.clone());
+                            self.instantiate_struct(name, &substituted_type_args, &mangled)?;
+                            (substituted_type_args, mangled)
+                        }
+                    }
                 } else {
-                    name.clone()
+                    (Vec::new(), name.clone())
                 };
 
-                let ty = self
-                    .symbol_table
-                    .resolve(&fn_name)
-                    .map(|s| {
-                        // If the symbol is a function type, extract the return type
-                        if let Type::Function { return_type, .. } = &s.ty {
-                            return_type.as_ref().clone()
-                        } else {
-                            s.ty.clone()
-                        }
-                    })
-                    .ok_or_else(|| {
-                        let display_name = if let Some(ns) = namespace {
-                            format!("{}.{}", ns, name)
-                        } else {
-                            name.clone()
-                        };
+                // Build mappings from struct's generic params to actual generic args
+                let mut mappings = HashMap::new();
+                for (i, p_name) in s_def.generic_params.iter().enumerate() {
+                    if i < actual_generic_args.len() {
+                        mappings.insert(p_name.clone(), actual_generic_args[i].clone());
+                    }
+                }
+
+                let mut field_types_map = HashMap::new();
+                for f in &s_def.fields {
+                    field_types_map.insert(f.name.clone(), self.substitute_type(&f.ty, &mappings));
+                }
+
+                let mut typed_fields = Vec::new();
+                for (fname, fexpr) in fields {
+                    let expected_fty = field_types_map.get(fname).ok_or_else(|| {
                         AnalysisError::new_with_span(
-                            &format!("Undefined function '{}'", display_name),
+                            &format!("Field '{}' not found in struct '{}'", fname, name),
                             span,
                         )
                         .with_module("infer")
                     })?;
+                    self.set_expected_type(Some(expected_fty.clone()));
+                    typed_fields.push((fname.clone(), self.infer_expr(fexpr)?));
+                }
 
                 Ok(TypedExpr {
-                    expr: TypedExprKind::Call {
-                        name: name.clone(),
-                        namespace: namespace.clone(),
-                        args: typed_args,
+                    expr: TypedExprKind::Struct {
+                        name: mangled_name.clone(),
+                        fields: typed_fields,
                     },
-                    ty,
+                    ty: Type::Custom {
+                        name: mangled_name,
+                        generic_args: actual_generic_args,
+                        is_exported: s_def.visibility.is_public(),
+                    },
                     span: *span,
                 })
             }
@@ -1726,17 +2256,33 @@ impl TypeInferrer {
                 let typed_object = self.infer_expr(object)?;
 
                 let (kind, ty) = if let Some(name) = custom_type_name(&typed_object.ty) {
-                    if let Some(struct_def) = self.structs.get(name) {
+                    let struct_def_opt = self.structs.get(name).cloned();
+                    if let Some(struct_def) = struct_def_opt {
+                        // Create mapping from struct generic params to object generic args
+                        let mut mappings = HashMap::new();
+                        if let Type::Custom { generic_args, .. } = &typed_object.ty {
+                            for (i, p_name) in struct_def.generic_params.iter().enumerate() {
+                                if let Some(arg) = generic_args.get(i) {
+                                    mappings.insert(p_name.clone(), arg.clone());
+                                }
+                            }
+                        }
+
                         if let Some(method) = struct_def.methods.iter().find(|m| &m.name == member)
                         {
+                            let m_mappings = mappings.clone();
                             (
                                 crate::ast::MemberAccessKind::StructMethod,
-                                method.return_ty.clone(),
+                                self.substitute_type(&method.return_ty, &m_mappings),
                             )
                         } else if let Some(field) =
                             struct_def.fields.iter().find(|f| &f.name == member)
                         {
-                            (crate::ast::MemberAccessKind::StructField, field.ty.clone())
+                            let f_mappings = mappings.clone();
+                            (
+                                crate::ast::MemberAccessKind::StructField,
+                                self.substitute_type(&field.ty, &f_mappings),
+                            )
                         } else {
                             return Err(AnalysisError::new_with_span(
                                 &format!("Type {} has no member '{}'", name, member),
@@ -1797,7 +2343,9 @@ impl TypeInferrer {
                     span: *span,
                 })
             }
-            Expr::Struct { name, fields, span } => {
+            Expr::Struct {
+                name, fields, span, ..
+            } => {
                 let mut typed_fields = Vec::new();
 
                 // Look up the struct definition to get field types
@@ -2035,6 +2583,8 @@ impl TypeInferrer {
                 | Type::U16
                 | Type::U32
                 | Type::U64
+                | Type::F32
+                | Type::F64
         )
     }
 
@@ -2159,8 +2709,9 @@ pub fn infer_types(
     structs: HashMap<String, crate::ast::StructDef>,
     enums: HashMap<String, crate::ast::EnumDef>,
     errors: HashMap<String, crate::ast::ErrorDef>,
+    functions: HashMap<String, crate::ast::FnDef>,
 ) -> AnalysisResult<TypedProgram> {
-    let mut inferrer = TypeInferrer::new(symbol_table, structs, enums, errors);
+    let mut inferrer = TypeInferrer::new(symbol_table, structs, enums, errors, functions);
     inferrer.infer_program(program)
 }
 
@@ -2287,8 +2838,23 @@ impl AstDump for TypedProgram {
         for f in &self.external_functions {
             f.dump(indent + 1);
         }
+        // Filter out struct and enum methods from global functions list if they are already shown under their parent
+        let mut shown_methods = HashSet::new();
+        for s in &self.structs {
+            for m in &s.methods {
+                shown_methods.insert(format!("{}_{}", s.name, m.name));
+            }
+        }
+        for e in &self.enums {
+            for m in &e.methods {
+                shown_methods.insert(format!("{}_{}", e.name, m.name));
+            }
+        }
+
         for f in &self.functions {
-            f.dump(indent + 1);
+            if !shown_methods.contains(&f.name) {
+                f.dump(indent + 1);
+            }
         }
     }
 }

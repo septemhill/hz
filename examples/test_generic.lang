@@ -1,0 +1,40 @@
+struct Compose<T> {
+    inner: T,
+
+    fn new(v: T) Compose<T> {
+        return Compose<T>{
+            inner: v,
+        };
+    }
+}
+
+struct Data {
+    age: i32,
+}
+
+fn add<T>(a: T, b: T) T {
+    return a + b;
+}
+
+fn main() void {
+    const a: i32 = 1;
+    const b: i32 = 2;
+
+    io.println("int value: {d}", add(a, b));
+
+    const c: f64 = 22.11;
+    const d: f64 = 44.77;
+
+    io.println("float value: {f}", add(c, d))
+
+    const comp = Compose<i32>.new(100);                                                                                                                                              
+    io.println("composed int: {d}", comp.inner);                                                                                                                                     
+                                                    
+    const comp_f = Compose<f64>.new(3.14);                                                                                                                                           
+    io.println("composed float: {f}", comp_f.inner);                                                                                                                                 
+
+    const vv = Compose<Data>.new(Data{age: 100});                                                                                                                                    
+    io.println("composed struct: {d}", vv.inner.age);
+
+    return;
+}

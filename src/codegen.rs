@@ -16,6 +16,7 @@ use inkwell::values::{
 
 use crate::ast::*;
 use crate::hir;
+use crate::sema::infer::{TypedFnDef, TypedStructDef};
 use crate::stdlib::StdLib;
 
 /// Code generator context
@@ -60,7 +61,7 @@ pub struct CodeGenerator<'ctx> {
     stdlib: StdLib,
 
     // Track imported packages (for duplicate checking)
-    imported_packages: HashMap<String, String>, // alias -> package_name
+    pub imported_packages: HashMap<String, String>, // alias -> package_name
 
     // Current module name for mangling
     module_name: String,
@@ -72,7 +73,7 @@ pub struct CodeGenerator<'ctx> {
     struct_field_indices: HashMap<String, HashMap<String, u32>>,
 
     // Struct, Enum, and Error definitions for type lookup
-    pub structs: HashMap<String, StructDef>,
+    pub structs: HashMap<String, TypedStructDef>,
     pub enums: HashMap<String, EnumDef>,
     pub errors: HashMap<String, ErrorDef>,
 }
@@ -95,7 +96,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         context: &'ctx Context,
         module_name: &str,
         stdlib: StdLib,
-        structs: HashMap<String, StructDef>,
+        structs: HashMap<String, TypedStructDef>,
         enums: HashMap<String, EnumDef>,
         errors: HashMap<String, ErrorDef>,
     ) -> CodegenResult<Self> {
@@ -1677,99 +1678,215 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Handle different types
                 let val = match op {
                     BinaryOp::Add => {
-                        let l_int = l.into_int_value();
-                        let r_int = r.into_int_value();
-                        self.builder.build_int_add(l_int, r_int, "add")?.into()
+                        if l.is_float_value() {
+                            self.builder
+                                .build_float_add(
+                                    l.into_float_value(),
+                                    r.into_float_value(),
+                                    "fadd",
+                                )?
+                                .into()
+                        } else {
+                            let l_int = l.into_int_value();
+                            let r_int = r.into_int_value();
+                            self.builder.build_int_add(l_int, r_int, "add")?.into()
+                        }
                     }
                     BinaryOp::Sub => {
-                        let l_int = l.into_int_value();
-                        let r_int = r.into_int_value();
-                        self.builder.build_int_sub(l_int, r_int, "sub")?.into()
+                        if l.is_float_value() {
+                            self.builder
+                                .build_float_sub(
+                                    l.into_float_value(),
+                                    r.into_float_value(),
+                                    "fsub",
+                                )?
+                                .into()
+                        } else {
+                            let l_int = l.into_int_value();
+                            let r_int = r.into_int_value();
+                            self.builder.build_int_sub(l_int, r_int, "sub")?.into()
+                        }
                     }
                     BinaryOp::Mul => {
-                        let l_int = l.into_int_value();
-                        let r_int = r.into_int_value();
-                        self.builder.build_int_mul(l_int, r_int, "mul")?.into()
+                        if l.is_float_value() {
+                            self.builder
+                                .build_float_mul(
+                                    l.into_float_value(),
+                                    r.into_float_value(),
+                                    "fmul",
+                                )?
+                                .into()
+                        } else {
+                            let l_int = l.into_int_value();
+                            let r_int = r.into_int_value();
+                            self.builder.build_int_mul(l_int, r_int, "mul")?.into()
+                        }
                     }
                     BinaryOp::Div => {
-                        let l_int = l.into_int_value();
-                        let r_int = r.into_int_value();
-                        self.builder
-                            .build_int_unsigned_div(l_int, r_int, "div")?
-                            .into()
+                        if l.is_float_value() {
+                            self.builder
+                                .build_float_div(
+                                    l.into_float_value(),
+                                    r.into_float_value(),
+                                    "fdiv",
+                                )?
+                                .into()
+                        } else {
+                            let l_int = l.into_int_value();
+                            let r_int = r.into_int_value();
+                            self.builder
+                                .build_int_unsigned_div(l_int, r_int, "div")?
+                                .into()
+                        }
                     }
                     BinaryOp::Mod => {
-                        let l_int = l.into_int_value();
-                        let r_int = r.into_int_value();
-                        self.builder
-                            .build_int_unsigned_rem(l_int, r_int, "mod")?
-                            .into()
+                        if l.is_float_value() {
+                            self.builder
+                                .build_float_rem(
+                                    l.into_float_value(),
+                                    r.into_float_value(),
+                                    "frem",
+                                )?
+                                .into()
+                        } else {
+                            let l_int = l.into_int_value();
+                            let r_int = r.into_int_value();
+                            self.builder
+                                .build_int_unsigned_rem(l_int, r_int, "mod")?
+                                .into()
+                        }
                     }
                     BinaryOp::Eq => {
-                        let l_int = l.into_int_value();
-                        let r_int = r.into_int_value();
-                        let cmp = self.builder.build_int_compare(
-                            inkwell::IntPredicate::EQ,
-                            l_int,
-                            r_int,
-                            "eq",
-                        )?;
-                        cmp.into()
+                        if l.is_float_value() {
+                            self.builder
+                                .build_float_compare(
+                                    inkwell::FloatPredicate::OEQ,
+                                    l.into_float_value(),
+                                    r.into_float_value(),
+                                    "feq",
+                                )?
+                                .into()
+                        } else {
+                            let l_int = l.into_int_value();
+                            let r_int = r.into_int_value();
+                            let cmp = self.builder.build_int_compare(
+                                inkwell::IntPredicate::EQ,
+                                l_int,
+                                r_int,
+                                "eq",
+                            )?;
+                            cmp.into()
+                        }
                     }
                     BinaryOp::Ne => {
-                        let l_int = l.into_int_value();
-                        let r_int = r.into_int_value();
-                        let cmp = self.builder.build_int_compare(
-                            inkwell::IntPredicate::NE,
-                            l_int,
-                            r_int,
-                            "ne",
-                        )?;
-                        cmp.into()
+                        if l.is_float_value() {
+                            self.builder
+                                .build_float_compare(
+                                    inkwell::FloatPredicate::ONE,
+                                    l.into_float_value(),
+                                    r.into_float_value(),
+                                    "fne",
+                                )?
+                                .into()
+                        } else {
+                            let l_int = l.into_int_value();
+                            let r_int = r.into_int_value();
+                            let cmp = self.builder.build_int_compare(
+                                inkwell::IntPredicate::NE,
+                                l_int,
+                                r_int,
+                                "ne",
+                            )?;
+                            cmp.into()
+                        }
                     }
                     BinaryOp::Lt => {
-                        let l_int = l.into_int_value();
-                        let r_int = r.into_int_value();
-                        let cmp = self.builder.build_int_compare(
-                            inkwell::IntPredicate::ULT,
-                            l_int,
-                            r_int,
-                            "lt",
-                        )?;
-                        cmp.into()
+                        if l.is_float_value() {
+                            self.builder
+                                .build_float_compare(
+                                    inkwell::FloatPredicate::OLT,
+                                    l.into_float_value(),
+                                    r.into_float_value(),
+                                    "flt",
+                                )?
+                                .into()
+                        } else {
+                            let l_int = l.into_int_value();
+                            let r_int = r.into_int_value();
+                            let cmp = self.builder.build_int_compare(
+                                inkwell::IntPredicate::ULT,
+                                l_int,
+                                r_int,
+                                "lt",
+                            )?;
+                            cmp.into()
+                        }
                     }
                     BinaryOp::Gt => {
-                        let l_int = l.into_int_value();
-                        let r_int = r.into_int_value();
-                        let cmp = self.builder.build_int_compare(
-                            inkwell::IntPredicate::UGT,
-                            l_int,
-                            r_int,
-                            "gt",
-                        )?;
-                        cmp.into()
+                        if l.is_float_value() {
+                            self.builder
+                                .build_float_compare(
+                                    inkwell::FloatPredicate::OGT,
+                                    l.into_float_value(),
+                                    r.into_float_value(),
+                                    "fgt",
+                                )?
+                                .into()
+                        } else {
+                            let l_int = l.into_int_value();
+                            let r_int = r.into_int_value();
+                            let cmp = self.builder.build_int_compare(
+                                inkwell::IntPredicate::UGT,
+                                l_int,
+                                r_int,
+                                "gt",
+                            )?;
+                            cmp.into()
+                        }
                     }
                     BinaryOp::Le => {
-                        let l_int = l.into_int_value();
-                        let r_int = r.into_int_value();
-                        let cmp = self.builder.build_int_compare(
-                            inkwell::IntPredicate::ULE,
-                            l_int,
-                            r_int,
-                            "le",
-                        )?;
-                        cmp.into()
+                        if l.is_float_value() {
+                            self.builder
+                                .build_float_compare(
+                                    inkwell::FloatPredicate::OLE,
+                                    l.into_float_value(),
+                                    r.into_float_value(),
+                                    "fle",
+                                )?
+                                .into()
+                        } else {
+                            let l_int = l.into_int_value();
+                            let r_int = r.into_int_value();
+                            let cmp = self.builder.build_int_compare(
+                                inkwell::IntPredicate::ULE,
+                                l_int,
+                                r_int,
+                                "le",
+                            )?;
+                            cmp.into()
+                        }
                     }
                     BinaryOp::Ge => {
-                        let l_int = l.into_int_value();
-                        let r_int = r.into_int_value();
-                        let cmp = self.builder.build_int_compare(
-                            inkwell::IntPredicate::UGE,
-                            l_int,
-                            r_int,
-                            "ge",
-                        )?;
-                        cmp.into()
+                        if l.is_float_value() {
+                            self.builder
+                                .build_float_compare(
+                                    inkwell::FloatPredicate::OGE,
+                                    l.into_float_value(),
+                                    r.into_float_value(),
+                                    "fge",
+                                )?
+                                .into()
+                        } else {
+                            let l_int = l.into_int_value();
+                            let r_int = r.into_int_value();
+                            let cmp = self.builder.build_int_compare(
+                                inkwell::IntPredicate::UGE,
+                                l_int,
+                                r_int,
+                                "ge",
+                            )?;
+                            cmp.into()
+                        }
                     }
                     BinaryOp::And => {
                         let l_int = l.into_int_value();
@@ -1969,7 +2086,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                             }
                             (format!("{}_{}", actual_package, name), true, false, false)
                         } else {
-                            // Namespace is not a known variable or package - likely a local struct/enum
+                            // Namespace is not a known variable or package - likely a local struct/enum or implicit built-in
+                            if ns == "io" && name == "println" {
+                                return self.generate_hir_io_println(args);
+                            }
                             let combined_name = format!("{}_{}", ns, name);
                             (self.mangle_name(&combined_name, false), false, false, false)
                         }
@@ -2417,7 +2537,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                             })
                         })
                         .ok_or_else(|| {
-                            format!("Field '{}' not found in struct '{}'", field_name, struct_name)
+                            format!(
+                                "Field '{}' not found in struct '{}'",
+                                field_name, struct_name
+                            )
                         })?;
 
                     // Coerce the field value to the expected AST type
@@ -2771,7 +2894,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Declare a struct type in LLVM
-    pub fn declare_struct(&mut self, struct_def: &StructDef) -> CodegenResult<()> {
+    pub fn declare_struct(&mut self, struct_def: &TypedStructDef) -> CodegenResult<()> {
         let struct_name = &struct_def.name;
 
         // Create struct type (always define, regardless of visibility)
@@ -2834,13 +2957,62 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Declare a function (create function signature)
-    pub fn declare_function(&mut self, fn_def: &FnDef) -> CodegenResult<()> {
+    pub fn declare_function(&mut self, fn_def: &TypedFnDef) -> CodegenResult<()> {
+        let param_types: Vec<Type> = fn_def.params.iter().map(|p| p.ty.clone()).collect();
+        // Debug: Print return type
+        eprintln!(
+            "DEBUG declare_function: name={}, return_ty={}",
+            fn_def.name, fn_def.return_ty
+        );
+        let fn_type =
+            self.build_function_type(&fn_def.return_ty, &param_types, fn_def.name == "main");
+        let mangled_name = self.mangle_name(&fn_def.name, fn_def.name == "main");
+
+        self.module.add_function(&mangled_name, fn_type, None);
+
+        Ok(())
+    }
+
+    /// Declare a function from a stdlib/legacy ast::FnDef (for internal use by process_imports)
+    fn declare_stdlib_function(&mut self, fn_def: &FnDef) -> CodegenResult<()> {
         let param_types: Vec<Type> = fn_def.params.iter().map(|p| p.ty.clone()).collect();
         let fn_type =
             self.build_function_type(&fn_def.return_ty, &param_types, fn_def.name == "main");
         let mangled_name = self.mangle_name(&fn_def.name, fn_def.name == "main");
 
         self.module.add_function(&mangled_name, fn_type, None);
+
+        Ok(())
+    }
+
+    /// Declare a struct from a stdlib/legacy ast::StructDef (for internal use by process_imports)
+    fn declare_stdlib_struct(&mut self, struct_def: &StructDef) -> CodegenResult<()> {
+        let struct_name = &struct_def.name;
+
+        let field_types: Vec<BasicTypeEnum> = struct_def
+            .fields
+            .iter()
+            .map(|f| self.llvm_type(&f.ty))
+            .collect();
+
+        let struct_type = self.context.opaque_struct_type(struct_name);
+        struct_type.set_body(&field_types, false);
+
+        let mut field_map = HashMap::new();
+        for (idx, field) in struct_def.fields.iter().enumerate() {
+            field_map.insert(field.name.clone(), idx as u32);
+        }
+        self.struct_field_indices
+            .insert(struct_name.clone(), field_map);
+
+        for method in &struct_def.methods {
+            let mut param_types: Vec<Type> = Vec::new();
+            param_types.extend(method.params.iter().map(|p| p.ty.clone()));
+            let fn_type = self.build_function_type(&method.return_ty, &param_types, false);
+            let method_name = format!("{}_{}", struct_name, method.name);
+            let mangled_name = self.mangle_name(&method_name, false);
+            self.module.add_function(&mangled_name, fn_type, None);
+        }
 
         Ok(())
     }
@@ -2907,7 +3079,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     if s.visibility == Visibility::Public {
                         let mut mangled_s = s.clone();
                         mangled_s.name = format!("{}_{}", namespace, s.name);
-                        self.declare_struct(&mangled_s)?;
+                        self.declare_stdlib_struct(&mangled_s)?;
                     }
                 }
                 // Declare enums
@@ -3037,7 +3209,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     if let Some(pkg) = self.stdlib.packages().get(package_name) {
                         let fn_defs: Vec<FnDef> = pkg.functions.clone();
                         for fn_def in fn_defs {
-                            if let Err(e) = self.declare_function(&fn_def) {
+                            if let Err(e) = self.declare_stdlib_function(&fn_def) {
                                 return Err(format!(
                                     "Failed to declare function from package '{}': {}",
                                     package_name, e

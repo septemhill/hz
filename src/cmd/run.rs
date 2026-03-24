@@ -1,5 +1,6 @@
 //! Run command - executes Lang source file via JIT compiler
 
+use std::collections::HashMap;
 use std::error::Error;
 
 use crate::codegen;
@@ -35,31 +36,44 @@ pub fn run_jit(source: &str, cli_std_path: Option<std::path::PathBuf>) -> Result
 
     // Generate LLVM IR
     let context = inkwell::context::Context::create();
+    let typed_program = analyzer.get_typed_program().ok_or("No typed program found")?;
+    let mut monomorphized_structs = HashMap::new();
+    for s in &typed_program.structs {
+        monomorphized_structs.insert(s.name.clone(), s.clone());
+    }
+
     let mut codegen = codegen::CodeGenerator::new(
         &context,
         "lang",
         stdlib,
-        analyzer.structs.clone(),
+        monomorphized_structs,
         analyzer.enums.clone(),
         analyzer.errors.clone(),
     )?;
 
-    let mut lowering_ctx = lower::LoweringContext::new();
-    lowering_ctx.set_symbol_table(analyzer.get_symbol_table().clone());
-    let hir_program = lowering_ctx.lower_program(&program);
-
-    for f in &program.functions {
-        codegen.declare_function(f)?;
+    // Populate imported packages for codegen
+    for (alias, pkg_name) in &typed_program.imports {
+        let ns = alias.as_deref().unwrap_or(pkg_name);
+        codegen.imported_packages.insert(ns.to_string(), pkg_name.clone());
     }
 
-    // Declare structs and enums (needed for method calls)
-    for s in &program.structs {
+    let mut lowering_ctx = lower::LoweringContext::new();
+    lowering_ctx.set_symbol_table(analyzer.get_symbol_table().clone());
+    let typed_program = analyzer.get_typed_program().ok_or("No typed program found")?;
+
+    // Declare structs and enums first (needed for function return types)
+    for s in &typed_program.structs {
         codegen.declare_struct(s)?;
     }
     for e in &program.enums {
         codegen.declare_enum(e)?;
     }
 
+    for f in &typed_program.functions {
+        codegen.declare_function(f)?;
+    }
+
+    let hir_program = lowering_ctx.lower_program(&program, typed_program);
     codegen.generate_hir(&hir_program)?;
 
     // Print the generated IR

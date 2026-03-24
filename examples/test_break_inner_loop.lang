@@ -1,3 +1,5 @@
+import "io"
+
 fn main() i64 {
     outer: for (1..10) |v| {
         for (1..100) |b| {

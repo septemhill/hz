@@ -99,6 +99,22 @@ impl Type {
         matches!(self, Type::I8 | Type::I16 | Type::I32 | Type::I64)
     }
 
+    /// Check if this type is generic or contains generic parameters
+    pub fn is_generic(&self) -> bool {
+        match self {
+            Type::GenericParam(_) => true,
+            Type::Pointer(inner) | Type::Option(inner) | Type::Result(inner) => inner.is_generic(),
+            Type::Array { element_type, .. } => element_type.is_generic(),
+            Type::Tuple(types) => types.iter().any(|t| t.is_generic()),
+            Type::Custom { generic_args, .. } => generic_args.iter().any(|t| t.is_generic()),
+            Type::Function {
+                params,
+                return_type,
+            } => params.iter().any(|t| t.is_generic()) || return_type.is_generic(),
+            _ => false,
+        }
+    }
+
     /// Check if this type is a float type
     pub fn is_float(&self) -> bool {
         matches!(self, Type::F32 | Type::F64)
@@ -469,6 +485,8 @@ pub enum Expr {
         name: String,
         namespace: Option<String>,
         args: Vec<Expr>,
+        /// Generic type arguments (e.g., T in add<T>(v))
+        generic_args: Vec<Type>,
         span: Span,
     },
     /// If expression
@@ -493,6 +511,8 @@ pub enum Expr {
     Struct {
         name: String,
         fields: Vec<(String, Expr)>,
+        /// Generic type arguments (e.g., T in Compose<T>{...})
+        generic_args: Vec<Type>,
         span: Span,
     },
     /// Try expression (e.g., try some_function())
@@ -586,6 +606,8 @@ pub struct FnDef {
     pub params: Vec<FnParam>,
     pub return_ty: Type,
     pub body: Vec<Stmt>,
+    /// Generic type parameters (e.g., T, U)
+    pub generic_params: Vec<String>,
     pub span: Span,
 }
 
@@ -686,7 +708,12 @@ impl AstDump for FnDef {
         } else {
             ""
         };
-        println!("FnDef: {}{} -> {}", vis, self.name, self.return_ty);
+        let generics = if self.generic_params.is_empty() {
+            "".to_string()
+        } else {
+            format!("<{}>", self.generic_params.join(", "))
+        };
+        println!("FnDef: {}{}{} -> {}", vis, self.name, generics, self.return_ty);
 
         if !self.params.is_empty() {
             print_indent(indent + 1);
@@ -1024,6 +1051,7 @@ impl AstDump for Expr {
                 name,
                 namespace,
                 args,
+                generic_args,
                 ..
             } => {
                 let ns = if let Some(n) = namespace {
@@ -1031,7 +1059,13 @@ impl AstDump for Expr {
                 } else {
                     "".to_string()
                 };
-                println!("Expr::Call: {}{}", ns, name);
+                let generics = if generic_args.is_empty() {
+                    "".to_string()
+                } else {
+                    let args: Vec<String> = generic_args.iter().map(|a| a.to_string()).collect();
+                    format!("<{}>", args.join(", "))
+                };
+                println!("Expr::Call: {}{}{}", ns, name, generics);
                 for a in args {
                     a.dump(indent + 1);
                 }
@@ -1081,8 +1115,19 @@ impl AstDump for Expr {
                 println!("Expr::MemberAccess: .{}{}", member, kind_str);
                 object.dump(indent + 1);
             }
-            Expr::Struct { name, fields, .. } => {
-                println!("Expr::Struct: {}", name);
+            Expr::Struct {
+                name,
+                fields,
+                generic_args,
+                ..
+            } => {
+                let generics = if generic_args.is_empty() {
+                    "".to_string()
+                } else {
+                    let args: Vec<String> = generic_args.iter().map(|a| a.to_string()).collect();
+                    format!("<{}>", args.join(", "))
+                };
+                println!("Expr::Struct: {}{}", name, generics);
                 for (fname, fval) in fields {
                     print_indent(indent + 1);
                     println!("Field: {}:", fname);

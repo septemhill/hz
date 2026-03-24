@@ -36,6 +36,7 @@ pub struct SemanticAnalyzer {
     pub structs: HashMap<String, crate::ast::StructDef>,
     pub enums: HashMap<String, crate::ast::EnumDef>,
     pub errors: HashMap<String, crate::ast::ErrorDef>,
+    pub functions: HashMap<String, crate::ast::FnDef>,
     pub std_path: String,
 }
 
@@ -47,6 +48,7 @@ impl SemanticAnalyzer {
             structs: HashMap::new(),
             enums: HashMap::new(),
             errors: HashMap::new(),
+            functions: HashMap::new(),
             std_path: String::from("std"),
         }
     }
@@ -58,6 +60,7 @@ impl SemanticAnalyzer {
             structs: HashMap::new(),
             enums: HashMap::new(),
             errors: HashMap::new(),
+            functions: HashMap::new(),
             std_path,
         }
     }
@@ -220,6 +223,9 @@ impl SemanticAnalyzer {
         for err in &program.errors {
             self.errors.insert(err.name.clone(), err.clone());
         }
+        for f in &program.functions {
+            self.functions.insert(f.name.clone(), f.clone());
+        }
 
         // Pass 1: Collect and validate global definitions
         let mut global_analyzer = GlobalDefinitionsAnalyzer::new();
@@ -237,6 +243,7 @@ impl SemanticAnalyzer {
             self.structs.clone(),
             self.enums.clone(),
             self.errors.clone(),
+            self.functions.clone(),
         )?;
         self.typed_program = Some(typed_prog.clone());
 

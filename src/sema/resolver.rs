@@ -39,15 +39,21 @@ impl SymbolResolver {
 
     pub fn analyze(&mut self, program: &crate::ast::Program) -> AnalysisResult<()> {
         for f in &program.functions {
-            self.analyze_function(f)?;
+            if f.generic_params.is_empty() {
+                self.analyze_function(f)?;
+            }
         }
         // Also analyze struct methods
         for s in &program.structs {
-            self.analyze_struct(s)?;
+            if s.generic_params.is_empty() {
+                self.analyze_struct(s)?;
+            }
         }
         // Analyze enum methods
         for e in &program.enums {
-            self.analyze_enum(e)?;
+            if e.generic_params.is_empty() {
+                self.analyze_enum(e)?;
+            }
         }
         Ok(())
     }
@@ -377,6 +383,7 @@ impl SymbolResolver {
                 name,
                 namespace,
                 args: _,
+                generic_args: _,
                 span,
             } => {
                 // Check if it's io.println (special case)
@@ -446,7 +453,7 @@ impl SymbolResolver {
                 }
                 Ok(crate::ast::Type::I64)
             }
-            crate::ast::Expr::Struct { name, fields, .. } => {
+            crate::ast::Expr::Struct { name, fields, generic_args: _, .. } => {
                 self.symbol_table.resolve(name).ok_or_else(|| {
                     AnalysisError::new(&format!("Undefined struct '{}'", name))
                         .with_module("resolver")

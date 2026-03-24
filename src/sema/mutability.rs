@@ -24,7 +24,9 @@ impl MutabilityAnalyzer {
 
     pub fn analyze(&mut self, program: &crate::ast::Program) -> AnalysisResult<()> {
         for f in &program.functions {
-            self.analyze_function(f)?;
+            if f.generic_params.is_empty() {
+                self.analyze_function(f)?;
+            }
         }
         Ok(())
     }

@@ -1,6 +1,9 @@
 use crate::ast;
 use crate::hir;
 use crate::sema::SymbolTable;
+use crate::sema::infer::{
+    TypedExpr, TypedExprKind, TypedFnDef, TypedProgram, TypedStmt, TypedStmtKind,
+};
 
 #[cfg(test)]
 mod tests {
@@ -234,6 +237,7 @@ mod tests {
             name: "println".to_string(),
             namespace: Some("io".to_string()),
             args: vec![Expr::String("test".to_string(), dummy_span())],
+            generic_args: vec![],
             span: dummy_span(),
         };
         let hir_expr = ctx.lower_expr(&expr);
@@ -304,7 +308,9 @@ mod tests {
         let hir_expr = ctx.lower_expr(&expr);
 
         match hir_expr {
-            hir::HirExpr::Block { stmts, expr, ty, .. } => {
+            hir::HirExpr::Block {
+                stmts, expr, ty, ..
+            } => {
                 assert_eq!(stmts.len(), 1);
                 assert!(expr.is_some());
                 assert_eq!(ty, Type::I64);
@@ -348,6 +354,7 @@ mod tests {
                 ),
                 ("age".to_string(), Expr::Int(30, dummy_span())),
             ],
+            generic_args: vec![],
             span: dummy_span(),
         };
         let hir_expr = ctx.lower_expr(&expr);
@@ -502,6 +509,7 @@ mod tests {
                     value: Some(Expr::Int(0, dummy_span())),
                     span: dummy_span(),
                 }],
+                generic_params: vec![],
                 span: dummy_span(),
             }],
             external_functions: vec![],
@@ -511,7 +519,18 @@ mod tests {
             imports: vec![],
         };
 
-        let hir_program = ctx.lower_program(&program);
+        let typed_program = crate::sema::infer::TypedProgram {
+            functions: Vec::new(),
+            external_functions: Vec::new(),
+            structs: Vec::new(),
+            enums: Vec::new(),
+            errors: Vec::new(),
+            imports: Vec::new(),
+            ast_functions: Vec::new(),
+            ast_structs: Vec::new(),
+        };
+
+        let hir_program = ctx.lower_program(&program, &typed_program);
 
         assert_eq!(hir_program.functions.len(), 1);
         assert_eq!(hir_program.functions[0].name, "main");
@@ -583,7 +602,11 @@ impl LoweringContext {
         result
     }
 
-    pub fn lower_program(&mut self, program: &ast::Program) -> hir::HirProgram {
+    pub fn lower_program(
+        &mut self,
+        program: &ast::Program,
+        typed_program: &crate::sema::infer::TypedProgram,
+    ) -> hir::HirProgram {
         self.errors.clear();
         self.function_returns.clear();
         self.local_scopes.clear();
@@ -594,18 +617,21 @@ impl LoweringContext {
             self.errors.insert(e.name.clone(), e.clone());
         }
 
-        for f in &program.functions {
+        // Use typed_program functions (includes monomorphized ones)
+        for f in &typed_program.functions {
             self.function_returns
                 .insert(f.name.clone(), f.return_ty.clone());
         }
 
-        for s in &program.structs {
+        // Use typed_program structs
+        for s in &typed_program.structs {
             for m in &s.methods {
                 self.function_returns
                     .insert(format!("{}_{}", s.name, m.name), m.return_ty.clone());
             }
         }
 
+        // Use typed_program enums
         for e in &program.enums {
             for m in &e.methods {
                 self.function_returns
@@ -613,27 +639,315 @@ impl LoweringContext {
             }
         }
 
-        let mut functions: Vec<hir::HirFn> = program
-            .functions
-            .iter()
-            .map(|f| self.lower_fn(f, None))
-            .collect();
+        let mut functions: Vec<hir::HirFn> = Vec::new();
+        let mut seen_names = std::collections::HashSet::new();
+
+        for f in &typed_program.functions {
+            if seen_names.insert(f.name.clone()) {
+                functions.push(self.lower_typed_fn(f));
+            }
+        }
 
         // Lower struct methods and add them to the global function list
-        for s in &program.structs {
+        for s in &typed_program.structs {
             for m in &s.methods {
-                functions.push(self.lower_fn(m, Some(&s.name)));
+                let name = format!("{}_{}", s.name, m.name);
+                if seen_names.insert(name.clone()) {
+                    let mut hir_fn = self.lower_typed_fn(m);
+                    // Prefix method name with struct name to match codegen expectations
+                    hir_fn.name = name;
+                    functions.push(hir_fn);
+                }
             }
         }
 
         // Lower enum methods and add them to the global function list
         for e in &program.enums {
             for m in &e.methods {
-                functions.push(self.lower_fn(m, Some(&e.name)));
+                let name = format!("{}_{}", e.name, m.name);
+                if seen_names.insert(name.clone()) {
+                    let mut hir_fn = self.lower_fn(m, None);
+                    hir_fn.name = name;
+                    functions.push(hir_fn);
+                }
             }
         }
 
         hir::HirProgram { functions }
+    }
+
+    fn lower_typed_fn(&mut self, f: &crate::sema::infer::TypedFnDef) -> hir::HirFn {
+        self.enter_local_scope();
+        for param in &f.params {
+            self.define_local(param.name.clone(), param.ty.clone());
+        }
+
+        let body = f.body.iter().map(|s| self.lower_typed_stmt(s)).collect();
+        self.exit_local_scope();
+
+        hir::HirFn {
+            name: f.name.clone(),
+            params: f
+                .params
+                .iter()
+                .map(|p| (p.name.clone(), p.ty.clone()))
+                .collect(),
+            return_ty: f.return_ty.clone(),
+            body,
+            visibility: f.visibility,
+            span: f.span,
+        }
+    }
+
+    fn lower_typed_stmt(&mut self, s: &TypedStmt) -> hir::HirStmt {
+        match &s.stmt {
+            TypedStmtKind::Expr { expr } => hir::HirStmt::Expr(self.lower_typed_expr(expr)),
+            TypedStmtKind::Let {
+                name,
+                ty,
+                value,
+                is_const,
+                ..
+            } => {
+                let lowered_value = value.as_ref().map(|v| self.lower_typed_expr(v));
+                self.define_local(name.clone(), ty.clone());
+
+                hir::HirStmt::Let {
+                    name: name.clone(),
+                    ty: ty.clone(),
+                    value: lowered_value,
+                    mutability: if *is_const {
+                        ast::Mutability::Const
+                    } else {
+                        ast::Mutability::Var
+                    },
+                    span: s.span,
+                }
+            }
+            TypedStmtKind::Return { value } => {
+                hir::HirStmt::Return(value.as_ref().map(|v| self.lower_typed_expr(v)), s.span)
+            }
+            TypedStmtKind::Block { stmts } => {
+                self.enter_local_scope();
+                let lowered_stmts = stmts.iter().map(|s| self.lower_typed_stmt(s)).collect();
+                self.exit_local_scope();
+
+                hir::HirStmt::Expr(hir::HirExpr::Block {
+                    stmts: lowered_stmts,
+                    expr: None,
+                    ty: ast::Type::Void,
+                    span: s.span,
+                })
+            }
+            TypedStmtKind::If {
+                condition,
+                capture,
+                then_branch,
+                else_branch,
+            } => {
+                let lowered_condition = self.lower_typed_expr(condition);
+
+                self.enter_local_scope();
+                if let (Some(capture_name), ast::Type::Option(inner_ty)) =
+                    (capture.as_ref(), &condition.ty)
+                {
+                    self.define_local(capture_name.clone(), (*inner_ty).as_ref().clone());
+                }
+                let lowered_then = Box::new(self.lower_typed_stmt(then_branch));
+                self.exit_local_scope();
+
+                let lowered_else = else_branch.as_ref().map(|e| {
+                    self.enter_local_scope();
+                    let lowered = Box::new(self.lower_typed_stmt(e));
+                    self.exit_local_scope();
+                    lowered
+                });
+
+                hir::HirStmt::If {
+                    condition: lowered_condition,
+                    capture: capture.clone(),
+                    then_branch: lowered_then,
+                    else_branch: lowered_else,
+                    span: s.span,
+                }
+            }
+            TypedStmtKind::For {
+                var_name,
+                capture,
+                index_var,
+                iterable,
+                body,
+                ..
+            } => {
+                self.enter_local_scope();
+                if let Some(name) = var_name {
+                    self.define_local(name.clone(), ast::Type::I64); // Simplified
+                }
+                if let Some(name) = capture {
+                    self.define_local(name.clone(), ast::Type::I64);
+                }
+                if let Some(name) = index_var {
+                    self.define_local(name.clone(), ast::Type::I64);
+                }
+                let lowered_body = Box::new(self.lower_typed_stmt(body));
+                self.exit_local_scope();
+
+                hir::HirStmt::For {
+                    label: None,
+                    var_name: capture.clone().or(var_name.clone()),
+                    index_var: index_var.clone(),
+                    iterable: self.lower_typed_expr(iterable),
+                    body: lowered_body,
+                    span: s.span,
+                }
+            }
+            TypedStmtKind::Assign { target, value, .. } => hir::HirStmt::Assign {
+                target: target.clone(),
+                value: self.lower_typed_expr(value),
+                span: s.span,
+            },
+            TypedStmtKind::Break { .. } => hir::HirStmt::Break {
+                label: None,
+                span: s.span,
+            },
+            TypedStmtKind::Switch { condition, cases } => hir::HirStmt::Switch {
+                condition: self.lower_typed_expr(condition),
+                cases: cases
+                    .iter()
+                    .map(|c| hir::HirCase {
+                        patterns: c
+                            .patterns
+                            .iter()
+                            .map(|p| self.lower_typed_expr(p))
+                            .collect(),
+                        body: self.lower_typed_stmt(&c.body),
+                        span: c.body.span,
+                    })
+                    .collect(),
+                span: s.span,
+            },
+            TypedStmtKind::Defer { stmt } => hir::HirStmt::Defer {
+                stmt: Box::new(self.lower_typed_stmt(stmt)),
+                span: s.span,
+            },
+            TypedStmtKind::DeferBang { stmt } => hir::HirStmt::DeferBang {
+                stmt: Box::new(self.lower_typed_stmt(stmt)),
+                span: s.span,
+            },
+            _ => hir::HirStmt::Expr(hir::HirExpr::Null(ast::Type::Void, s.span)),
+        }
+    }
+
+    fn lower_typed_expr(&mut self, e: &TypedExpr) -> hir::HirExpr {
+        match &e.expr {
+            TypedExprKind::Int(v) => hir::HirExpr::Int(*v, e.ty.clone(), e.span),
+            TypedExprKind::Float(v) => hir::HirExpr::Float(*v, e.ty.clone(), e.span),
+            TypedExprKind::Bool(v) => hir::HirExpr::Bool(*v, e.ty.clone(), e.span),
+            TypedExprKind::String(v) => hir::HirExpr::String(v.clone(), e.ty.clone(), e.span),
+            TypedExprKind::Char(v) => hir::HirExpr::Char(*v, e.ty.clone(), e.span),
+            TypedExprKind::Null => hir::HirExpr::Null(e.ty.clone(), e.span),
+            TypedExprKind::Ident(name) => hir::HirExpr::Ident(name.clone(), e.ty.clone(), e.span),
+            TypedExprKind::Binary { op, left, right } => hir::HirExpr::Binary {
+                op: *op,
+                left: Box::new(self.lower_typed_expr(left)),
+                right: Box::new(self.lower_typed_expr(right)),
+                ty: e.ty.clone(),
+                span: e.span,
+            },
+            TypedExprKind::Unary { op, expr } => hir::HirExpr::Unary {
+                op: *op,
+                expr: Box::new(self.lower_typed_expr(expr)),
+                ty: e.ty.clone(),
+                span: e.span,
+            },
+            TypedExprKind::Call {
+                name,
+                namespace,
+                args,
+            } => hir::HirExpr::Call {
+                name: name.clone(),
+                namespace: namespace.clone(),
+                args: args.iter().map(|a| self.lower_typed_expr(a)).collect(),
+                return_ty: e.ty.clone(),
+                span: e.span,
+            },
+            TypedExprKind::If {
+                condition,
+                capture,
+                then_branch,
+                else_branch,
+            } => hir::HirExpr::If {
+                condition: Box::new(self.lower_typed_expr(condition)),
+                capture: capture.clone(),
+                then_branch: Box::new(self.lower_typed_expr(then_branch)),
+                else_branch: Box::new(self.lower_typed_expr(else_branch)),
+                ty: e.ty.clone(),
+                span: e.span,
+            },
+            TypedExprKind::Block { stmts } => {
+                self.enter_local_scope();
+                let mut lowered_stmts = Vec::new();
+                for s in stmts {
+                    lowered_stmts.push(self.lower_typed_stmt(s));
+                }
+                self.exit_local_scope();
+                hir::HirExpr::Block {
+                    stmts: lowered_stmts,
+                    expr: None, // Simplified
+                    ty: e.ty.clone(),
+                    span: e.span,
+                }
+            }
+            TypedExprKind::Tuple(vals) => hir::HirExpr::Tuple {
+                vals: vals.iter().map(|v| self.lower_typed_expr(v)).collect(),
+                ty: e.ty.clone(),
+                span: e.span,
+            },
+            TypedExprKind::TupleIndex { tuple, index } => hir::HirExpr::TupleIndex {
+                tuple: Box::new(self.lower_typed_expr(tuple)),
+                index: *index,
+                ty: e.ty.clone(),
+                span: e.span,
+            },
+            TypedExprKind::Array(vals) => hir::HirExpr::Array {
+                vals: vals.iter().map(|v| self.lower_typed_expr(v)).collect(),
+                ty: e.ty.clone(),
+                span: e.span,
+            },
+            TypedExprKind::MemberAccess {
+                object,
+                member,
+                kind: _,
+            } => hir::HirExpr::MemberAccess {
+                object: Box::new(self.lower_typed_expr(object)),
+                member: member.clone(),
+                ty: e.ty.clone(),
+                span: e.span,
+            },
+            TypedExprKind::Struct { name, fields } => hir::HirExpr::Struct {
+                name: name.clone(),
+                fields: fields
+                    .iter()
+                    .map(|(n, v)| (n.clone(), self.lower_typed_expr(v)))
+                    .collect(),
+                ty: e.ty.clone(),
+                span: e.span,
+            },
+            TypedExprKind::Try { expr } => hir::HirExpr::Try {
+                expr: Box::new(self.lower_typed_expr(expr)),
+                span: e.span,
+            },
+            TypedExprKind::Catch {
+                expr,
+                error_var,
+                body,
+            } => hir::HirExpr::Catch {
+                expr: Box::new(self.lower_typed_expr(expr)),
+                error_var: error_var.clone(),
+                body: Box::new(self.lower_typed_expr(body)),
+                span: e.span,
+            },
+        }
     }
 
     fn lower_fn(&mut self, f: &ast::FnDef, prefix: Option<&str>) -> hir::HirFn {
@@ -1226,6 +1540,7 @@ impl LoweringContext {
                 name,
                 namespace,
                 args,
+                generic_args: _,
                 span,
             } => hir::HirExpr::Call {
                 name: name.clone(),
@@ -1276,9 +1591,10 @@ impl LoweringContext {
                     if i == stmts.len() - 1 {
                         if let ast::Stmt::Expr { expr, .. } = s {
                             block_ty = self.infer_type(expr).unwrap_or(ast::Type::Void);
-                            let lowered_e = self.with_expected_type(self.expected_type.clone(), |ctx| {
-                                ctx.lower_expr(expr)
-                            });
+                            let lowered_e = self
+                                .with_expected_type(self.expected_type.clone(), |ctx| {
+                                    ctx.lower_expr(expr)
+                                });
                             block_expr = Some(Box::new(lowered_e));
                             continue;
                         }
@@ -1332,7 +1648,12 @@ impl LoweringContext {
                     span: *span,
                 }
             }
-            ast::Expr::Struct { name, fields, span } => hir::HirExpr::Struct {
+            ast::Expr::Struct {
+                name,
+                fields,
+                generic_args: _,
+                span,
+            } => hir::HirExpr::Struct {
                 name: name.clone(),
                 fields: fields
                     .iter()

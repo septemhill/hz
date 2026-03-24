@@ -48,7 +48,7 @@ impl GlobalDefinitionsAnalyzer {
                 )
                 .with_module("global"));
             }
-            self.symbol_table.define(
+            self.symbol_table.define_with_generics(
                 f.name.clone(),
                 Type::Function {
                     params: f.params.iter().map(|p| p.ty.clone()).collect(),
@@ -56,6 +56,7 @@ impl GlobalDefinitionsAnalyzer {
                 },
                 f.visibility,
                 true,
+                f.generic_params.clone(),
             );
         }
         Ok(())
@@ -103,7 +104,7 @@ impl GlobalDefinitionsAnalyzer {
                 )
                 .with_module("global"));
             }
-            self.symbol_table.define(
+            self.symbol_table.define_with_generics(
                 s.name.clone(),
                 Type::Custom {
                     name: s.name.clone(),
@@ -112,6 +113,7 @@ impl GlobalDefinitionsAnalyzer {
                 },
                 s.visibility,
                 true,
+                s.generic_params.clone(),
             );
 
             // Also register struct methods in the symbol table
@@ -125,11 +127,15 @@ impl GlobalDefinitionsAnalyzer {
                     )
                     .with_module("global"));
                 }
-                self.symbol_table.define(
+                self.symbol_table.define_with_generics(
                     method_name,
-                    method.return_ty.clone(),
+                    Type::Function {
+                        params: method.params.iter().map(|p| p.ty.clone()).collect(),
+                        return_type: Box::new(method.return_ty.clone()),
+                    },
                     method.visibility,
                     true,
+                    s.generic_params.clone(), // Inherit generic parameters from struct
                 );
             }
         }
@@ -145,7 +151,7 @@ impl GlobalDefinitionsAnalyzer {
                 )
                 .with_module("global"));
             }
-            self.symbol_table.define(
+            self.symbol_table.define_with_generics(
                 e.name.clone(),
                 Type::Custom {
                     name: e.name.clone(),
@@ -154,6 +160,7 @@ impl GlobalDefinitionsAnalyzer {
                 },
                 e.visibility,
                 true,
+                e.generic_params.clone(),
             );
 
             // Also register enum variants in the symbol table

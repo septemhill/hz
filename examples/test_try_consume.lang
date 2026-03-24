@@ -1,3 +1,5 @@
+import "io"
+
 // Test case 1: Valid - consume the return value
 fn i32error() i32! {
     return 123;

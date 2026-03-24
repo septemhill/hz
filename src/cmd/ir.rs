@@ -1,5 +1,6 @@
 //! IR command - generates LLVM IR only
 
+use std::collections::HashMap;
 use std::error::Error;
 
 use crate::codegen;
@@ -35,11 +36,17 @@ pub fn generate_ir(source: &str, output_path: Option<String>, cli_std_path: Opti
 
     // Generate LLVM IR
     let context = inkwell::context::Context::create();
+    let typed_program = analyzer.get_typed_program().ok_or("No typed program found")?;
+    let mut monomorphized_structs = HashMap::new();
+    for s in &typed_program.structs {
+        monomorphized_structs.insert(s.name.clone(), s.clone());
+    }
+
     let mut codegen = codegen::CodeGenerator::new(
         &context,
         "lang",
         stdlib,
-        analyzer.structs.clone(),
+        monomorphized_structs,
         analyzer.enums.clone(),
         analyzer.errors.clone(),
     )?;
@@ -47,17 +54,21 @@ pub fn generate_ir(source: &str, output_path: Option<String>, cli_std_path: Opti
     // Process imports (declares functions from imported packages)
     codegen.process_imports(&program.imports)?;
 
-    // Declare structs and enums
-    for s in &program.structs {
+    let mut lowering_ctx = lower::LoweringContext::new();
+    lowering_ctx.set_symbol_table(analyzer.get_symbol_table().clone());
+    let typed_program = analyzer.get_typed_program().ok_or("No typed program found")?;
+
+    // Declare functions
+    for f in &typed_program.functions {
+        codegen.declare_function(f)?;
+    }
+
+    // Declare structs and enums (needed for method calls)
+    for s in &typed_program.structs {
         codegen.declare_struct(s)?;
     }
     for e in &program.enums {
         codegen.declare_enum(e)?;
-    }
-
-    // Declare functions
-    for f in &program.functions {
-        codegen.declare_function(f)?;
     }
 
     // Declare external C functions (FFI)
@@ -67,7 +78,7 @@ pub fn generate_ir(source: &str, output_path: Option<String>, cli_std_path: Opti
 
     // Lower and generate
     let mut lowering_ctx = lower::LoweringContext::new();
-    let hir_program = lowering_ctx.lower_program(&program);
+    let hir_program = lowering_ctx.lower_program(&program, typed_program);
     codegen.generate_hir(&hir_program)?;
     let ir = codegen.print_ir();
 

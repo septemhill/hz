@@ -8,6 +8,8 @@ pub struct Symbol {
     pub ty: Type,
     pub visibility: Visibility,
     pub is_const: bool,
+    /// Generic type parameters (for functions or structs)
+    pub generic_params: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,12 +51,30 @@ impl SymbolTable {
         }
     }
 
-    pub fn define(&mut self, name: String, ty: Type, visibility: Visibility, is_const: bool) {
+    pub fn define(
+        &mut self,
+        name: String,
+        ty: Type,
+        visibility: Visibility,
+        is_const: bool,
+    ) {
+        self.define_with_generics(name, ty, visibility, is_const, Vec::new());
+    }
+
+    pub fn define_with_generics(
+        &mut self,
+        name: String,
+        ty: Type,
+        visibility: Visibility,
+        is_const: bool,
+        generic_params: Vec<String>,
+    ) {
         let symbol = Symbol {
             name: name.clone(),
             ty,
             visibility,
             is_const,
+            generic_params,
         };
         self.scopes[self.current_scope].symbols.insert(name, symbol);
     }

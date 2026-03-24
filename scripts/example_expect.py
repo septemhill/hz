@@ -52,7 +52,6 @@ EXPECTED_TO_COMPILE: list[str] = [
     "examples/test_tuple_ret.lang",
     "examples/test_var_no_type.lang",
     "examples/test_var_reassign.lang",
-    "examples/test_without_import.lang",
     "examples/test_optional.lang",
     "examples/test_switch_stmt.lang",
     "examples/test_error.lang",
@@ -72,6 +71,7 @@ EXPECTED_TO_FAIL_COMPILE: list[str] = [
     "examples/test_array_decl.lang",  # element value out of range of type
     "examples/test_catch_check.lang", # try/catch cannot catch non-error types
     "examples/test_unmatch_if_expr.lang", # if/else blocks with mismatched types
+    "examples/test_without_import.lang", # using std library without import should fail
 ]
 
 

@@ -65,6 +65,7 @@ pub struct Parser {
     tokens: PeekableLexerIterator,
     state: ParserState,
     state_history: Vec<ParserState>,
+    generic_params: Vec<Vec<String>>,
 }
 
 #[allow(unused)]
@@ -75,6 +76,7 @@ impl Parser {
             tokens,
             state: ParserState::Initial,
             state_history: Vec::new(),
+            generic_params: Vec::new(),
         }
     }
 
@@ -196,28 +198,28 @@ impl Parser {
         // With lexer, we don't have whitespace tokens
     }
 
-    /// Get the end span from an expression
-    fn get_expr_span(&self, expr: &Expr) -> usize {
+    /// Get the span from an expression
+    fn get_expr_span(&self, expr: &Expr) -> Span {
         match expr {
-            Expr::Int(_, span) => span.end,
-            Expr::Float(_, span) => span.end,
-            Expr::Bool(_, span) => span.end,
-            Expr::String(_, span) => span.end,
-            Expr::Char(_, span) => span.end,
-            Expr::Null(span) => span.end,
-            Expr::Tuple(_, span) => span.end,
-            Expr::TupleIndex { span, .. } => span.end,
-            Expr::Ident(_, span) => span.end,
-            Expr::Array(_, _, span) => span.end,
-            Expr::Binary { span, .. } => span.end,
-            Expr::Unary { span, .. } => span.end,
-            Expr::Call { span, .. } => span.end,
-            Expr::If { span, .. } => span.end,
-            Expr::Block { span, .. } => span.end,
-            Expr::MemberAccess { span, .. } => span.end,
-            Expr::Struct { span, .. } => span.end,
-            Expr::Try { span, .. } => span.end,
-            Expr::Catch { span, .. } => span.end,
+            Expr::Int(_, span) => *span,
+            Expr::Float(_, span) => *span,
+            Expr::Bool(_, span) => *span,
+            Expr::String(_, span) => *span,
+            Expr::Char(_, span) => *span,
+            Expr::Null(span) => *span,
+            Expr::Tuple(_, span) => *span,
+            Expr::TupleIndex { span, .. } => *span,
+            Expr::Ident(_, span) => *span,
+            Expr::Array(_, _, span) => *span,
+            Expr::Binary { span, .. } => *span,
+            Expr::Unary { span, .. } => *span,
+            Expr::Call { span, .. } => *span,
+            Expr::If { span, .. } => *span,
+            Expr::Block { span, .. } => *span,
+            Expr::MemberAccess { span, .. } => *span,
+            Expr::Struct { span, .. } => *span,
+            Expr::Try { span, .. } => *span,
+            Expr::Catch { span, .. } => *span,
         }
     }
 }
@@ -892,6 +894,12 @@ impl Parser {
             });
         };
 
+        // Parse generic parameters
+        let generic_params = self.parse_generic_params()?;
+        if !generic_params.is_empty() {
+            self.generic_params.push(generic_params.clone());
+        }
+
         // Parse parameters
         self.set_state(ParserState::ParsingFunctionParams);
         let params = self.parse_function_params()?;
@@ -904,6 +912,10 @@ impl Parser {
         self.set_state(ParserState::ParsingFunctionBody);
         let body = self.parse_function_body()?;
 
+        if !generic_params.is_empty() {
+            self.generic_params.pop();
+        }
+
         let span = Span {
             start: 0, // Would need to track start position properly
             end: self.current_token().map(|t| t.span.end).unwrap_or(0),
@@ -915,6 +927,7 @@ impl Parser {
             params,
             return_ty,
             body,
+            generic_params,
             span,
         })
     }
@@ -1915,7 +1928,7 @@ impl Parser {
                         value,
                         span: Span {
                             start: ident_span.start,
-                            end: span_end,
+                            end: span_end.end,
                         },
                     });
                 }
@@ -1957,7 +1970,7 @@ impl Parser {
                         value,
                         span: Span {
                             start: span.start,
-                            end: span_end,
+                            end: span_end.end,
                         },
                     });
                 }
@@ -2267,34 +2280,50 @@ impl Parser {
     /// Parse call expression
     fn parse_call_expr(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.parse_primary_expr()?;
+        let mut generic_args = Vec::new();
 
         loop {
-            // Function call
+            self.skip_whitespace();
+            
+            // Generic arguments: <T1, T2, ...>
+            if self.match_token(Token::Less) {
+                let mut args = Vec::new();
+                loop {
+                    self.skip_whitespace();
+                    if self.match_token(Token::Greater) {
+                        break;
+                    }
+                    args.push(self.parse_type()?);
+                    self.skip_whitespace();
+                    if self.match_token(Token::Comma) {
+                        continue;
+                    }
+                    if self.match_token(Token::Greater) {
+                        break;
+                    }
+                }
+                generic_args = args;
+                continue;
+            }
+
+            // Function call: (arg1, arg2, ...)
             if self.match_token(Token::LParen) {
                 let mut args = Vec::new();
-
                 if !self.match_token(Token::RParen) {
                     loop {
                         args.push(self.parse_expression()?);
                         self.skip_whitespace();
-
                         if self.match_token(Token::RParen) {
                             break;
                         }
-
                         if !self.match_token(Token::Comma) {
+                            // If no comma and no RParen, it's an error, but we'll let it fail at RParen match
                             break;
                         }
                     }
                 }
 
-                // Get span from the expression being called
-                let call_span = match &expr {
-                    Expr::Ident(_, span) => *span,
-                    Expr::MemberAccess { span, .. } => *span,
-                    _ => Span { start: 0, end: 0 },
-                };
-
+                let call_span = self.get_expr_span(&expr);
                 let (name, namespace) = match &expr {
                     Expr::Ident(n, _) => (n.clone(), None),
                     Expr::MemberAccess { object, member, .. } => {
@@ -2311,114 +2340,64 @@ impl Parser {
                     name,
                     namespace,
                     args,
+                    generic_args: generic_args.clone(),
                     span: call_span,
                 };
+                generic_args = Vec::new();
                 continue;
             }
 
-            // Struct literal: TypeName{ field1: value1, field2: value2 }
-            // or shorthand: TypeName{ field1, field2 }
-            // IMPORTANT: We need to distinguish struct literals from field definitions.
-            // A struct literal looks like: TypeName { ... }
-            // A field definition looks like: fieldname: Type
-            // We need to check if the identifier is followed by a colon (field) or LBrace (struct literal)
+            // Struct literal: StructName { field: value, ... }
             if self.match_token(Token::LBrace) {
-                // First, verify this is a struct literal by checking if the previous expr was an Ident
-                // AND there's no colon (which would indicate a field definition)
                 let struct_name = match &expr {
                     Expr::Ident(n, _) => n.clone(),
                     Expr::MemberAccess { object, member, .. } => {
-                        // Handle namespaced struct access: package.Struct
                         if let Expr::Ident(ns, _) = &**object {
                             format!("{}_{}", ns, member)
                         } else {
-                            return Err(ParseError {
-                                message: "Expected struct type name".to_string(),
-                                location: self.current_token().map(|t| t.span.start),
-                            });
+                            member.clone()
                         }
                     }
                     _ => {
-                        return Err(ParseError {
-                            message: "Expected struct type name".to_string(),
-                            location: self.current_token().map(|t| t.span.start),
-                        });
+                        // If it's not a name, this might just be a block or something else.
+                        // But in expression context after an expression, it's usually a struct literal
+                        // or an error.
+                        return Ok(expr);
                     }
                 };
 
-                // Check if this looks like a field definition (identifier followed by colon)
-                // by peeking at what comes after the LBrace - if it's "field: type", it's a struct literal
-                // If it's "field," or "field = value", it could still be a struct literal
-                // Actually, we need to look BEFORE the LBrace - if there's an identifier followed by colon,
-                // that's a field, not a struct literal
-
-                self.skip_whitespace();
-
-                // Empty struct
-                if self.match_token(Token::RBrace) {
-                    expr = Expr::Struct {
-                        name: struct_name,
-                        fields: vec![],
-                        span: Span { start: 0, end: 0 },
-                    };
-                    continue;
-                }
-
-                // Parse struct fields
                 let mut fields = Vec::new();
                 loop {
                     self.skip_whitespace();
-
-                    // Check for field name
-                    let current_token = self.current().cloned();
-                    let field_name = match current_token {
-                        Some(Token::Ident(n)) => n.clone(),
-                        _ => {
-                            return Err(ParseError {
-                                message: "Expected field name in struct literal".to_string(),
-                                location: self.current_token().map(|t| t.span.start),
-                            });
-                        }
-                    };
-                    self.advance();
-
-                    self.skip_whitespace();
-
-                    // Check if this is a shorthand field or full field
-                    let current_after_name = self.current().cloned();
-                    match current_after_name {
-                        Some(Token::Colon) => {
-                            // Full field: name: value
-                            self.advance(); // consume colon
-                            let value = self.parse_expression()?;
-                            fields.push((field_name, value));
-                        }
-                        _ => {
-                            // Shorthand field: name (means name: name)
-                            let ident_expr =
-                                Expr::Ident(field_name.clone(), Span { start: 0, end: 0 });
-                            fields.push((field_name, ident_expr));
-                        }
-                    }
-
-                    self.skip_whitespace();
-
                     if self.match_token(Token::RBrace) {
                         break;
                     }
 
-                    if !self.match_token(Token::Comma) {
+                    let fname = if let Some(Token::Ident(n)) = self.current().cloned() {
+                        self.advance();
+                        n
+                    } else {
                         return Err(ParseError {
-                            message: "Expected ',' or '}' in struct literal".to_string(),
+                            message: "Expected field name in struct literal".to_string(),
                             location: self.current_token().map(|t| t.span.start),
                         });
-                    }
+                    };
 
                     self.skip_whitespace();
+                    let fval = if self.match_token(Token::Colon) {
+                        self.parse_expression()?
+                    } else {
+                        // Shorthand: fieldname => fieldname: fieldname
+                        Expr::Ident(fname.clone(), Span::default())
+                    };
 
-                    // Check if we're done (handle trailing comma case)
-                    if let Some(Token::RBrace) = self.current().cloned() {
-                        self.advance(); // Consume the closing brace
+                    fields.push((fname, fval));
+
+                    self.skip_whitespace();
+                    if self.match_token(Token::Comma) {
+                        continue;
+                    }
+                    if self.match_token(Token::RBrace) {
                         break;
                     }
                 }
@@ -2426,12 +2405,14 @@ impl Parser {
                 expr = Expr::Struct {
                     name: struct_name,
                     fields,
-                    span: Span { start: 0, end: 0 },
+                    generic_args: generic_args.clone(),
+                    span: self.get_expr_span(&expr),
                 };
+                generic_args = Vec::new();
                 continue;
             }
 
-            // Tuple index or Member access
+            // Member access or Tuple index: .member or .0
             if self.match_token(Token::Dot) {
                 let current = self.current().cloned().ok_or_else(|| ParseError {
                     message: "Expected index or member name".to_string(),
@@ -2441,99 +2422,73 @@ impl Parser {
                 match current {
                     Token::Int(i) => {
                         self.advance();
+                        let expr_span = self.get_expr_span(&expr);
                         expr = Expr::TupleIndex {
                             tuple: Box::new(expr),
                             index: i as usize,
-                            span: Span { start: 0, end: 0 },
+                            span: expr_span,
                         };
-                        continue;
                     }
                     Token::Ident(id) => {
                         self.advance();
+                        let expr_span = self.get_expr_span(&expr);
                         expr = Expr::MemberAccess {
                             object: Box::new(expr),
                             member: id,
                             kind: MemberAccessKind::Unknown,
-                            span: Span { start: 0, end: 0 },
+                            span: expr_span,
                         };
-                        continue;
                     }
                     _ => {
                         return Err(ParseError {
                             message: "Expected index or member name".to_string(),
-                            location: None,
+                            location: self.current_token().map(|t| t.span.start),
                         });
                     }
                 }
+                continue;
             }
 
-            // Catch expression: expr catch |error_var| { body }
-            let catch_span_start = self.current_token().map(|t| t.span.start).unwrap_or(0);
+            // Catch expression: expr catch |err| { body }
             if self.match_token(Token::Catch) {
+                let catch_start = self.get_expr_span(&expr).start;
                 self.skip_whitespace();
-                // Parse error variable in pipes: |error_var|
-                let error_var = if self.current() == Some(&Token::Pipe) {
-                    // First pipe
-                    self.advance();
+                
+                let error_var = if self.match_token(Token::Pipe) {
                     self.skip_whitespace();
-
-                    // Error variable name
                     let var = match self.current().cloned() {
                         Some(Token::Ident(n)) => Some(n),
                         Some(Token::Underscore) => None,
-                        _ => {
-                            return Err(ParseError {
-                                message: "Expected error variable name or '_' in catch".to_string(),
-                                location: self.current_token().map(|t| t.span.start),
-                            });
-                        }
+                        _ => return Err(ParseError { message: "Expected error variable".to_string(), location: None }),
                     };
                     self.advance();
                     self.skip_whitespace();
-
-                    // Second pipe
-                    if self.current() != Some(&Token::Pipe) {
-                        return Err(ParseError {
-                            message: "Expected '|' after error variable in catch".to_string(),
-                            location: self.current_token().map(|t| t.span.start),
-                        });
-                    };
-                    self.advance();
+                    if !self.match_token(Token::Pipe) {
+                        return Err(ParseError { message: "Expected '|'".to_string(), location: None });
+                    }
                     var
                 } else {
                     None
                 };
 
                 self.skip_whitespace();
-
-                // Can have either a block { ... } or an expression
                 let body = if self.current() == Some(&Token::LBrace) {
-                    // Block form: catch |err| { ... }
-                    // Note: parse_block_stmt already consumes the '{'
                     let block = self.parse_block_stmt()?;
                     if let Stmt::Block { stmts, span } = block {
                         Expr::Block { stmts, span }
                     } else {
-                        return Err(ParseError {
-                            message: "Expected block after catch".to_string(),
-                            location: self.current_token().map(|t| t.span.start),
-                        });
+                        return Err(ParseError { message: "Expected block".to_string(), location: None });
                     }
                 } else {
-                    // Expression form: catch |err| expr
                     self.parse_expression()?
                 };
 
-                let body_end = self.get_expr_span(&body);
-
+                let span_end = self.get_expr_span(&body).end;
                 expr = Expr::Catch {
                     expr: Box::new(expr),
                     error_var,
                     body: Box::new(body),
-                    span: Span {
-                        start: catch_span_start,
-                        end: body_end,
-                    },
+                    span: Span { start: catch_start, end: span_end },
                 };
                 continue;
             }
@@ -2982,11 +2937,17 @@ impl Parser {
             "void" => Type::Void,
             "rawptr" => Type::RawPtr,
             "self" => Type::SelfType,
-            _ => Type::Custom {
-                name: type_name,
-                generic_args: Vec::new(),
-                is_exported: false,
-            },
+            _ => {
+                if self.is_generic_param(&type_name) {
+                    Type::GenericParam(type_name)
+                } else {
+                    Type::Custom {
+                        name: type_name,
+                        generic_args: Vec::new(),
+                        is_exported: false,
+                    }
+                }
+            }
         };
 
         // Check for generic arguments
@@ -3040,9 +3001,6 @@ impl Parser {
             });
         }
 
-        // Parse generic parameters
-        let generic_params = self.parse_generic_params()?;
-
         // Parse struct name
         let name = if let Token::Ident(n) = self.current().cloned().ok_or_else(|| ParseError {
             message: "Expected struct name".to_string(),
@@ -3058,8 +3016,17 @@ impl Parser {
             });
         };
 
+        // Parse generic parameters (after name)
+        let generic_params = self.parse_generic_params()?;
+        if !generic_params.is_empty() {
+            self.generic_params.push(generic_params.clone());
+        }
+
         // Parse fields and methods
         if !self.match_token(Token::LBrace) {
+            if !generic_params.is_empty() {
+                self.generic_params.pop();
+            }
             return Err(ParseError {
                 message: "Expected '{'".to_string(),
                 location: self.current_token().map(|t| t.span.start),
@@ -3183,6 +3150,10 @@ impl Parser {
             }
         }
 
+        if !generic_params.is_empty() {
+            self.generic_params.pop();
+        }
+
         Ok(StructDef {
             name,
             fields,
@@ -3212,6 +3183,9 @@ impl Parser {
 
         // Parse generic parameters
         let generic_params = self.parse_generic_params()?;
+        if !generic_params.is_empty() {
+            self.generic_params.push(generic_params.clone());
+        }
 
         // Parse enum name
         let name = if let Token::Ident(n) = self.current().cloned().ok_or_else(|| ParseError {
@@ -3222,6 +3196,9 @@ impl Parser {
             self.advance();
             n
         } else {
+            if !generic_params.is_empty() {
+                self.generic_params.pop();
+            }
             return Err(ParseError {
                 message: "Expected enum name".to_string(),
                 location: self.current_token().map(|t| t.span.start),
@@ -3230,6 +3207,9 @@ impl Parser {
 
         // Parse variants
         if !self.match_token(Token::LBrace) {
+            if !generic_params.is_empty() {
+                self.generic_params.pop();
+            }
             return Err(ParseError {
                 message: "Expected '{'".to_string(),
                 location: self.current_token().map(|t| t.span.start),
@@ -3322,6 +3302,10 @@ impl Parser {
         }
 
         self.match_token(Token::Semicolon);
+
+        if !generic_params.is_empty() {
+            self.generic_params.pop();
+        }
 
         Ok(EnumDef {
             name,
@@ -3485,6 +3469,15 @@ impl Parser {
         })
     }
 
+    fn is_generic_param(&self, name: &str) -> bool {
+        for scope in &self.generic_params {
+            if scope.contains(&name.to_string()) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Parse generic parameters (<T, U, ...>)
     fn parse_generic_params(&mut self) -> Result<Vec<String>, ParseError> {
         if !self.match_token(Token::Less) {
@@ -3510,14 +3503,47 @@ impl Parser {
 
             self.skip_whitespace();
 
+            if self.match_token(Token::Comma) {
+                continue;
+            }
+
+            if self.match_token(Token::Greater) {
+                break;
+            }
+        }
+
+        Ok(params)
+    }
+
+    /// Parse generic type arguments: <T1, T2, ...>
+    fn parse_generic_args(&mut self) -> Result<Vec<Type>, ParseError> {
+        if !self.match_token(Token::Less) {
+            return Ok(Vec::new());
+        }
+
+        let mut args = Vec::new();
+
+        loop {
+            self.skip_whitespace();
+
             if self.match_token(Token::Greater) {
                 break;
             }
 
-            self.match_token(Token::Comma);
+            args.push(self.parse_type()?);
+
+            self.skip_whitespace();
+
+            if self.match_token(Token::Comma) {
+                continue;
+            }
+
+            if self.match_token(Token::Greater) {
+                break;
+            }
         }
 
-        Ok(params)
+        Ok(args)
     }
 }
 

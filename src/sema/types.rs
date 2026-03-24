@@ -41,18 +41,24 @@ impl TypeAnalyzer {
 
     pub fn analyze(&mut self, program: &crate::ast::Program) -> AnalysisResult<()> {
         for f in &program.functions {
-            self.analyze_function(f)?;
+            if f.generic_params.is_empty() {
+                self.analyze_function(f)?;
+            }
         }
         // Also analyze struct methods
         for s in &program.structs {
-            for method in &s.methods {
-                self.analyze_function(method)?;
+            if s.generic_params.is_empty() {
+                for method in &s.methods {
+                    self.analyze_function(method)?;
+                }
             }
         }
         // Also analyze enum methods
         for e in &program.enums {
-            for method in &e.methods {
-                self.analyze_function(method)?;
+            if e.generic_params.is_empty() {
+                for method in &e.methods {
+                    self.analyze_function(method)?;
+                }
             }
         }
         Ok(())
@@ -270,7 +276,7 @@ impl TypeAnalyzer {
                 }
                 self.expr_find_try(body)
             }
-            crate::ast::Expr::Struct { fields, .. } => {
+            crate::ast::Expr::Struct { fields, generic_args: _, .. } => {
                 for (_, field_expr) in fields {
                     if let Some(s) = self.expr_find_try(field_expr) {
                         return Some(s);
@@ -787,6 +793,7 @@ impl TypeAnalyzer {
                 name,
                 namespace,
                 args,
+                generic_args, // Changed from generic_args: _
                 span,
             } => {
                 if namespace.as_deref() == Some("io") && name == "println" {
@@ -899,7 +906,7 @@ impl TypeAnalyzer {
                     Ok(crate::ast::Type::I64)
                 }
             }
-            crate::ast::Expr::Struct { name, fields, span } => {
+            crate::ast::Expr::Struct { name, fields, generic_args: _, span } => {
                 self.symbol_table
                     .resolve(name)
                     .map(|s| s.ty.clone())
