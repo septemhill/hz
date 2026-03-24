@@ -2209,7 +2209,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                         if let Some(&idx) = variants.get(member) {
                             return Ok(self.context.i64_type().const_int(idx as u64, false).into());
                         } else {
-                            return Err(format!("Enum variant not found: {}.{}", obj_name, member).into());
+                            return Err(
+                                format!("Enum variant not found: {}.{}", obj_name, member).into()
+                            );
                         }
                     }
                 }
@@ -2440,21 +2442,55 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::Catch {
                 expr,
                 error_var: _,
-                body: _,
+                body,
                 span: _,
             } => {
                 // Catch expression: evaluate expr, if error execute body, otherwise return value
-                // For now, we just evaluate the expression and ignore the catch
-                // In a full implementation, this would:
-                // 1. Evaluate expr
-                // 2. Check if it's an error
-                // 3. If error, bind to error_var and execute body
-                // 4. If success, return the value
                 let expr_value = self.generate_hir_expr(expr)?;
 
-                // For now, just return the expression value
-                // A full implementation would handle the error case
-                Ok(expr_value)
+                // The expr_value is a Result type: { inner_value, is_error }
+                let result_struct = match expr_value {
+                    BasicValueEnum::StructValue(sv) => sv,
+                    _ => return Err("Catch expression requires a result value".into()),
+                };
+
+                // Extract both values in the current block (branch_block)
+                // This MUST be done before creating the conditional branch
+                let is_error = self
+                    .builder
+                    .build_extract_value(result_struct, 1, "is_error")?
+                    .into_int_value();
+                let inner_value =
+                    self.builder
+                        .build_extract_value(result_struct, 0, "inner_value")?;
+
+                // Get the basic block where the branch will be created
+                let branch_block = self.builder.get_insert_block().unwrap();
+
+                // Create blocks for error and success paths
+                let function = self.current_function.unwrap();
+                let catch_block = self.context.append_basic_block(function, "catch_body");
+                let continue_block = self.context.append_basic_block(function, "catch_continue");
+
+                // Branch based on whether there's an error
+                self.builder
+                    .build_conditional_branch(is_error, catch_block, continue_block)?;
+
+                // Error path - execute the catch body
+                self.builder.position_at_end(catch_block);
+                let body_value = self.generate_hir_expr(body)?;
+                self.builder.build_unconditional_branch(continue_block)?;
+
+                // Success path - phi node goes at the top
+                self.builder.position_at_end(continue_block);
+
+                // Create PHI node to select between body value and inner value
+                let phi = self
+                    .builder
+                    .build_phi(inner_value.get_type(), "catch_result")?;
+                // Incoming from: catch_block (body_value) and branch_block (inner_value)
+                phi.add_incoming(&[(&body_value, catch_block), (&inner_value, branch_block)]);
+                Ok(phi.as_basic_value())
             }
         }
     }
@@ -2747,7 +2783,8 @@ impl<'ctx> CodeGenerator<'ctx> {
         for (idx, variant) in enum_def.variants.iter().enumerate() {
             variant_map.insert(variant.name.clone(), idx as u32);
         }
-        self.enum_variants.insert(enum_def.name.clone(), variant_map);
+        self.enum_variants
+            .insert(enum_def.name.clone(), variant_map);
 
         // Only generate code for exported (public) enums
         if !enum_def.visibility.is_public() {

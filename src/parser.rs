@@ -2466,6 +2466,7 @@ impl Parser {
             }
 
             // Catch expression: expr catch |error_var| { body }
+            let catch_span_start = self.current_token().map(|t| t.span.start).unwrap_or(0);
             if self.match_token(Token::Catch) {
                 self.skip_whitespace();
                 // Parse error variable in pipes: |error_var|
@@ -2506,7 +2507,7 @@ impl Parser {
                 // Can have either a block { ... } or an expression
                 let body = if self.current() == Some(&Token::LBrace) {
                     // Block form: catch |err| { ... }
-                    self.expect(Token::LBrace)?;
+                    // Note: parse_block_stmt already consumes the '{'
                     let block = self.parse_block_stmt()?;
                     if let Stmt::Block { stmts, span } = block {
                         Expr::Block { stmts, span }
@@ -2521,11 +2522,16 @@ impl Parser {
                     self.parse_expression()?
                 };
 
+                let body_end = self.get_expr_span(&body);
+
                 expr = Expr::Catch {
                     expr: Box::new(expr),
                     error_var,
                     body: Box::new(body),
-                    span: Span { start: 0, end: 0 },
+                    span: Span {
+                        start: catch_span_start,
+                        end: body_end,
+                    },
                 };
                 continue;
             }

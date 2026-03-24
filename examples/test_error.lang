@@ -16,24 +16,35 @@ fn file_not_found_error() i64! {
 fn perm_denied() i64! {
     return 0;
 }
+
+fn real_error() i64! {
+    return FileError.PermissionDenied;
+}
     
 
 fn main() i64! {
     const f: i64 = try file_not_found_error();
     
     // Return error directly
-    try perm_denied();
+    _ = try perm_denied();
 
     // Test 1: catch with error variable and block body
-    const g: i64 = perm_denied() catch |e| {
+    const g: i64 = perm_denied() catch |_| {
         10
     };
 
     // Test 2: catch with error variable and expression body
-    const c: i64 = perm_denied() catch |e| 20;
+    const c: i64 = perm_denied() catch |_| 20;
 
     // Test 3: catch ignore error variable
     const d: i64 = perm_denied() catch |_| 30;
+
+    // Test 4: catch with error variable and block body
+    const e: i64 = real_error() catch |_| {
+        40
+    };
+
+    io.println("f: {d}, g: {d}, c: {d}, d: {d}, e: {d}", f, g, c, d, e);
 
     return f + g + c + d;
 }
