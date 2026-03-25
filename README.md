@@ -18,19 +18,25 @@ TBD
 
 ## Features
 
-- **Strong Type System**: Integer types (i8-i64, u8-u64), booleans, void, strings, and optional types
+- **Strong Type System**: Integer types (i8-i64, u8-u64), floats (f32, f64), booleans, void, strings, and raw pointers
+- **Raw Pointers**: `rawptr` type for FFI and low-level memory operations (similar to C's void*)
 - **Optional Types**: Nullable types using `?` prefix (e.g., `?i32`, `?bool`) with `if/else` pattern matching
 - **Error Handling**: Result types with `!` suffix (e.g., `i64!`), `try` and `catch` operators
 - **Error Types**: Algebraic error types with `error` keyword and union types using `|`
-- **Structs**: User-defined data types with methods
+- **Structs**: User-defined data types with methods and `pub` visibility
 - **Interfaces**: Polymorphism through trait-like interfaces
 - **Enums**: Algebraic data types with generic parameters (e.g., `enum<T>`)
+- **Tuples**: Multiple values in a single type (e.g., `(i64, i64, i64)`) with destructuring
 - **Arrays**: Fixed-size arrays (e.g., `[3]u8`, `[3]u8{1, 2, 3}`)
 - **Functions**: First-class functions with typed parameters and return values
-- **Control Flow**: `if/else`, `while`, `for` (range, array, iterator, infinite, conditional), `switch`
+- **Generics**: Generic type parameters with compile-time type instantiation (e.g., `Compose<T>`, `add<T>`)
+- **Control Flow**: `if/else`, `for` (range, array, iterator, infinite, conditional), `switch`
 - **Method Syntax**: Object-oriented programming with `self` parameter
 - **Modules**: Import system for code organization
 - **Visibility**: `pub` keyword for public functions, fields, and types
+- **Defer**: Deferred function calls with `defer` and `defer!` (with error propagation)
+- **FFI**: External C function calls with `external cdecl`
+- **Built-in Functions**: `is_null()` and `is_not_null()` for rawptr checks
 - **Operators**: Arithmetic (+, -, *, /, %), bitwise (<<, >>, &, |, ^), comparison, logical (&&, ||, !)
 - **Testing**: Built-in testing assertions
 
@@ -289,6 +295,102 @@ fn main() void {
 }
 ```
 
+### Tuples
+
+```lang
+fn main() void {
+    const t: (i64, i64, i64) = (1, 2, 3);
+    const first = t.0;
+    const second = t.1;
+    const third = t.2;
+    
+    // Destructuring
+    const (a, b, c) = t;
+    io.println(a);
+}
+```
+
+### Raw Pointers (FFI)
+
+```lang
+// Using rawptr for general FFI
+external cdecl {
+    fn malloc(size: u64) rawptr;
+    fn free(ptr: rawptr) void;
+}
+
+fn main() void {
+    const ptr = malloc(16);
+    if (is_not_null(ptr)) {
+        io.println("allocated memory");
+    }
+    free(ptr);
+}
+
+// Using pointer types for C interop
+struct CString {
+    data: *const u8,
+}
+
+external cdecl {
+    fn puts(message: *const u8) i32;
+}
+
+fn main2() i32 {
+    const msg: *const u8 = "Hello from C!";
+    return puts(msg);
+}
+```
+
+### Defer
+
+```lang
+fn main() void {
+    const file = open_file("test.txt");
+    defer close_file(file);
+    defer! cleanup(file); // propagates error
+    io.println("working with file");
+}
+
+fn open_file(path: String) i64! {
+    return 1;
+}
+
+fn close_file(fd: i64) void {
+    io.println("closed");
+}
+
+fn cleanup(fd: i64) i64! {
+    return 0;
+}
+```
+
+### Generics
+
+```lang
+struct Compose<T> {
+    value: T,
+    
+    pub fn new(value: T) Compose<T> {
+        return Compose{ value };
+    }
+    
+    pub fn get(self: &Self) T {
+        return self.value;
+    }
+}
+
+fn add<T>(a: T, b: T) T {
+    return a;
+}
+
+fn main() void {
+    const c = Compose.new(42);
+    const val = c.get();
+    io.println(val);
+}
+```
+
 ### Operators
 
 ```lang
@@ -456,31 +558,31 @@ Source Code (.lang)
 └─────────────┘     └─────────────┘     └─────────────┘
                                               │
                                               ▼
-                                       ┌─────────────┐
-                                       │    Sema     │
-                                       │  (Semantic  │
-                                       │  Analysis)  │
-                                       └─────────────┘
+                                        ┌─────────────┐
+                                        │    Sema     │
+                                        │  (Semantic  │
+                                        │  Analysis)  │
+                                        └─────────────┘
                                               │
                                               ▼
-                                       ┌─────────────┐
-                                       │  Lowering   │
-                                       │    (HIR)    │
-                                       └─────────────┘
+                                        ┌─────────────┐
+                                        │  Lowering   │
+                                        │    (HIR)    │
+                                        └─────────────┘
                                               │
                                               ▼
-                                       ┌─────────────┐
-                                       │  Optimizer  │
-                                       └─────────────┘
+                                        ┌─────────────┐
+                                        │  Optimizer  │
+                                        └─────────────┘
                                               │
                                               ▼
-                                       ┌─────────────┐
-                                       │   Codegen   │
-                                       │  (LLVM IR)  │
-                                       └─────────────┘
+                                        ┌─────────────┐
+                                        │   Codegen   │
+                                        │  (LLVM IR)  │
+                                        └─────────────┘
                                               │
-                      ┌─────────────┐            │
-                      │    Clang    │◀───────────┘
+                      ┌─────────────┐         │
+                      │    Clang    │◀────────┘
                       │   (Linker)  │
                       └─────────────┘
                             │
