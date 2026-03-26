@@ -73,9 +73,9 @@ pub enum HirExpr {
         ty: Type,
         span: Span,
     },
-    /// Try expression
     Try {
         expr: Box<HirExpr>,
+        ty: Type,
         span: Span,
     },
     /// Catch expression
@@ -83,8 +83,35 @@ pub enum HirExpr {
         expr: Box<HirExpr>,
         error_var: Option<String>,
         body: Box<HirExpr>,
+        ty: Type,
         span: Span,
     },
+}
+
+impl HirExpr {
+    pub fn ty(&self) -> &Type {
+        match self {
+            HirExpr::Int(_, ty, _) => ty,
+            HirExpr::Float(_, ty, _) => ty,
+            HirExpr::Bool(_, ty, _) => ty,
+            HirExpr::String(_, ty, _) => ty,
+            HirExpr::Char(_, ty, _) => ty,
+            HirExpr::Null(ty, _) => ty,
+            HirExpr::Ident(_, ty, _) => ty,
+            HirExpr::Tuple { ty, .. } => ty,
+            HirExpr::TupleIndex { ty, .. } => ty,
+            HirExpr::Array { ty, .. } => ty,
+            HirExpr::Binary { ty, .. } => ty,
+            HirExpr::Unary { ty, .. } => ty,
+            HirExpr::Call { return_ty, .. } => return_ty,
+            HirExpr::If { ty, .. } => ty,
+            HirExpr::Block { ty, .. } => ty,
+            HirExpr::MemberAccess { ty, .. } => ty,
+            HirExpr::Struct { ty, .. } => ty,
+            HirExpr::Try { ty, .. } => ty,
+            HirExpr::Catch { ty, .. } => ty,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -1602,6 +1602,7 @@ impl Parser {
         let then_branch = Box::new(self.parse_statement()?);
 
         let else_branch = if self.match_token(Token::Else) {
+            self.skip_whitespace();
             if let Token::If = self.current().cloned().unwrap_or(Token::Eof) {
                 Some(Box::new(self.parse_if_stmt()?))
             } else {
@@ -2284,26 +2285,31 @@ impl Parser {
 
         loop {
             self.skip_whitespace();
-            
+
             // Generic arguments: <T1, T2, ...>
-            if self.match_token(Token::Less) {
-                let mut args = Vec::new();
-                loop {
-                    self.skip_whitespace();
-                    if self.match_token(Token::Greater) {
-                        break;
+            // Only parse generic args if the left side is an identifier (function name)
+            // This prevents interpreting comparison operators (<, >) as generic args
+            if let Token::Less = self.current().cloned().unwrap_or(Token::Eof) {
+                if matches!(expr, Expr::Ident(_, _)) {
+                    self.advance(); // consume '<'
+                    let mut args = Vec::new();
+                    loop {
+                        self.skip_whitespace();
+                        if self.match_token(Token::Greater) {
+                            break;
+                        }
+                        args.push(self.parse_type()?);
+                        self.skip_whitespace();
+                        if self.match_token(Token::Comma) {
+                            continue;
+                        }
+                        if self.match_token(Token::Greater) {
+                            break;
+                        }
                     }
-                    args.push(self.parse_type()?);
-                    self.skip_whitespace();
-                    if self.match_token(Token::Comma) {
-                        continue;
-                    }
-                    if self.match_token(Token::Greater) {
-                        break;
-                    }
+                    generic_args = args;
+                    continue;
                 }
-                generic_args = args;
-                continue;
             }
 
             // Function call: (arg1, arg2, ...)
@@ -2453,18 +2459,26 @@ impl Parser {
             if self.match_token(Token::Catch) {
                 let catch_start = self.get_expr_span(&expr).start;
                 self.skip_whitespace();
-                
+
                 let error_var = if self.match_token(Token::Pipe) {
                     self.skip_whitespace();
                     let var = match self.current().cloned() {
                         Some(Token::Ident(n)) => Some(n),
                         Some(Token::Underscore) => None,
-                        _ => return Err(ParseError { message: "Expected error variable".to_string(), location: None }),
+                        _ => {
+                            return Err(ParseError {
+                                message: "Expected error variable".to_string(),
+                                location: None,
+                            });
+                        }
                     };
                     self.advance();
                     self.skip_whitespace();
                     if !self.match_token(Token::Pipe) {
-                        return Err(ParseError { message: "Expected '|'".to_string(), location: None });
+                        return Err(ParseError {
+                            message: "Expected '|'".to_string(),
+                            location: None,
+                        });
                     }
                     var
                 } else {
@@ -2477,7 +2491,10 @@ impl Parser {
                     if let Stmt::Block { stmts, span } = block {
                         Expr::Block { stmts, span }
                     } else {
-                        return Err(ParseError { message: "Expected block".to_string(), location: None });
+                        return Err(ParseError {
+                            message: "Expected block".to_string(),
+                            location: None,
+                        });
                     }
                 } else {
                     self.parse_expression()?
@@ -2488,7 +2505,10 @@ impl Parser {
                     expr: Box::new(expr),
                     error_var,
                     body: Box::new(body),
-                    span: Span { start: catch_start, end: span_end },
+                    span: Span {
+                        start: catch_start,
+                        end: span_end,
+                    },
                 };
                 continue;
             }

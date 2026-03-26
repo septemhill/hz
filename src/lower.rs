@@ -519,8 +519,26 @@ mod tests {
             imports: vec![],
         };
 
+        let main_fn = crate::sema::infer::TypedFnDef {
+            name: "main".to_string(),
+            visibility: Visibility::Public,
+            params: vec![],
+            return_ty: Type::I64,
+            body: vec![crate::sema::infer::TypedStmt {
+                stmt: crate::sema::infer::TypedStmtKind::Return {
+                    value: Some(crate::sema::infer::TypedExpr {
+                        expr: crate::sema::infer::TypedExprKind::Int(0),
+                        ty: Type::I64,
+                        span: dummy_span(),
+                    }),
+                },
+                span: dummy_span(),
+            }],
+            span: dummy_span(),
+        };
+
         let typed_program = crate::sema::infer::TypedProgram {
-            functions: Vec::new(),
+            functions: vec![main_fn],
             external_functions: Vec::new(),
             structs: Vec::new(),
             enums: Vec::new(),
@@ -544,6 +562,7 @@ pub struct LoweringContext {
     function_returns: std::collections::HashMap<String, ast::Type>,
     local_scopes: Vec<std::collections::HashMap<String, ast::Type>>,
     expected_type: Option<ast::Type>,
+    structs: std::collections::HashMap<String, crate::sema::infer::TypedStructDef>,
 }
 
 impl LoweringContext {
@@ -554,6 +573,7 @@ impl LoweringContext {
             function_returns: std::collections::HashMap::new(),
             local_scopes: Vec::new(),
             expected_type: None,
+            structs: std::collections::HashMap::new(),
         }
     }
 
@@ -611,6 +631,12 @@ impl LoweringContext {
         self.function_returns.clear();
         self.local_scopes.clear();
         self.expected_type = None;
+        self.structs.clear();
+
+        // Collect structs
+        for s in &typed_program.structs {
+            self.structs.insert(s.name.clone(), s.clone());
+        }
 
         // Collect errors from the program
         for e in &program.errors {
@@ -801,11 +827,136 @@ impl LoweringContext {
                     span: s.span,
                 }
             }
-            TypedStmtKind::Assign { target, value, .. } => hir::HirStmt::Assign {
-                target: target.clone(),
-                value: self.lower_typed_expr(value),
-                span: s.span,
-            },
+            TypedStmtKind::Assign {
+                target, value, op, ..
+            } => {
+                // Handle compound assignment: expand to target = target op value
+                if *op != ast::AssignOp::Assign {
+                    let target_ty = if target.contains('.') {
+                        // For member access targets, we need to resolve the type
+                        // This is a bit of a hack because Assign target is just a string.
+                        // We'll try to resolve it as a member access.
+                        let parts: Vec<&str> = target.split('.').collect();
+                        let mut current_ty = self
+                            .resolve_local(parts[0])
+                            .or_else(|| self.symbol_table.resolve(parts[0]).map(|s| s.ty.clone()))
+                            .unwrap_or(ast::Type::I64);
+
+                        for i in 1..parts.len() {
+                            let mut name_found = None;
+                            let mut current = &current_ty;
+                            while let ast::Type::Pointer(inner) | ast::Type::Option(inner) | ast::Type::Result(inner) = current {
+                                current = inner.as_ref();
+                            }
+                            if let ast::Type::Custom { name, .. } = current {
+                                name_found = Some(name);
+                            }
+
+                            if let Some(name) = name_found {
+                                if let Some(s_def) = self.structs.get(name) {
+                                    if let Some(field) =
+                                        s_def.fields.iter().find(|f| f.name == parts[i])
+                                    {
+                                        current_ty = field.ty.clone();
+                                        continue;
+                                    }
+                                }
+                            }
+                            // Fallback if we can't resolve
+                            current_ty = ast::Type::I64;
+                            break;
+                        }
+                        current_ty
+                    } else {
+                        self.resolve_local(target)
+                            .or_else(|| self.symbol_table.resolve(target).map(|s| s.ty.clone()))
+                            .unwrap_or(ast::Type::I64)
+                    };
+
+                    // Create read expression
+                    let read_expr = if target.contains('.') {
+                        let parts: Vec<&str> = target.split('.').collect();
+                        let mut expr = hir::HirExpr::Ident(
+                            parts[0].to_string(),
+                            self.resolve_local(parts[0])
+                                .or_else(|| {
+                                    self.symbol_table.resolve(parts[0]).map(|s| s.ty.clone())
+                                })
+                                .unwrap_or(ast::Type::I64),
+                            s.span,
+                        );
+
+                        let mut current_ty = expr.ty().clone();
+                        for i in 1..parts.len() {
+                            let mut name_found = None;
+                            let mut current = &current_ty;
+                            while let ast::Type::Pointer(inner) | ast::Type::Option(inner) | ast::Type::Result(inner) = current {
+                                current = inner.as_ref();
+                            }
+                            if let ast::Type::Custom { name, .. } = current {
+                                name_found = Some(name);
+                            }
+
+                            let member_ty = if let Some(name) = name_found {
+                                if let Some(s_def) = self.structs.get(name) {
+                                    s_def
+                                        .fields
+                                        .iter()
+                                        .find(|f| f.name == parts[i])
+                                        .map(|f| f.ty.clone())
+                                        .unwrap_or(ast::Type::I64)
+                                } else {
+                                    ast::Type::I64
+                                }
+                            } else {
+                                ast::Type::I64
+                            };
+
+                            expr = hir::HirExpr::MemberAccess {
+                                object: Box::new(expr),
+                                member: parts[i].to_string(),
+                                ty: member_ty.clone(),
+                                span: s.span,
+                            };
+                            current_ty = member_ty;
+                        }
+                        expr
+                    } else {
+                        hir::HirExpr::Ident(target.clone(), target_ty.clone(), s.span)
+                    };
+
+                    // Create binary operation
+                    let bin_op = match op {
+                        ast::AssignOp::AddAssign => ast::BinaryOp::Add,
+                        ast::AssignOp::SubAssign => ast::BinaryOp::Sub,
+                        ast::AssignOp::MulAssign => ast::BinaryOp::Mul,
+                        ast::AssignOp::DivAssign => ast::BinaryOp::Div,
+                        _ => ast::BinaryOp::Add,
+                    };
+
+                    let lowered_value = self.lower_typed_expr(value);
+
+                    let result_expr = hir::HirExpr::Binary {
+                        op: bin_op,
+                        left: Box::new(read_expr),
+                        right: Box::new(lowered_value),
+                        ty: target_ty,
+                        span: s.span,
+                    };
+
+                    return hir::HirStmt::Assign {
+                        target: target.clone(),
+                        value: result_expr,
+                        span: s.span,
+                    };
+                }
+
+                hir::HirStmt::Assign {
+                    target: target.clone(),
+                    value: self.lower_typed_expr(value),
+                    span: s.span,
+                }
+            }
             TypedStmtKind::Break { .. } => hir::HirStmt::Break {
                 label: None,
                 span: s.span,
@@ -887,13 +1038,23 @@ impl LoweringContext {
             TypedExprKind::Block { stmts } => {
                 self.enter_local_scope();
                 let mut lowered_stmts = Vec::new();
-                for s in stmts {
+                let mut last_expr = None;
+
+                let len = stmts.len();
+                for (i, s) in stmts.iter().enumerate() {
+                    if i == len - 1 {
+                        if let TypedStmtKind::Expr { expr } = &s.stmt {
+                            last_expr = Some(Box::new(self.lower_typed_expr(expr)));
+                            continue;
+                        }
+                    }
                     lowered_stmts.push(self.lower_typed_stmt(s));
                 }
+
                 self.exit_local_scope();
                 hir::HirExpr::Block {
                     stmts: lowered_stmts,
-                    expr: None, // Simplified
+                    expr: last_expr,
                     ty: e.ty.clone(),
                     span: e.span,
                 }
@@ -935,6 +1096,7 @@ impl LoweringContext {
             },
             TypedExprKind::Try { expr } => hir::HirExpr::Try {
                 expr: Box::new(self.lower_typed_expr(expr)),
+                ty: e.ty.clone(),
                 span: e.span,
             },
             TypedExprKind::Catch {
@@ -945,6 +1107,7 @@ impl LoweringContext {
                 expr: Box::new(self.lower_typed_expr(expr)),
                 error_var: error_var.clone(),
                 body: Box::new(self.lower_typed_expr(body)),
+                ty: e.ty.clone(),
                 span: e.span,
             },
         }
@@ -1253,6 +1416,10 @@ impl LoweringContext {
                 value,
                 span,
             } => {
+                eprintln!(
+                    "DEBUG: Assign op={:?}, target={}, value={:?}",
+                    op, target, value
+                );
                 // Handle compound assignment (e.g., c.age += 43)
                 if *op != ast::AssignOp::Assign {
                     // For compound assignment, expand to: target = target op value
@@ -1264,19 +1431,34 @@ impl LoweringContext {
                         (target.clone(), None)
                     };
 
-                    // Infer the type from the value expression
-                    let value_ty = self.infer_type(value).unwrap_or(ast::Type::I64);
+                    // Infer the type from the target variable, not from the value expression
+                    // For compound assignment like x += 1, we need the type of x, not 1
+                    let target_ty = if target.contains('.') {
+                        // For member access, we need to get the field type
+                        self.infer_type(value).unwrap_or(ast::Type::I64)
+                    } else {
+                        // For simple variable, resolve from local scope or symbol table
+                        let ty = self
+                            .resolve_local(target)
+                            .or_else(|| self.symbol_table.resolve(target).map(|s| s.ty.clone()))
+                            .unwrap_or_else(|| self.infer_type(value).unwrap_or(ast::Type::I64));
+                        eprintln!(
+                            "DEBUG: compound assign target={}, target_ty={:?}",
+                            target, ty
+                        );
+                        ty
+                    };
 
                     // Create the read expression (read current value from target)
                     let read_expr = if let Some(member) = member {
                         hir::HirExpr::MemberAccess {
-                            object: Box::new(hir::HirExpr::Ident(obj, value_ty.clone(), *span)),
+                            object: Box::new(hir::HirExpr::Ident(obj, target_ty.clone(), *span)),
                             member,
-                            ty: value_ty.clone(),
+                            ty: target_ty.clone(),
                             span: *span,
                         }
                     } else {
-                        hir::HirExpr::Ident(target.clone(), value_ty.clone(), *span)
+                        hir::HirExpr::Ident(target.clone(), target_ty.clone(), *span)
                     };
 
                     // Create the binary operation
@@ -1295,7 +1477,7 @@ impl LoweringContext {
                         op: bin_op,
                         left: Box::new(read_expr),
                         right: Box::new(lowered_value),
-                        ty: value_ty,
+                        ty: target_ty,
                         span: *span,
                     };
 
@@ -1432,20 +1614,28 @@ impl LoweringContext {
             ast::Expr::Null(span) => {
                 hir::HirExpr::Null(ast::Type::Pointer(Box::new(ast::Type::Void)), *span)
             }
-            ast::Expr::Try { expr, span } => hir::HirExpr::Try {
-                expr: Box::new(self.lower_expr(expr)),
-                span: *span,
+            ast::Expr::Try { expr, span } => {
+                let ty = self.infer_type(expr).and_then(|t| t.result_inner().map(|i| i.clone())).unwrap_or(ast::Type::Void);
+                hir::HirExpr::Try {
+                    expr: Box::new(self.lower_expr(expr)),
+                    ty,
+                    span: *span,
+                }
             },
             ast::Expr::Catch {
                 expr,
                 error_var,
                 body,
                 span,
-            } => hir::HirExpr::Catch {
-                expr: Box::new(self.lower_expr(expr)),
-                error_var: error_var.clone(),
-                body: Box::new(self.lower_expr(body)),
-                span: *span,
+            } => {
+                let ty = self.infer_type(expr).and_then(|t| t.result_inner().map(|i| i.clone())).unwrap_or(ast::Type::Void);
+                hir::HirExpr::Catch {
+                    expr: Box::new(self.lower_expr(expr)),
+                    error_var: error_var.clone(),
+                    body: Box::new(self.lower_expr(body)),
+                    ty,
+                    span: *span,
+                }
             },
             ast::Expr::Tuple(vals, span) => hir::HirExpr::Tuple {
                 vals: vals.iter().map(|v| self.lower_expr(v)).collect(),

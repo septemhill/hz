@@ -408,11 +408,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             | hir::HirExpr::MemberAccess { ty, .. }
             | hir::HirExpr::Struct { ty, .. } => ty,
             hir::HirExpr::Call { return_ty, .. } => return_ty,
-            hir::HirExpr::Try { expr, .. } => self
-                .hir_expr_type(expr)
-                .result_inner()
-                .unwrap_or_else(|| self.hir_expr_type(expr)),
-            hir::HirExpr::Catch { expr, .. } => self.hir_expr_type(expr),
+            hir::HirExpr::Try { ty, .. } => ty,
+            hir::HirExpr::Catch { ty, .. } => ty,
         }
     }
 
@@ -927,6 +924,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let iter_val = self.generate_hir_expr(iterable)?;
                 let iter_type = iter_val.get_type();
 
+                // DEBUG: Check the generated type
+                eprintln!(
+                    "DEBUG for loop: iter_val type = {:?}, LLVM type = {:?}",
+                    iterable, iter_type
+                );
+
                 // Allocate variable to store iteration state or option value
                 // IMPORTANT: Allocate in entry block, NOT in for_eval block
                 // to avoid stack overflow in infinite loops where for_eval is visited repeatedly
@@ -973,6 +976,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                     if let Type::Array { .. } = lang_ty {
                         is_array = true;
                     }
+                    // Check if it's a Bool type (for condition-based loops)
+                    if let Type::Bool = lang_ty {
+                        eprintln!(
+                            "DEBUG: Setting is_bool = true because lang_ty = {:?}",
+                            lang_ty
+                        );
+                        is_bool = true;
+                    }
                 }
 
                 // Also check LLVM type
@@ -990,6 +1001,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     } else if iter_type.is_int_type()
                         && iter_type.into_int_type().get_bit_width() == 1
                     {
+                        eprintln!("DEBUG: Setting is_bool = true because LLVM type is i1");
                         is_bool = true;
                     } else if iter_type.is_array_type() {
                         is_array = true;
@@ -998,6 +1010,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // For now, treat as unsupported/infinite loop
                     }
                 }
+
+                eprintln!(
+                    "DEBUG: is_option = {}, is_bool = {}, is_array = {}",
+                    is_option, is_bool, is_array
+                );
 
                 // For arrays, we need an index variable
                 let array_index_alloca = if is_array {
@@ -1039,6 +1056,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                     self.builder
                         .build_conditional_branch(is_null, body_block, end_block)?;
                 } else if is_bool {
+                    // Bool type - use the boolean value directly as condition
+                    eprintln!("DEBUG: is_bool branch, iter_val_load = {:?}", iter_val_load);
                     self.builder.build_conditional_branch(
                         iter_val_load.into_int_value(),
                         body_block,
@@ -2559,7 +2578,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 Ok(struct_val.as_basic_value_enum())
             }
-            hir::HirExpr::Try { expr, .. } => {
+            hir::HirExpr::Try { expr, ty: _, .. } => {
                 // Try expression: evaluate expr, if error propagate it up (return error)
                 // Otherwise continue with the value
                 let expr_value = self.generate_hir_expr(expr)?;
@@ -2613,6 +2632,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 expr,
                 error_var: _,
                 body,
+                ty: _,
                 span: _,
             } => {
                 // Catch expression: evaluate expr, if error execute body, otherwise return value

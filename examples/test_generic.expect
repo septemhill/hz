@@ -1,0 +1,5 @@
+int value: 3
+float value: 66.880000
+composed int: 100
+composed float: 3.140000
+composed struct: 100
