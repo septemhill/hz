@@ -56,6 +56,8 @@ EXPECTED_TO_COMPILE: list[str] = [
     "examples/test_switch_stmt.lang",
     "examples/test_error.lang",
     "examples/test_import_stmt.lang",
+    "examples/test_generic.lang",
+    "examples/test_struct.lang"
 ]
 
 # Examples that are intentionally designed to fail compilation (error test cases)
