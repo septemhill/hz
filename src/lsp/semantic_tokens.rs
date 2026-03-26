@@ -150,15 +150,14 @@ fn get_token_type(token: &Token) -> Option<SemanticTokenType> {
         Token::Try => Some(SemanticTokenType::Keyword),
         Token::Catch => Some(SemanticTokenType::Keyword),
         Token::Break => Some(SemanticTokenType::Keyword),
-        Token::RawPtr => Some(SemanticTokenType::Type),
+        Token::RawPtr => Some(SemanticTokenType::BuiltinType),
 
         // Built-in types
         Token::Ident(id) => {
             // Check for built-in types
             match id.as_str() {
-                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "bool" | "void" => {
-                    Some(SemanticTokenType::BuiltinType)
-                }
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64"
+                | "bool" | "void" => Some(SemanticTokenType::BuiltinType),
                 _ => Some(SemanticTokenType::Variable),
             }
         }
