@@ -92,6 +92,12 @@ enum Commands {
         #[arg(value_name = "FILE")]
         source: std::path::PathBuf,
     },
+    /// List all types with their unique IDs
+    Typelist {
+        /// Source file to list types from
+        #[arg(value_name = "FILE")]
+        source: std::path::PathBuf,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -142,6 +148,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Lsp { verbose } => {
             cmd::run_lsp(verbose, cli.std_path);
+        }
+        Commands::Typelist { source } => {
+            let source_content = fs::read_to_string(&source)?;
+            cmd::run_typelist_command(&source_content, cli.std_path)?;
         }
     }
 

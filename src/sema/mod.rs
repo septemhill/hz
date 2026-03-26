@@ -7,6 +7,7 @@ pub mod infer;
 pub mod mutability;
 pub mod resolver;
 pub mod symbol;
+pub mod typelist;
 pub mod types;
 
 use std::collections::HashMap;
@@ -258,11 +259,8 @@ impl SemanticAnalyzer {
 
         // Pass 4: Symbol resolution
         let symbol_table = type_analyzer.get_symbol_table().clone();
-        let mut symbol_resolver = SymbolResolver::new(
-            symbol_table,
-            self.structs.clone(),
-            self.enums.clone(),
-        );
+        let mut symbol_resolver =
+            SymbolResolver::new(symbol_table, self.structs.clone(), self.enums.clone());
         symbol_resolver.analyze(program)?;
 
         // Pass 5: Mutability analysis

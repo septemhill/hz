@@ -1934,7 +1934,8 @@ impl TypeInferrer {
                                     let s_len = s_def.generic_params.len();
                                     let s_mangled = self.get_mangled_name(ns, &type_args[..s_len]);
                                     if s_len < type_args.len() {
-                                        let m_mangled = self.get_mangled_name(name, &type_args[s_len..]);
+                                        let m_mangled =
+                                            self.get_mangled_name(name, &type_args[s_len..]);
                                         format!("{}_{}", s_mangled, m_mangled)
                                     } else {
                                         format!("{}_{}", s_mangled, name)
@@ -1943,7 +1944,8 @@ impl TypeInferrer {
                                     let e_len = e_def.generic_params.len();
                                     let e_mangled = self.get_mangled_name(ns, &type_args[..e_len]);
                                     if e_len < type_args.len() {
-                                        let m_mangled = self.get_mangled_name(name, &type_args[e_len..]);
+                                        let m_mangled =
+                                            self.get_mangled_name(name, &type_args[e_len..]);
                                         format!("{}_{}", e_mangled, m_mangled)
                                     } else {
                                         format!("{}_{}", e_mangled, name)
@@ -2071,16 +2073,18 @@ impl TypeInferrer {
 
                     if any_generic {
                         // Don't instantiate - just return the original name
-                        (Vec::new(), name.clone())
+                        (Vec::<Type>::new(), name.clone())
                     } else {
                         let key = (name.clone(), substituted_type_args.clone());
                         if let Some(mangled) = self.struct_instantiations.get(&key) {
-                            (substituted_type_args, mangled.clone())
+                            // Monomorphized struct - no generic args needed
+                            (Vec::<Type>::new(), mangled.clone())
                         } else {
                             let mangled = self.get_mangled_name(name, &substituted_type_args);
                             self.struct_instantiations.insert(key, mangled.clone());
                             self.instantiate_struct(name, &substituted_type_args, &mangled)?;
-                            (substituted_type_args, mangled)
+                            // Monomorphized struct - no generic args needed
+                            (Vec::<Type>::new(), mangled)
                         }
                     }
                 } else {

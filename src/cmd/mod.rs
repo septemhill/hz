@@ -9,6 +9,7 @@ pub mod ir;
 pub mod jit;
 pub mod lsp;
 pub mod run;
+pub mod typelist;
 
 pub use ast::dump_ast;
 pub use build::build;
@@ -17,9 +18,8 @@ pub use ir::generate_ir;
 #[allow(unused_imports)]
 pub use jit::run_jit_command;
 pub use lsp::run_lsp;
-
-// Re-export run_jit from run module for use by Run and Jit commands
 pub use run::run_jit;
+pub use typelist::run_typelist_command;
 
 use std::path::PathBuf;
 
