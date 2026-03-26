@@ -30,6 +30,12 @@ jobs:
         with:
           version: "21"
 
+      - name: Install dependencies
+        run: cargo install cargo-llvm-cov
+
+      - name: Run cargo llvm-cov
+        run: cargo llvm-cov
+
       - name: Run cargo test
         run: cargo test
 
