@@ -33,7 +33,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             param_types.extend(method.params.iter().map(|p| p.ty.clone()));
 
             let fn_type = self.build_function_type(&method.return_ty, &param_types, false);
-            let method_name = format!("{}_{}", struct_name, method.name);
+            let method_name = if method.name.starts_with(&format!("{}_", struct_name)) {
+                method.name.clone()
+            } else {
+                format!("{}_{}", struct_name, method.name)
+            };
             let mangled_name = self.mangle_name(&method_name, false);
             self.module.add_function(&mangled_name, fn_type, None);
         }
@@ -117,7 +121,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             let mut param_types: Vec<Type> = Vec::new();
             param_types.extend(method.params.iter().map(|p| p.ty.clone()));
             let fn_type = self.build_function_type(&method.return_ty, &param_types, false);
-            let method_name = format!("{}_{}", struct_name, method.name);
+            let method_name = if method.name.starts_with(&format!("{}_", struct_name)) {
+                method.name.clone()
+            } else {
+                format!("{}_{}", struct_name, method.name)
+            };
             let mangled_name = self.mangle_name(&method_name, false);
             self.module.add_function(&mangled_name, fn_type, None);
         }
@@ -202,5 +210,4 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
         Ok(())
     }
-
 }

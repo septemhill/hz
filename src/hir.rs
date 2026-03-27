@@ -44,6 +44,8 @@ pub enum HirExpr {
         namespace: Option<String>,
         args: Vec<HirExpr>,
         return_ty: Type,
+        /// Target type for method calls - used to resolve method name to monomorphized version
+        target_ty: Option<Type>,
         span: Span,
     },
     // Desugared constructs

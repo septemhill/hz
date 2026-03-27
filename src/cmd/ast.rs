@@ -7,7 +7,10 @@ use crate::parser;
 use crate::sema::SemanticAnalyzer;
 
 /// Dump AST (Abstract Syntax Tree) with type information
-pub fn dump_ast(source: &str, _cli_std_path: Option<std::path::PathBuf>) -> Result<(), Box<dyn Error>> {
+pub fn dump_ast(
+    source: &str,
+    _cli_std_path: Option<std::path::PathBuf>,
+) -> Result<(), Box<dyn Error>> {
     // Parse source code
     let program = parser::parse(source)?;
 

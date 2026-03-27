@@ -57,6 +57,8 @@ pub enum TypedExprKind {
         name: String,
         namespace: Option<String>,
         args: Vec<TypedExpr>,
+        /// Target type for method calls - used to resolve method name to monomorphized version
+        target_ty: Option<Type>,
     },
     /// If expression
     If {
@@ -190,6 +192,7 @@ pub struct TypedSwitchCase {
 #[allow(unused)]
 pub struct TypedFnDef {
     pub name: String,
+    pub original_name: Option<String>,
     pub visibility: Visibility,
     pub params: Vec<TypedFnParam>,
     pub return_ty: Type,
@@ -487,6 +490,10 @@ impl TypeInferrer {
 
                     // Ensure the monomorphized struct is instantiated - but only if all args are concrete
                     let key = (name.clone(), substituted_args.clone());
+                    eprintln!(
+                        "DEBUG substitute_type Custom - inserting into struct_instantiations: key={:?}, mangled={}",
+                        key, mangled
+                    );
                     let all_concrete = !substituted_args.iter().any(|t| t.is_generic());
                     if all_concrete
                         && !self.struct_instantiations.contains_key(&key)
@@ -877,15 +884,51 @@ impl TypeInferrer {
 
         // Handle initial structs/enums/errors - only non-generic ones for now?
         // Actually, structs are types, we still need them in the TypedProgram.
+        // First, collect struct methods that are in self.functions
         let mut structs = Vec::new();
         for s in &program.structs {
             if s.generic_params.is_empty() {
+                // Add struct methods to initial functions (they were stored in self.functions)
+                for m in &s.methods {
+                    let full_name = format!("{}_{}", s.name, m.name);
+                    if let Some(fn_def) = self.functions.get(&full_name) {
+                        if fn_def.generic_params.is_empty() {
+                            // Clone to avoid borrow conflict
+                            let fn_def_clone = fn_def.clone();
+                            if let Ok(typed_f) = self.infer_fn(&fn_def_clone) {
+                                functions.push(typed_f);
+                            }
+                        }
+                    }
+                }
                 structs.push(self.infer_struct(s)?);
             }
         }
 
         let mut enums = Vec::new();
         for e in &program.enums {
+            // Add enum methods to initial functions
+            for m in &e.methods {
+                let full_name = format!("{}_{}", e.name, m.name);
+                if let Some(fn_def) = self.functions.get(&full_name) {
+                    if fn_def.generic_params.is_empty() {
+                        // Clone to avoid borrow conflict
+                        let mut fn_def_clone = fn_def.clone();
+                        // Rename to include enum name prefix
+                        fn_def_clone.name = full_name.clone();
+                        match self.infer_fn(&fn_def_clone) {
+                            Ok(mut typed_f) => {
+                                // Also rename the typed function
+                                typed_f.name = full_name.clone();
+                                functions.push(typed_f);
+                            }
+                            Err(_) => {
+                                // Skip methods that fail to infer
+                            }
+                        }
+                    }
+                }
+            }
             enums.push(self.infer_enum(e)?);
         }
 
@@ -914,7 +957,7 @@ impl TypeInferrer {
 
         // Build ast_structs: all original structs (including generic) + monomorphized ones
         let mut ast_structs: Vec<crate::ast::StructDef> = program.structs.iter().cloned().collect();
-        ast_structs.extend(std::mem::take(&mut self.new_ast_structs));
+        ast_structs.extend(self.new_ast_structs.clone());
 
         // Build ast_functions: original non-generic functions + monomorphized ones
         let mut ast_functions: Vec<crate::ast::FnDef> = program
@@ -923,30 +966,25 @@ impl TypeInferrer {
             .filter(|f| f.generic_params.is_empty())
             .cloned()
             .collect();
-        // Filter out struct methods from ast_functions
-        let ast_struct_names: std::collections::HashSet<String> =
-            ast_structs.iter().map(|s| s.name.clone()).collect();
-        let new_ast_functions: Vec<crate::ast::FnDef> = std::mem::take(&mut self.new_ast_functions)
-            .into_iter()
-            .filter(|f| {
-                for struct_name in &ast_struct_names {
-                    if f.name.starts_with(&format!("{}_", struct_name)) {
-                        return false;
+        let struct_method_names: HashSet<String> = ast_structs
+            .iter()
+            .flat_map(|s| {
+                s.methods.iter().map(move |m| {
+                    if m.name.starts_with(&format!("{}_", s.name)) {
+                        m.name.clone()
+                    } else {
+                        format!("{}_{}", s.name, m.name)
                     }
-                }
-                true
+                })
             })
             .collect();
-        ast_functions.extend(new_ast_functions);
-
-        // Build ast_structs: original non-generic structs + monomorphized ones
-        let mut ast_structs: Vec<crate::ast::StructDef> = program
-            .structs
-            .iter()
-            .filter(|s| s.generic_params.is_empty())
-            .cloned()
+        let new_ast_functions: Vec<crate::ast::FnDef> = self
+            .new_ast_functions
+            .clone()
+            .into_iter()
+            .filter(|f| !struct_method_names.contains(&f.name))
             .collect();
-        ast_structs.extend(std::mem::take(&mut self.new_ast_structs));
+        ast_functions.extend(new_ast_functions);
 
         Ok(TypedProgram {
             functions,
@@ -1081,6 +1119,21 @@ impl TypeInferrer {
                     self.match_type_params(pa, aa, mappings);
                 }
             }
+            (
+                Type::Function {
+                    params: p_params,
+                    return_type: p_ret,
+                },
+                Type::Function {
+                    params: a_params,
+                    return_type: a_ret,
+                },
+            ) if p_params.len() == a_params.len() => {
+                for (pp, ap) in p_params.iter().zip(a_params.iter()) {
+                    self.match_type_params(pp, ap, mappings);
+                }
+                self.match_type_params(p_ret, a_ret, mappings);
+            }
             _ => {}
         }
     }
@@ -1105,6 +1158,7 @@ impl TypeInferrer {
         name: &str,
         type_args: &[Type],
         mangled_name: &str,
+        is_struct_method: bool,
     ) -> AnalysisResult<()> {
         eprintln!(
             "DEBUG instantiate_fn: name={}, type_args={:?}, mangled_name={}, type_mappings_before={:?}",
@@ -1151,15 +1205,108 @@ impl TypeInferrer {
         };
 
         // Store the AST-level FnDef for the lowering pass
-        self.new_ast_functions.push(instantiated_f.clone());
+        // Only for non-struct methods (they are handled via struct's methods)
+        if !is_struct_method {
+            self.new_ast_functions.push(instantiated_f.clone());
+        }
 
         // Infer the instantiated function - keep the type mappings for inference
         // Note: We temporarily keep the mappings active for inference
-        let typed_f = self.infer_fn(&instantiated_f)?;
-        self.new_functions.push(typed_f);
+        let mut typed_f = self.infer_fn(&instantiated_f)?;
+        // Only add to global functions if not a struct method
+        // Exception: struct constructors (new) should be in global functions
+        if !is_struct_method {
+            self.new_functions.push(typed_f);
+        } else {
+            let (owner_name, original_method_name) = name.split_once('_').ok_or_else(|| {
+                AnalysisError::new(&format!(
+                    "Struct method '{}' is missing its owner prefix",
+                    name
+                ))
+            })?;
+            let method_name = if let Some(pos) = mangled_name.rfind('_') {
+                &mangled_name[pos + 1..]
+            } else {
+                original_method_name
+            };
+            if method_name == "new" {
+                // Constructor - add to global functions
+                self.new_functions.push(typed_f);
+            } else {
+                typed_f.original_name = Some(original_method_name.to_string());
+                self.attach_instantiated_method_to_struct(
+                    owner_name,
+                    type_args,
+                    instantiated_f,
+                    typed_f,
+                )?;
+            }
+        }
 
         // Restore type mappings
         self.type_mappings = old_mappings;
+        Ok(())
+    }
+
+    fn attach_instantiated_method_to_struct(
+        &mut self,
+        owner_name: &str,
+        type_args: &[Type],
+        instantiated_ast: FnDef,
+        instantiated_typed: TypedFnDef,
+    ) -> AnalysisResult<()> {
+        let owner_generic_len = self
+            .structs
+            .get(owner_name)
+            .map(|s| s.generic_params.len())
+            .ok_or_else(|| {
+                AnalysisError::new(&format!(
+                    "Original struct '{}' not found for method instantiation",
+                    owner_name
+                ))
+            })?;
+
+        let struct_type_args = &type_args[..owner_generic_len];
+        let struct_mangled_name = self.get_mangled_name(owner_name, struct_type_args);
+
+        if let Some(ast_struct) = self.structs.get_mut(&struct_mangled_name) {
+            if !ast_struct
+                .methods
+                .iter()
+                .any(|method| method.name == instantiated_ast.name)
+            {
+                ast_struct.methods.push(instantiated_ast.clone());
+            }
+        }
+
+        if let Some(ast_struct) = self
+            .new_ast_structs
+            .iter_mut()
+            .find(|struct_def| struct_def.name == struct_mangled_name)
+        {
+            if !ast_struct
+                .methods
+                .iter()
+                .any(|method| method.name == instantiated_ast.name)
+            {
+                ast_struct.methods.push(instantiated_ast);
+            }
+        }
+
+        if let Some(typed_struct) = self
+            .new_structs
+            .iter_mut()
+            .find(|struct_def| struct_def.name == struct_mangled_name)
+        {
+            if !typed_struct
+                .methods
+                .iter()
+                .any(|method| method.name == instantiated_typed.name)
+            {
+                typed_struct.methods.push(instantiated_typed);
+            }
+        }
+
         Ok(())
     }
 
@@ -1187,6 +1334,37 @@ impl TypeInferrer {
         self.type_mappings = mappings;
 
         let mappings = self.type_mappings.clone();
+        // For struct methods with additional generic params (like F in map<T, F>),
+        // we need to create a mapping that substitutes only the struct's generic params
+        // but leaves method's generic params as-is (they will be inferred during calls)
+        // We use an empty mapping for method's params so they remain as GenericParam
+        let instantiated_methods: Vec<FnDef> = s_def
+            .methods
+            .iter()
+            .filter(|m| m.generic_params.is_empty())
+            .map(|m| {
+                let method_name = format!("{}_{}", s_def.name, m.name);
+                // For method's params, use only struct's mappings (not method's extra generic params)
+                // Method's extra generic params will remain as GenericParam in the signature
+                // and will be inferred when the method is actually called
+                FnDef {
+                    name: method_name,
+                    visibility: m.visibility,
+                    params: m
+                        .params
+                        .iter()
+                        .map(|p| FnParam {
+                            name: p.name.clone(),
+                            ty: self.substitute_type(&p.ty, &mappings),
+                        })
+                        .collect(),
+                    return_ty: self.substitute_type(&m.return_ty, &mappings),
+                    body: m.body.clone(),
+                    generic_params: Vec::new(),
+                    span: m.span,
+                }
+            })
+            .collect();
         let instantiated_s = crate::ast::StructDef {
             name: mangled_name.to_string(),
             fields: s_def
@@ -1198,7 +1376,7 @@ impl TypeInferrer {
                     visibility: f.visibility,
                 })
                 .collect(),
-            methods: s_def.methods.clone(),
+            methods: instantiated_methods,
             visibility: s_def.visibility,
             generic_params: Vec::new(),
             span: s_def.span,
@@ -1262,6 +1440,7 @@ impl TypeInferrer {
 
         Ok(TypedFnDef {
             name: f.name.clone(),
+            original_name: None,
             visibility: f.visibility,
             params: typed_params,
             return_ty: substituted_return_ty,
@@ -1946,6 +2125,7 @@ impl TypeInferrer {
                                     name: name.clone(),
                                     namespace: None,
                                     args: typed_args,
+                                    target_ty: None,
                                 },
                                 ty: Type::Bool,
                                 span: *span,
@@ -1966,6 +2146,7 @@ impl TypeInferrer {
                             name: name.clone(),
                             namespace: namespace.clone(),
                             args: typed_args,
+                            target_ty: None,
                         },
                         ty: Type::Void,
                         span: *span,
@@ -1973,63 +2154,187 @@ impl TypeInferrer {
                 }
 
                 // 2. Resolve as a normal function (with Generics)
-                let fn_lookup_name = if let Some(ns) = namespace {
+                let mut fn_lookup_name = if let Some(ns) = namespace {
                     format!("{}_{}", ns, name)
                 } else {
                     name.clone()
                 };
 
-                if let Some(symbol) = self.symbol_table.resolve(&fn_lookup_name).cloned() {
-                    let (actual_generic_args, mangled_name) = if !symbol.generic_params.is_empty() {
-                        let mut type_args = generic_args.clone();
-                        if type_args.is_empty() {
-                            if let Type::Function { params, .. } = &symbol.ty {
-                                let inferred_arg_types: Vec<Type> =
-                                    typed_args.iter().map(|e| e.ty.clone()).collect();
-                                type_args = self.infer_type_args(
-                                    &symbol.generic_params,
-                                    params,
-                                    &inferred_arg_types,
-                                )?;
+                let mut instance_type = None;
+                let mut effective_namespace = namespace.clone();
+                let mut effective_generic_args = generic_args.clone();
+
+                if let Some(ns) = namespace {
+                    eprintln!("DEBUG resolve_call - ns={}, name={}", ns, name);
+                    if let Some(var_symbol) = self.symbol_table.resolve(ns) {
+                        eprintln!("DEBUG resolve_call - var_symbol.ty={:?}", var_symbol.ty);
+                        if let Some(struct_full_name) = custom_type_name(&var_symbol.ty) {
+                            eprintln!("DEBUG resolve_call - struct_full_name={}", struct_full_name);
+
+                            // Check if this is a type reference (generic struct name) or variable reference (monomorphized)
+                            // If struct_full_name == ns, it's a type reference (static call like Compose.new)
+                            // If struct_full_name != ns, it's a variable reference (instance call like comp.map)
+                            let is_type_reference = ns == struct_full_name;
+
+                            // Try to reverse-map a monomorphized name back to original + type_args
+                            // Only reverse-map if struct_full_name is actually a mangled name (not the original)
+                            let reverse = self
+                                .struct_instantiations
+                                .iter()
+                                .find(|(_, v)| v.as_str() == struct_full_name)
+                                .map(|((orig, args), _)| (orig.clone(), args.clone()));
+
+                            eprintln!(
+                                "DEBUG resolve_call - reverse={:?}, is_type_reference={}",
+                                reverse, is_type_reference
+                            );
+
+                            if let Some((original_name, struct_args)) = reverse {
+                                fn_lookup_name = format!("{}_{}", original_name, name);
+                                let mut combined_args = struct_args;
+                                combined_args.extend(generic_args.clone());
+                                effective_generic_args = combined_args;
+                                effective_namespace = Some(original_name);
+                                // Only set instance_type for actual variable references, not type references
+                                if !is_type_reference {
+                                    instance_type = Some(var_symbol.ty.clone());
+                                }
+                            } else if !is_type_reference {
+                                // Variable reference but no reverse mapping - use the full name directly
+                                fn_lookup_name = format!("{}_{}", struct_full_name, name);
+                                effective_namespace = Some(struct_full_name.to_string());
+                                instance_type = Some(var_symbol.ty.clone());
+                            } else {
+                                // Type reference - no reverse mapping needed
+                                fn_lookup_name = format!("{}_{}", struct_full_name, name);
+                                effective_namespace = Some(struct_full_name.to_string());
                             }
                         }
+                    }
+                }
+
+                eprintln!("DEBUG resolve_call - fn_lookup_name={}", fn_lookup_name);
+                if let Some(symbol) = self.symbol_table.resolve(&fn_lookup_name).cloned() {
+                    eprintln!("DEBUG resolve_call - found symbol: {:?}", symbol.ty);
+                    let (actual_generic_args, mangled_name, method_mangled) = if !symbol
+                        .generic_params
+                        .is_empty()
+                    {
+                        let mut type_args = effective_generic_args;
+                        if type_args.len() < symbol.generic_params.len() {
+                            if let Type::Function { params, .. } = &symbol.ty {
+                                // Build a pre-seeded mapping from already-known type args
+                                // (e.g. struct's T=I32) so that when we match remaining params
+                                // the known types act as constraints.
+                                let mut pre_seeded: HashMap<String, Type> = HashMap::new();
+                                for (i, p_name) in symbol.generic_params.iter().enumerate() {
+                                    if i < type_args.len() {
+                                        pre_seeded.insert(p_name.clone(), type_args[i].clone());
+                                    }
+                                }
+
+                                let inferred_arg_types: Vec<Type> =
+                                    typed_args.iter().map(|e| e.ty.clone()).collect();
+
+                                // Try to infer remaining params from call arguments (no instance prepend
+                                // since we're matching against the non-self params of the function).
+                                // Use only the call args (not instance) for inferring method-specific params.
+                                let mut mappings = pre_seeded;
+                                for (p_ty, a_ty) in params
+                                    .iter()
+                                    .skip(if instance_type.is_some() { 1 } else { 0 })
+                                    .zip(inferred_arg_types.iter())
+                                {
+                                    self.match_type_params(p_ty, a_ty, &mut mappings);
+                                }
+
+                                // Fill in type_args for remaining (un-filled) params
+                                for i in type_args.len()..symbol.generic_params.len() {
+                                    let p_name = &symbol.generic_params[i];
+                                    if let Some(ty) = mappings.get(p_name) {
+                                        type_args.push(ty.clone());
+                                    } else {
+                                        return Err(AnalysisError::new_with_span(
+                                            &format!(
+                                                "Could not infer type argument for '{}' in '{}'",
+                                                p_name, fn_lookup_name
+                                            ),
+                                            span,
+                                        )
+                                        .with_module("infer"));
+                                    }
+                                }
+                            }
+                        }
+
+                        if type_args.len() != symbol.generic_params.len() {
+                            return Err(AnalysisError::new_with_span(
+                                &format!("Generic function '{}' expects {} type arguments, but {} were provided/inferred", 
+                                    fn_lookup_name, symbol.generic_params.len(), type_args.len()),
+                                span,
+                            ).with_module("infer"));
+                        }
+
                         let key = (fn_lookup_name.clone(), type_args.clone());
-                        if let Some(mangled) = self.fn_instantiations.get(&key) {
-                            (type_args, mangled.clone())
+                        let (final_args, mangled, method_mangled) = if let Some(mangled) =
+                            self.fn_instantiations.get(&key)
+                        {
+                            // Derive method_mangled from cached mangled by stripping struct prefix
+                            let m_opt = if let Some(ns) = &effective_namespace {
+                                if let Some(s_def) = self.structs.get(ns) {
+                                    let s_len = s_def.generic_params.len();
+                                    let s_mangled = self.get_mangled_name(ns, &type_args[..s_len]);
+                                    mangled
+                                        .strip_prefix(&format!("{}_", s_mangled))
+                                        .map(|s| s.to_string())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                            (type_args.clone(), mangled.clone(), m_opt)
                         } else {
-                            let mangled = if let Some(ns) = namespace {
+                            let (mangled, m_opt) = if let Some(ns) = &effective_namespace {
                                 if let Some(s_def) = self.structs.get(ns) {
                                     let s_len = s_def.generic_params.len();
                                     let s_mangled = self.get_mangled_name(ns, &type_args[..s_len]);
                                     if s_len < type_args.len() {
-                                        let m_mangled =
-                                            self.get_mangled_name(name, &type_args[s_len..]);
-                                        format!("{}_{}", s_mangled, m_mangled)
+                                        let m = self.get_mangled_name(name, &type_args[s_len..]);
+                                        (format!("{}_{}", s_mangled, m), Some(m))
                                     } else {
-                                        format!("{}_{}", s_mangled, name)
+                                        (format!("{}_{}", s_mangled, name), Some(name.clone()))
                                     }
                                 } else if let Some(e_def) = self.enums.get(ns) {
                                     let e_len = e_def.generic_params.len();
                                     let e_mangled = self.get_mangled_name(ns, &type_args[..e_len]);
                                     if e_len < type_args.len() {
-                                        let m_mangled =
-                                            self.get_mangled_name(name, &type_args[e_len..]);
-                                        format!("{}_{}", e_mangled, m_mangled)
+                                        let m = self.get_mangled_name(name, &type_args[e_len..]);
+                                        (format!("{}_{}", e_mangled, m), Some(m))
                                     } else {
-                                        format!("{}_{}", e_mangled, name)
+                                        (format!("{}_{}", e_mangled, name), Some(name.clone()))
                                     }
                                 } else {
-                                    self.get_mangled_name(&fn_lookup_name, &type_args)
+                                    (self.get_mangled_name(&fn_lookup_name, &type_args), None)
                                 }
                             } else {
-                                self.get_mangled_name(&fn_lookup_name, &type_args)
+                                (self.get_mangled_name(&fn_lookup_name, &type_args), None)
                             };
-                            self.fn_instantiations.insert(key, mangled.clone());
-                            self.instantiate_fn(&fn_lookup_name, &type_args, &mangled)?;
-                            (type_args, mangled)
-                        }
+                            self.fn_instantiations.insert(key.clone(), mangled.clone());
+                            // instantiate_fn pushes to new_functions internally; return value is ()
+                            // Pass effective_namespace.is_some() to indicate if this is a struct method
+                            self.instantiate_fn(
+                                &fn_lookup_name,
+                                &type_args,
+                                &mangled,
+                                effective_namespace.is_some(),
+                            )?;
+                            (type_args, mangled, m_opt)
+                        };
+
+                        (final_args, mangled, method_mangled)
                     } else {
-                        (Vec::new(), fn_lookup_name.clone())
+                        (Vec::new(), fn_lookup_name.clone(), None)
                     };
 
                     let final_symbol = if mangled_name != fn_lookup_name {
@@ -2060,19 +2365,39 @@ impl TypeInferrer {
                         .with_module("infer"));
                     };
 
+                    // For instance method calls, emit:
+                    //   name = method-only mangled (e.g., "map_i32")
+                    //   namespace = original variable (e.g., "comp")
+                    // Codegen reconstructs the full name as "Compose_i32_map_i32".
+                    // For static generic calls, suppress namespace and use the full mangled name.
+                    // Check if this is a type reference (generic struct name) or variable reference (monomorphized)
+                    // If namespace == effective_namespace, it's a type reference (static call like Compose.new)
+                    // If namespace != effective_namespace, it's a variable reference (instance call like comp.map)
+                    let is_static_call = namespace.as_deref() == effective_namespace.as_deref();
+
+                    let (emit_name, emit_namespace) = if instance_type.is_some() && !is_static_call
+                    {
+                        // Instance method call: name = "map_i32", namespace = variable name (e.g., "comp")
+                        let meth_name = method_mangled.unwrap_or_else(|| name.clone());
+                        (meth_name, namespace.clone())
+                    } else if mangled_name != fn_lookup_name {
+                        // Static generic call: use full mangled name (e.g., "Compose_i32_new") with namespace=None
+                        (mangled_name.clone(), None)
+                    } else {
+                        (name.clone(), effective_namespace)
+                    };
+
+                    eprintln!(
+                        "DEBUG resolve_call - emit_name={}, emit_namespace={:?}, mangled_name={}, is_static_call={}",
+                        emit_name, emit_namespace, mangled_name, is_static_call
+                    );
+
                     return Ok(TypedExpr {
                         expr: TypedExprKind::Call {
-                            name: if mangled_name != fn_lookup_name {
-                                mangled_name.clone()
-                            } else {
-                                name.clone()
-                            },
-                            namespace: if mangled_name != fn_lookup_name {
-                                None
-                            } else {
-                                namespace.clone()
-                            },
+                            name: emit_name,
+                            namespace: emit_namespace,
                             args: typed_args,
+                            target_ty: instance_type.clone(),
                         },
                         ty: return_type,
                         span: *span,
@@ -2093,6 +2418,7 @@ impl TypeInferrer {
                                             name: name.clone(),
                                             namespace: namespace.clone(),
                                             args: typed_args,
+                                            target_ty: Some(var_symbol.ty.clone()),
                                         },
                                         ty: method.return_ty.clone(),
                                         span: *span,
@@ -2109,6 +2435,7 @@ impl TypeInferrer {
                                                 name: name.clone(),
                                                 namespace: namespace.clone(),
                                                 args: typed_args,
+                                                target_ty: Some(var_symbol.ty.clone()),
                                             },
                                             ty: return_type.as_ref().clone(),
                                             span: *span,
@@ -3097,6 +3424,24 @@ pub fn infer_types(
 
 pub use crate::ast::{AstDump, print_indent};
 
+fn record_shown_method_names(
+    shown_methods: &mut HashSet<String>,
+    owner_name: &str,
+    method_name: &str,
+) {
+    shown_methods.insert(method_name.to_string());
+
+    if method_name.starts_with(&format!("{}_", owner_name)) {
+        return;
+    }
+
+    if let Some((_, original_method_name)) = method_name.split_once('_') {
+        shown_methods.insert(format!("{}_{}", owner_name, original_method_name));
+    } else {
+        shown_methods.insert(format!("{}_{}", owner_name, method_name));
+    }
+}
+
 impl AstDump for TypedStructDef {
     fn dump(&self, indent: usize) {
         print_indent(indent);
@@ -3218,12 +3563,12 @@ impl AstDump for TypedProgram {
         let mut shown_methods = HashSet::new();
         for s in &self.structs {
             for m in &s.methods {
-                shown_methods.insert(format!("{}_{}", s.name, m.name));
+                record_shown_method_names(&mut shown_methods, &s.name, &m.name);
             }
         }
         for e in &self.enums {
             for m in &e.methods {
-                shown_methods.insert(format!("{}_{}", e.name, m.name));
+                record_shown_method_names(&mut shown_methods, &e.name, &m.name);
             }
         }
 
@@ -3243,7 +3588,15 @@ impl AstDump for TypedFnDef {
         } else {
             ""
         };
-        println!("FnDef: {}{} -> {}", vis, self.name, self.return_ty);
+        let original_name = self
+            .original_name
+            .as_ref()
+            .map(|name| format!(" ({})", name))
+            .unwrap_or_default();
+        println!(
+            "FnDef: {}{}{} -> {}",
+            vis, self.name, original_name, self.return_ty
+        );
 
         if !self.params.is_empty() {
             print_indent(indent + 1);
@@ -3488,6 +3841,7 @@ impl AstDump for TypedExpr {
                 name,
                 namespace,
                 args,
+                target_ty: _,
             } => {
                 let ns = if let Some(n) = namespace {
                     format!("{}::", n)

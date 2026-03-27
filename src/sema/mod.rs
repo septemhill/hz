@@ -10,6 +10,7 @@ pub mod symbol;
 pub mod typelist;
 pub mod types;
 
+use crate::ast::Type;
 use std::collections::HashMap;
 
 #[cfg(test)]
@@ -216,10 +217,59 @@ impl SemanticAnalyzer {
 
         // Populate local definitions into our maps
         for s in &program.structs {
+            eprintln!(
+                "DEBUG mod.rs registering struct: {} with {} fields",
+                s.name,
+                s.fields.len()
+            );
             self.structs.insert(s.name.clone(), s.clone());
+            // Register methods in global functions map for monomorphization
+            for method in &s.methods {
+                let mut m = method.clone();
+                let mut combined_params = s.generic_params.clone();
+                combined_params.extend(m.generic_params.clone());
+                m.generic_params = combined_params;
+
+                // Replace "Self" with the struct type (including generic params)
+                let generic_args: Vec<Type> = s
+                    .generic_params
+                    .iter()
+                    .map(|p| Type::GenericParam(p.clone()))
+                    .collect();
+                eprintln!(
+                    "DEBUG mod.rs replace_self for struct={}, generic_args={:?}",
+                    s.name, generic_args
+                );
+                for p in &mut m.params {
+                    p.ty.replace_self_with_args(&s.name, &generic_args);
+                }
+                m.return_ty.replace_self_with_args(&s.name, &generic_args);
+
+                self.functions.insert(format!("{}_{}", s.name, m.name), m);
+            }
         }
         for e in &program.enums {
             self.enums.insert(e.name.clone(), e.clone());
+            // Register methods in global functions map for monomorphization
+            for method in &e.methods {
+                let mut m = method.clone();
+                let mut combined_params = e.generic_params.clone();
+                combined_params.extend(m.generic_params.clone());
+                m.generic_params = combined_params;
+
+                // Replace "Self" with the enum type (including generic params)
+                let generic_args: Vec<Type> = e
+                    .generic_params
+                    .iter()
+                    .map(|p| Type::GenericParam(p.clone()))
+                    .collect();
+                for p in &mut m.params {
+                    p.ty.replace_self_with_args(&e.name, &generic_args);
+                }
+                m.return_ty.replace_self_with_args(&e.name, &generic_args);
+
+                self.functions.insert(format!("{}_{}", e.name, m.name), m);
+            }
         }
         for err in &program.errors {
             self.errors.insert(err.name.clone(), err.clone());

@@ -98,6 +98,12 @@ enum Commands {
         #[arg(value_name = "FILE")]
         source: std::path::PathBuf,
     },
+    /// Initialize a new Lang project
+    Init {
+        /// Project name
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -152,6 +158,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Typelist { source } => {
             let source_content = fs::read_to_string(&source)?;
             cmd::run_typelist_command(&source_content, cli.std_path)?;
+        }
+        Commands::Init { name } => {
+            cmd::init_project(&name)?;
         }
     }
 

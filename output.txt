@@ -1,0 +1,827 @@
+warning: unused import: `crate::ast`
+  --> src/build.rs:10:5
+   |
+10 | use crate::ast;
+   |     ^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `imports`
+   --> src/sema/infer.rs:390:9
+    |
+390 |         imports: Vec<(Op...
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_imports`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `generic_args`
+   --> src/sema/types.rs:801:17
+    |
+801 | ...   generic_args, // C...
+    |       ^^^^^^^^^^^^ help: try ignoring the field: `generic_args: _`
+
+warning: unused variable: `span`
+   --> src/sema/types.rs:986:17
+    |
+986 |                 span,
+    |                 ^^^^ help: try ignoring the field: `span: _`
+
+warning: field `std_path` is never read
+  --> src/sema/mod.rs:42:9
+   |
+35 | ...truct SemanticAnalyzer {
+   |          ---------------- field in this struct
+...
+42 | ...ub std_path: String,
+   |       ^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: associated function `with_std_path` is never used
+  --> src/sema/mod.rs:58:12
+   |
+45 | impl SemanticAnalyzer {
+   | --------------------- associated function in this implementation
+...
+58 |     pub fn with_std_path(st...
+   |            ^^^^^^^^^^^^^
+
+warning: fields `ast_functions` and `ast_structs` are never read
+   --> src/sema/infer.rs:338:9
+    |
+330 | ...truct TypedProgram {
+    |          ------------ fields in this struct
+...
+338 | ...ub ast_functions: Vec...
+    |       ^^^^^^^^^^^^^
+339 | ...// Original AST-level...
+340 | ...ub ast_structs: Vec<c...
+    |       ^^^^^^^^^^^
+    |
+    = note: `TypedProgram` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `define_with_value` is never used
+  --> src/sema/symbol.rs:72:12
+   |
+35 | impl SymbolTable {
+   | ---------------- method in this implementation
+...
+72 |     pub fn define_with_value(
+   |            ^^^^^^^^^^^^^^^^^
+
+warning: methods `get_all_types` and `len` are never used
+  --> src/sema/typelist.rs:77:12
+   |
+15 | impl TypeRegistry {
+   | ----------------- methods in this implementation
+...
+77 |     pub fn get_all_types(&s...
+   |            ^^^^^^^^^^^^^
+...
+88 |     pub fn len(&self) -> us...
+   |            ^^^
+
+warning: function `collect_types_from_program` is never used
+   --> src/sema/typelist.rs:100:8
+    |
+100 | ...fn collect_types_from_program(pr...
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `collect_fn_types` is never used
+   --> src/sema/typelist.rs:186:4
+    |
+186 | fn collect_fn_types(fn_d...
+    |    ^^^^^^^^^^^^^^^^
+
+warning: function `collect_types_from_stmt` is never used
+   --> src/sema/typelist.rs:202:4
+    |
+202 | fn collect_types_from_stmt(st...
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `collect_types_from_expr` is never used
+   --> src/sema/typelist.rs:260:4
+    |
+260 | fn collect_types_from_expr(ex...
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `collect_types_from_type` is never used
+   --> src/sema/typelist.rs:332:4
+    |
+332 | fn collect_types_from_type(ty...
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `enums` and `errors` are never read
+  --> src/sema/types.rs:14:5
+   |
+11 | pub struct TypeAnalyzer {
+   |            ------------ fields in this struct
+...
+14 |     enums: HashMap<String,...
+   |     ^^^^^
+15 |     errors: HashMap<String...
+   |     ^^^^^^
+
+warning: `lang` (bin "lang") generated 15 warnings (run `cargo fix --bin "lang" -p lang` to apply 4 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running `target/debug/lang run examples/test_generic.lang`
+Loading std library...
+DEBUG parse_function_params: start, current=Some(LParen)
+DEBUG parse_type: start, current=Some(RawPtr), state=ParsingFunctionParams
+DEBUG parse_return_type: start
+DEBUG parse_return_type: found Ident, id=bool
+DEBUG parse_return_type: calling parse_type, current=Some(Ident("bool"))
+DEBUG parse_type: start, current=Some(Ident("bool")), state=ParsingFunctionReturnType
+DEBUG parse_return_type: parse_type returned Ok, current now=Some(LBrace)
+DEBUG parse_function_body: start
+DEBUG parse_expression: start, current=Some(False)
+DEBUG parse_function_params: start, current=Some(LParen)
+DEBUG parse_type: start, current=Some(RawPtr), state=ParsingFunctionParams
+DEBUG parse_return_type: start
+DEBUG parse_return_type: found Ident, id=bool
+DEBUG parse_return_type: calling parse_type, current=Some(Ident("bool"))
+DEBUG parse_type: start, current=Some(Ident("bool")), state=ParsingFunctionReturnType
+DEBUG parse_return_type: parse_type returned Ok, current now=Some(LBrace)
+DEBUG parse_function_body: start
+DEBUG parse_expression: start, current=Some(True)
+    Loaded 'builtin' package successfully
+Loaded std packages: ["builtin"]
+Parsing source code...
+DEBUG parse_import_statement: start
+DEBUG parse_import_statement: non-grouped import
+DEBUG parse_import_statement: returning packages=[(None, "io")]
+DEBUG parse_type: start, current=Some(Ident("T")), state=ParsingStruct
+DEBUG parse_function_params: start, current=Some(LParen)
+DEBUG parse_type: start, current=Some(Ident("T")), state=ParsingFunctionParams
+DEBUG parse_return_type: start
+DEBUG parse_return_type: found Ident, id=Compose
+DEBUG parse_return_type: calling parse_type, current=Some(Ident("Compose"))
+DEBUG parse_type: start, current=Some(Ident("Compose")), state=ParsingFunctionReturnType
+DEBUG parse_type: start, current=Some(Ident("T")), state=ParsingType
+DEBUG parse_return_type: parse_type returned Ok, current now=Some(LBrace)
+DEBUG parse_function_body: start
+DEBUG parse_expression: start, current=Some(Ident("Compose"))
+DEBUG parse_type: start, current=Some(Ident("T")), state=ParsingExpression
+DEBUG parse_expression: start, current=Some(Ident("v"))
+DEBUG parse_function_params: start, current=Some(LParen)
+DEBUG parse_type: start, current=Some(Star), state=ParsingFunctionParams
+DEBUG parse_type: start, current=Some(Ident("Self")), state=ParsingType
+DEBUG parse_type: start, current=Some(Fn), state=ParsingType
+DEBUG parse_type: start, current=Some(Ident("T")), state=ParsingType
+DEBUG parse_type: start, current=Some(Ident("F")), state=ParsingType
+DEBUG parse_return_type: start
+DEBUG parse_return_type: found Ident, id=F
+DEBUG parse_return_type: calling parse_type, current=Some(Ident("F"))
+DEBUG parse_type: start, current=Some(Ident("F")), state=ParsingFunctionReturnType
+DEBUG parse_return_type: parse_type returned Ok, current now=Some(LBrace)
+DEBUG parse_function_body: start
+DEBUG parse_expression: start, current=Some(Ident("f"))
+DEBUG parse_expression: start, current=Some(SelfType)
+DEBUG replace_self_with_args Custom(Self): struct_name=Compose, generic_args=[GenericParam("T")]
+DEBUG parse_type: start, current=Some(Ident("i32")), state=ParsingStruct
+DEBUG parse_function_params: start, current=Some(LParen)
+DEBUG parse_type: start, current=Some(Ident("T")), state=ParsingFunctionParams
+DEBUG parse_type: start, current=Some(Ident("T")), state=ParsingType
+DEBUG parse_return_type: start
+DEBUG parse_return_type: found Ident, id=T
+DEBUG parse_return_type: calling parse_type, current=Some(Ident("T"))
+DEBUG parse_type: start, current=Some(Ident("T")), state=ParsingFunctionReturnType
+DEBUG parse_return_type: parse_type returned Ok, current now=Some(LBrace)
+DEBUG parse_function_body: start
+DEBUG parse_expression: start, current=Some(Ident("a"))
+DEBUG parse_function_params: start, current=Some(LParen)
+DEBUG parse_type: start, current=Some(Ident("i32")), state=ParsingFunctionParams
+DEBUG parse_return_type: start
+DEBUG parse_return_type: found Ident, id=i32
+DEBUG parse_return_type: calling parse_type, current=Some(Ident("i32"))
+DEBUG parse_type: start, current=Some(Ident("i32")), state=ParsingFunctionReturnType
+DEBUG parse_return_type: parse_type returned Ok, current now=Some(LBrace)
+DEBUG parse_function_body: start
+DEBUG parse_expression: start, current=Some(Ident("i"))
+DEBUG parse_function_params: start, current=Some(LParen)
+DEBUG parse_return_type: start
+DEBUG parse_return_type: found Ident, id=void
+DEBUG parse_function_body: start
+DEBUG parse_type: start, current=Some(Ident("i32")), state=ParsingStatement
+DEBUG parse_expression: start, current=Some(Int(1))
+DEBUG parse_type: start, current=Some(Ident("i32")), state=ParsingStatement
+DEBUG parse_expression: start, current=Some(Int(2))
+DEBUG parse_expression: start, current=Some(Ident("io"))
+DEBUG parse_expression: start, current=Some(String("int value: {d}"))
+DEBUG parse_expression: start, current=Some(Ident("add"))
+DEBUG parse_expression: start, current=Some(Ident("a"))
+DEBUG parse_expression: start, current=Some(Ident("b"))
+DEBUG parse_type: start, current=Some(Ident("f64")), state=ParsingStatement
+DEBUG parse_expression: start, current=Some(Float(22.11))
+DEBUG parse_type: start, current=Some(Ident("f64")), state=ParsingStatement
+DEBUG parse_expression: start, current=Some(Float(44.77))
+DEBUG parse_expression: start, current=Some(Ident("io"))
+DEBUG parse_expression: start, current=Some(String("float value: {f}"))
+DEBUG parse_expression: start, current=Some(Ident("add"))
+DEBUG parse_expression: start, current=Some(Ident("c"))
+DEBUG parse_expression: start, current=Some(Ident("d"))
+DEBUG parse_expression: start, current=Some(Ident("Compose"))
+DEBUG parse_type: start, current=Some(Ident("i32")), state=ParsingExpression
+DEBUG parse_expression: start, current=Some(Int(100))
+DEBUG parse_expression: start, current=Some(Ident("io"))
+DEBUG parse_expression: start, current=Some(String("composed int: {d}"))
+DEBUG parse_expression: start, current=Some(Ident("comp"))
+DEBUG parse_expression: start, current=Some(Ident("comp"))
+DEBUG parse_expression: start, current=Some(Ident("transition"))
+DEBUG parse_expression: start, current=Some(Ident("io"))
+DEBUG parse_expression: start, current=Some(String("after map: {d}"))
+DEBUG parse_expression: start, current=Some(Ident("t"))
+DEBUG parse_expression: start, current=Some(Ident("Compose"))
+DEBUG parse_type: start, current=Some(Ident("f64")), state=ParsingExpression
+DEBUG parse_expression: start, current=Some(Float(3.14))
+DEBUG parse_expression: start, current=Some(Ident("io"))
+DEBUG parse_expression: start, current=Some(String("composed float: {f}"))
+DEBUG parse_expression: start, current=Some(Ident("comp_f"))
+DEBUG parse_expression: start, current=Some(Ident("Compose"))
+DEBUG parse_type: start, current=Some(Ident("Data")), state=ParsingExpression
+DEBUG parse_expression: start, current=Some(Ident("Data"))
+DEBUG parse_expression: start, current=Some(Int(100))
+DEBUG parse_expression: start, current=Some(Ident("io"))
+DEBUG parse_expression: start, current=Some(String("composed struct: {d}"))
+DEBUG parse_expression: start, current=Some(Ident("vv"))
+Loading imported packages...
+DEBUG parse_function_params: start, current=Some(LParen)
+DEBUG parse_type: start, current=Some(LBracket), state=ParsingFunctionParams
+DEBUG parse_type: start, current=Some(Const), state=ParsingType
+DEBUG parse_type: start, current=Some(Ident("u8")), state=ParsingType
+DEBUG parse_return_type: start
+DEBUG parse_return_type: found Ident, id=void
+DEBUG parse_function_body: start
+Loaded std packages: ["builtin", "io"]
+Semantic Analysis...
+DEBUG mod.rs registering struct: Compose with 1 fields
+DEBUG mod.rs replace_self for struct=Compose, generic_args=[GenericParam("T")]
+DEBUG mod.rs replace_self for struct=Compose, generic_args=[GenericParam("T")]
+DEBUG mod.rs registering struct: Data with 1 fields
+DEBUG: inserting struct into self.structs: "Compose", generic_params=["T"]
+DEBUG: inserting struct into self.structs: "Data", generic_params=[]
+DEBUG: inserting struct method: Compose_new (struct=Compose, method=new, struct_generic_params=["T"], method_generic_params=[])
+DEBUG: inserting struct method: Compose_map (struct=Compose, method=map, struct_generic_params=["T"], method_generic_params=["F"])
+DEBUG infer_fn: f.name=transition, type_mappings={}, f.return_ty=I32
+DEBUG substitute_type: ty=I32, mappings={}, effective_mappings={}
+DEBUG substitute_type: ty=I32, mappings={}, effective_mappings={}
+DEBUG: infer_expr called
+DEBUG infer_fn: f.name=main, type_mappings={}, f.return_ty=Void
+DEBUG substitute_type: ty=Void, mappings={}, effective_mappings={}
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG match_type_params: p_ty=GenericParam("T"), a_ty=I32, mappings={}
+DEBUG match_type_params: p_ty=GenericParam("T"), a_ty=I32, mappings={"T": I32}
+DEBUG instantiate_fn: name=add, type_args=[I32], mangled_name=add_i32, type_mappings_before={}
+DEBUG instantiate_fn: f_def.return_ty = GenericParam("T")
+DEBUG instantiate_fn: f_def.generic_params=["T"], mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG infer_fn: f.name=add_i32, type_mappings={"T": I32}, f.return_ty=I32
+DEBUG substitute_type: ty=I32, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=I32, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=I32, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=Function { params: [GenericParam("T"), GenericParam("T")], return_type: GenericParam("T") }, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG match_type_params: p_ty=GenericParam("T"), a_ty=F64, mappings={}
+DEBUG match_type_params: p_ty=GenericParam("T"), a_ty=F64, mappings={"T": F64}
+DEBUG instantiate_fn: name=add, type_args=[F64], mangled_name=add_f64, type_mappings_before={}
+DEBUG instantiate_fn: f_def.return_ty = GenericParam("T")
+DEBUG instantiate_fn: f_def.generic_params=["T"], mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG infer_fn: f.name=add_f64, type_mappings={"T": F64}, f.return_ty=F64
+DEBUG substitute_type: ty=F64, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=F64, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=F64, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=Function { params: [GenericParam("T"), GenericParam("T")], return_type: GenericParam("T") }, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG instantiate_fn: name=Compose_new, type_args=[I32], mangled_name=Compose_i32_new, type_mappings_before={}
+DEBUG instantiate_fn: f_def.return_ty = Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }
+DEBUG instantiate_fn: f_def.generic_params=["T"], mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[I32]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[I32]
+DEBUG instantiate_struct: name=Compose, type_args=[I32], mangled_name=Compose_i32
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG infer_fn: f.name=new, type_mappings={"T": I32}, f.return_ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[I32]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[I32]
+DEBUG: infer_expr called
+DEBUG Expr::Struct: name=Compose, fields_len=1
+DEBUG Expr::Struct field: inner
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={}, effective_mappings={"T": I32}
+DEBUG: infer_expr called
+DEBUG infer_fn: f.name=map, type_mappings={"T": I32}, f.return_ty=GenericParam("F")
+DEBUG substitute_type: ty=Pointer(Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[I32]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[I32]
+DEBUG substitute_type: ty=Function { params: [GenericParam("T")], return_type: GenericParam("F") }, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("F"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("F"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=I32, mappings={}, effective_mappings={"T": I32}
+DEBUG infer_fn: f.name=Compose_i32_new, type_mappings={"T": I32}, f.return_ty=Custom { name: "Compose_i32", generic_args: [], is_exported: false }
+DEBUG substitute_type: ty=I32, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=Custom { name: "Compose_i32", generic_args: [], is_exported: false }, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type Custom: name=Compose_i32, generic_args=[], substituted_args=[]
+DEBUG Custom type: name=Compose_i32, has_generic_params=false, substituted_args=[]
+DEBUG NOT mangling: name=Compose_i32, has_generic_params=false
+DEBUG: infer_expr called
+DEBUG Expr::Struct: name=Compose, fields_len=1
+DEBUG Expr::Struct field: inner
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={}, effective_mappings={"T": I32}
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=Function { params: [GenericParam("T")], return_type: Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false } }, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[I32]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[I32]
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=Function { params: [GenericParam("T")], return_type: Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false } }, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": I32}, effective_mappings={"T": I32}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[I32]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[I32]
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=I32, mappings={}, effective_mappings={}
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG match_type_params: p_ty=Pointer(Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }), a_ty=Custom { name: "Compose_i32", generic_args: [], is_exported: false }, mappings={}
+DEBUG match_type_params: p_ty=Function { params: [GenericParam("T")], return_type: GenericParam("F") }, a_ty=Function { params: [I32], return_type: I32 }, mappings={}
+DEBUG match_type_params: p_ty=GenericParam("T"), a_ty=I32, mappings={}
+DEBUG match_type_params: p_ty=GenericParam("F"), a_ty=I32, mappings={"T": I32}
+DEBUG instantiate_fn: name=Compose_map, type_args=[I32, I32], mangled_name=Compose_i32_map_i32, type_mappings_before={}
+DEBUG instantiate_fn: f_def.return_ty = GenericParam("F")
+DEBUG instantiate_fn: f_def.generic_params=["T", "F"], mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=Pointer(Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[I32]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[I32]
+DEBUG substitute_type: ty=Function { params: [GenericParam("T")], return_type: GenericParam("F") }, mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=GenericParam("F"), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=GenericParam("F"), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG infer_fn: f.name=Compose_i32_map_i32, type_mappings={"F": I32, "T": I32}, f.return_ty=I32
+DEBUG substitute_type: ty=Pointer(Custom { name: "Compose_i32", generic_args: [], is_exported: false }), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=Custom { name: "Compose_i32", generic_args: [], is_exported: false }, mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type Custom: name=Compose_i32, generic_args=[], substituted_args=[]
+DEBUG Custom type: name=Compose_i32, has_generic_params=false, substituted_args=[]
+DEBUG NOT mangling: name=Compose_i32, has_generic_params=false
+DEBUG substitute_type: ty=Function { params: [I32], return_type: I32 }, mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=I32, mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=I32, mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=I32, mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=I32, mappings={}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=Function { params: [Pointer(Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }), Function { params: [GenericParam("T")], return_type: GenericParam("F") }], return_type: GenericParam("F") }, mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=Pointer(Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[I32]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[I32]
+DEBUG substitute_type: ty=Function { params: [GenericParam("T")], return_type: GenericParam("F") }, mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=GenericParam("F"), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=GenericParam("F"), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG match_type_params: p_ty=Pointer(Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }), a_ty=Custom { name: "Compose_i32", generic_args: [], is_exported: false }, mappings={}
+DEBUG match_type_params: p_ty=Function { params: [GenericParam("T")], return_type: GenericParam("F") }, a_ty=Function { params: [I32], return_type: I32 }, mappings={}
+DEBUG match_type_params: p_ty=GenericParam("T"), a_ty=I32, mappings={}
+DEBUG match_type_params: p_ty=GenericParam("F"), a_ty=I32, mappings={"T": I32}
+DEBUG substitute_type: ty=Function { params: [Pointer(Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }), Function { params: [GenericParam("T")], return_type: GenericParam("F") }], return_type: GenericParam("F") }, mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=Pointer(Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[I32]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[I32]
+DEBUG substitute_type: ty=Function { params: [GenericParam("T")], return_type: GenericParam("F") }, mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=GenericParam("F"), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG substitute_type: ty=GenericParam("F"), mappings={"F": I32, "T": I32}, effective_mappings={"F": I32, "T": I32}
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG instantiate_fn: name=Compose_new, type_args=[F64], mangled_name=Compose_f64_new, type_mappings_before={}
+DEBUG instantiate_fn: f_def.return_ty = Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }
+DEBUG instantiate_fn: f_def.generic_params=["T"], mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[F64]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[F64]
+DEBUG instantiate_struct: name=Compose, type_args=[F64], mangled_name=Compose_f64
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG infer_fn: f.name=new, type_mappings={"T": F64}, f.return_ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[F64]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[F64]
+DEBUG: infer_expr called
+DEBUG Expr::Struct: name=Compose, fields_len=1
+DEBUG Expr::Struct field: inner
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={}, effective_mappings={"T": F64}
+DEBUG: infer_expr called
+DEBUG infer_fn: f.name=map, type_mappings={"T": F64}, f.return_ty=GenericParam("F")
+DEBUG substitute_type: ty=Pointer(Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[F64]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[F64]
+DEBUG substitute_type: ty=Function { params: [GenericParam("T")], return_type: GenericParam("F") }, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("F"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("F"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=F64, mappings={}, effective_mappings={"T": F64}
+DEBUG infer_fn: f.name=Compose_f64_new, type_mappings={"T": F64}, f.return_ty=Custom { name: "Compose_f64", generic_args: [], is_exported: false }
+DEBUG substitute_type: ty=F64, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=Custom { name: "Compose_f64", generic_args: [], is_exported: false }, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type Custom: name=Compose_f64, generic_args=[], substituted_args=[]
+DEBUG Custom type: name=Compose_f64, has_generic_params=false, substituted_args=[]
+DEBUG NOT mangling: name=Compose_f64, has_generic_params=false
+DEBUG: infer_expr called
+DEBUG Expr::Struct: name=Compose, fields_len=1
+DEBUG Expr::Struct field: inner
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={}, effective_mappings={"T": F64}
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=Function { params: [GenericParam("T")], return_type: Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false } }, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[F64]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[F64]
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=Function { params: [GenericParam("T")], return_type: Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false } }, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": F64}, effective_mappings={"T": F64}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[F64]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[F64]
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=F64, mappings={}, effective_mappings={}
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG Expr::Struct: name=Data, fields_len=1
+DEBUG Expr::Struct field: age
+DEBUG substitute_type: ty=I32, mappings={}, effective_mappings={}
+DEBUG: infer_expr called
+DEBUG instantiate_fn: name=Compose_new, type_args=[Custom { name: "Data", generic_args: [], is_exported: false }], mangled_name=Compose_Data_new, type_mappings_before={}
+DEBUG instantiate_fn: f_def.return_ty = Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }
+DEBUG instantiate_fn: f_def.generic_params=["T"], mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[Custom { name: "Data", generic_args: [], is_exported: false }]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[Custom { name: "Data", generic_args: [], is_exported: false }]
+DEBUG instantiate_struct: name=Compose, type_args=[Custom { name: "Data", generic_args: [], is_exported: false }], mangled_name=Compose_Data
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG infer_fn: f.name=new, type_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, f.return_ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[Custom { name: "Data", generic_args: [], is_exported: false }]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[Custom { name: "Data", generic_args: [], is_exported: false }]
+DEBUG: infer_expr called
+DEBUG Expr::Struct: name=Compose, fields_len=1
+DEBUG Expr::Struct field: inner
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG: infer_expr called
+DEBUG infer_fn: f.name=map, type_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, f.return_ty=GenericParam("F")
+DEBUG substitute_type: ty=Pointer(Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[Custom { name: "Data", generic_args: [], is_exported: false }]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[Custom { name: "Data", generic_args: [], is_exported: false }]
+DEBUG substitute_type: ty=Function { params: [GenericParam("T")], return_type: GenericParam("F") }, mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=GenericParam("F"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=GenericParam("F"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=Custom { name: "Data", generic_args: [], is_exported: false }, mappings={}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type Custom: name=Data, generic_args=[], substituted_args=[]
+DEBUG Custom type: name=Data, has_generic_params=false, substituted_args=[]
+DEBUG NOT mangling: name=Data, has_generic_params=false
+DEBUG infer_fn: f.name=Compose_Data_new, type_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, f.return_ty=Custom { name: "Compose_Data", generic_args: [], is_exported: false }
+DEBUG substitute_type: ty=Custom { name: "Data", generic_args: [], is_exported: false }, mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type Custom: name=Data, generic_args=[], substituted_args=[]
+DEBUG Custom type: name=Data, has_generic_params=false, substituted_args=[]
+DEBUG NOT mangling: name=Data, has_generic_params=false
+DEBUG substitute_type: ty=Custom { name: "Compose_Data", generic_args: [], is_exported: false }, mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type Custom: name=Compose_Data, generic_args=[], substituted_args=[]
+DEBUG Custom type: name=Compose_Data, has_generic_params=false, substituted_args=[]
+DEBUG NOT mangling: name=Compose_Data, has_generic_params=false
+DEBUG: infer_expr called
+DEBUG Expr::Struct: name=Compose, fields_len=1
+DEBUG Expr::Struct field: inner
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=Function { params: [GenericParam("T")], return_type: Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false } }, mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[Custom { name: "Data", generic_args: [], is_exported: false }]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[Custom { name: "Data", generic_args: [], is_exported: false }]
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG Expr::Struct: name=Data, fields_len=1
+DEBUG Expr::Struct field: age
+DEBUG substitute_type: ty=I32, mappings={}, effective_mappings={}
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=Function { params: [GenericParam("T")], return_type: Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false } }, mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=Custom { name: "Compose", generic_args: [GenericParam("T")], is_exported: false }, mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type: ty=GenericParam("T"), mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}, effective_mappings={"T": Custom { name: "Data", generic_args: [], is_exported: false }}
+DEBUG substitute_type Custom: name=Compose, generic_args=[GenericParam("T")], substituted_args=[Custom { name: "Data", generic_args: [], is_exported: false }]
+DEBUG Custom type: name=Compose, has_generic_params=true, substituted_args=[Custom { name: "Data", generic_args: [], is_exported: false }]
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG: infer_expr called
+DEBUG substitute_type: ty=Custom { name: "Data", generic_args: [], is_exported: false }, mappings={}, effective_mappings={}
+DEBUG substitute_type Custom: name=Data, generic_args=[], substituted_args=[]
+DEBUG Custom type: name=Data, has_generic_params=false, substituted_args=[]
+DEBUG NOT mangling: name=Data, has_generic_params=false
+DEBUG substitute_type: ty=I32, mappings={}, effective_mappings={}
+DEBUG final functions: [("transition", I32), ("main", Void), ("add_i32", I32), ("add_f64", F64), ("Compose_i32_new", Custom { name: "Compose_i32", generic_args: [], is_exported: false }), ("Compose_i32_map_i32", I32), ("Compose_f64_new", Custom { name: "Compose_f64", generic_args: [], is_exported: false }), ("Compose_Data_new", Custom { name: "Compose_Data", generic_args: [], is_exported: false })]
+DEBUG final structs: [("Data", [], 0), ("Compose_i32", [], 2), ("Compose_f64", [], 2), ("Compose_Data", [], 2)]
+DEBUG declare_function: name=transition, return_ty=i32
+DEBUG declare_function: name=main, return_ty=void
+DEBUG declare_function: name=add_i32, return_ty=i32
+DEBUG declare_function: name=add_f64, return_ty=f64
+DEBUG declare_function: name=Compose_i32_new, return_ty=Compose_i32
+DEBUG declare_function: name=Compose_i32_map_i32, return_ty=i32
+DEBUG declare_function: name=Compose_f64_new, return_ty=Compose_f64
+DEBUG declare_function: name=Compose_Data_new, return_ty=Compose_Data
+
+Generated LLVM IR:
+; ModuleID = 'lang'
+source_filename = "lang"
+target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32"
+
+%Compose_i32 = type { i32 }
+%Compose_f64 = type { double }
+%Compose_Data = type { %Data }
+%Data = type { i32 }
+
+@__lang_last_error_message = global ptr null
+@fmt = private unnamed_addr constant [17 x i8] c"int value: %lld\0A\00", align 1
+@true_str = private unnamed_addr constant [5 x i8] c"true\00", align 1
+@false_str = private unnamed_addr constant [6 x i8] c"false\00", align 1
+@fmt.4 = private unnamed_addr constant [17 x i8] c"float value: %f\0A\00", align 1
+@true_str.5 = private unnamed_addr constant [5 x i8] c"true\00", align 1
+@false_str.6 = private unnamed_addr constant [6 x i8] c"false\00", align 1
+@fmt.7 = private unnamed_addr constant [20 x i8] c"composed int: %lld\0A\00", align 1
+@true_str.8 = private unnamed_addr constant [5 x i8] c"true\00", align 1
+@false_str.9 = private unnamed_addr constant [6 x i8] c"false\00", align 1
+@fmt.10 = private unnamed_addr constant [17 x i8] c"after map: %lld\0A\00", align 1
+@true_str.11 = private unnamed_addr constant [5 x i8] c"true\00", align 1
+@false_str.12 = private unnamed_addr constant [6 x i8] c"false\00", align 1
+@fmt.13 = private unnamed_addr constant [20 x i8] c"composed float: %f\0A\00", align 1
+@true_str.14 = private unnamed_addr constant [5 x i8] c"true\00", align 1
+@false_str.15 = private unnamed_addr constant [6 x i8] c"false\00", align 1
+@fmt.16 = private unnamed_addr constant [23 x i8] c"composed struct: %lld\0A\00", align 1
+@true_str.17 = private unnamed_addr constant [5 x i8] c"true\00", align 1
+@false_str.18 = private unnamed_addr constant [6 x i8] c"false\00", align 1
+
+declare void @io_println(ptr)
+
+define %Compose_i32 @lang_Compose_i32_new(i32 %0) {
+entry:
+  %v = alloca i32, align 4
+  store i32 %0, ptr %v, align 4
+  %v1 = load i32, ptr %v, align 4
+  %Compose_i32.inner = insertvalue %Compose_i32 undef, i32 %v1, 0
+  ret %Compose_i32 %Compose_i32.inner
+}
+
+define i64 @lang_Compose_i32_map(ptr %0, ptr %1) {
+entry:
+  %self = alloca ptr, align 8
+  store ptr %0, ptr %self, align 8
+  %f = alloca ptr, align 8
+  store ptr %1, ptr %f, align 8
+  %f1 = load ptr, ptr %f, align 8
+  %deref_ptr = load ptr, ptr %self, align 8
+  %field_ptr = getelementptr inbounds nuw %Compose_i32, ptr %deref_ptr, i32 0, i32 0
+  %inner = load i32, ptr %field_ptr, align 4
+  %indirect_call = call i64 %f1(i32 %inner)
+  ret i64 %indirect_call
+}
+
+define %Compose_f64 @lang_Compose_f64_new(double %0) {
+entry:
+  %v = alloca double, align 8
+  store double %0, ptr %v, align 8
+  %v1 = load double, ptr %v, align 8
+  %Compose_f64.inner = insertvalue %Compose_f64 undef, double %v1, 0
+  ret %Compose_f64 %Compose_f64.inner
+}
+
+define i64 @lang_Compose_f64_map(ptr %0, ptr %1) {
+entry:
+  %self = alloca ptr, align 8
+  store ptr %0, ptr %self, align 8
+  %f = alloca ptr, align 8
+  store ptr %1, ptr %f, align 8
+  %f1 = load ptr, ptr %f, align 8
+  %deref_ptr = load ptr, ptr %self, align 8
+  %field_ptr = getelementptr inbounds nuw %Compose_f64, ptr %deref_ptr, i32 0, i32 0
+  %inner = load double, ptr %field_ptr, align 8
+  %indirect_call = call i64 %f1(double %inner)
+  ret i64 %indirect_call
+}
+
+define %Compose_Data @lang_Compose_Data_new(%Data %0) {
+entry:
+  %v = alloca %Data, align 8
+  store %Data %0, ptr %v, align 4
+  %v1 = load %Data, ptr %v, align 4
+  %Compose_Data.inner = insertvalue %Compose_Data undef, %Data %v1, 0
+  ret %Compose_Data %Compose_Data.inner
+}
+
+define i64 @lang_Compose_Data_map(ptr %0, ptr %1) {
+entry:
+  %self = alloca ptr, align 8
+  store ptr %0, ptr %self, align 8
+  %f = alloca ptr, align 8
+  store ptr %1, ptr %f, align 8
+  %f1 = load ptr, ptr %f, align 8
+  %deref_ptr = load ptr, ptr %self, align 8
+  %field_ptr = getelementptr inbounds nuw %Compose_Data, ptr %deref_ptr, i32 0, i32 0
+  %inner = load %Data, ptr %field_ptr, align 4
+  %indirect_call = call i64 %f1(%Data %inner)
+  ret i64 %indirect_call
+}
+
+define i32 @lang_transition(i32 %0) {
+entry:
+  %i = alloca i32, align 4
+  store i32 %0, ptr %i, align 4
+  %i1 = load i32, ptr %i, align 4
+  ret i32 %i1
+}
+
+define i64 @main() {
+entry:
+  store ptr null, ptr @__lang_last_error_message, align 8
+  %a = alloca i32, align 4
+  store i32 1, ptr %a, align 4
+  %b = alloca i32, align 4
+  store i32 2, ptr %b, align 4
+  %a1 = load i32, ptr %a, align 4
+  %b2 = load i32, ptr %b, align 4
+  %call = call i32 @lang_add_i32(i32 %a1, i32 %b2)
+  %printf_int = sext i32 %call to i64
+  %0 = call i64 (ptr, ...) @printf(ptr @fmt, i64 %printf_int)
+  %c = alloca double, align 8
+  store double 2.211000e+01, ptr %c, align 8
+  %d = alloca double, align 8
+  store double 4.477000e+01, ptr %d, align 8
+  %c3 = load double, ptr %c, align 8
+  %d4 = load double, ptr %d, align 8
+  %call5 = call double @lang_add_f64(double %c3, double %d4)
+  %1 = call i64 (ptr, ...) @printf(ptr @fmt.4, double %call5)
+  %comp = alloca %Compose_i32, align 8
+  %call6 = call %Compose_i32 @lang_Compose_i32_new(i32 100)
+  store %Compose_i32 %call6, ptr %comp, align 4
+  %field_ptr = getelementptr inbounds nuw %Compose_i32, ptr %comp, i32 0, i32 0
+  %inner = load i32, ptr %field_ptr, align 4
+  %printf_int7 = sext i32 %inner to i64
+  %2 = call i64 (ptr, ...) @printf(ptr @fmt.7, i64 %printf_int7)
+  %t = alloca i32, align 4
+  %call8 = call i32 @lang_Compose_i32_map_i32(ptr @lang_transition)
+  store i32 %call8, ptr %t, align 4
+  %t9 = load i32, ptr %t, align 4
+  %printf_int10 = sext i32 %t9 to i64
+  %3 = call i64 (ptr, ...) @printf(ptr @fmt.10, i64 %printf_int10)
+  %comp_f = alloca %Compose_f64, align 8
+  %call11 = call %Compose_f64 @lang_Compose_f64_new(double 3.140000e+00)
+  store %Compose_f64 %call11, ptr %comp_f, align 8
+  %field_ptr12 = getelementptr inbounds nuw %Compose_f64, ptr %comp_f, i32 0, i32 0
+  %inner13 = load double, ptr %field_ptr12, align 8
+  %4 = call i64 (ptr, ...) @printf(ptr @fmt.13, double %inner13)
+  %vv = alloca %Compose_Data, align 8
+  %call14 = call %Compose_Data @lang_Compose_Data_new(%Data { i32 100 })
+  store %Compose_Data %call14, ptr %vv, align 4
+  %field_ptr15 = getelementptr inbounds nuw %Compose_Data, ptr %vv, i32 0, i32 0
+  %inner16 = load %Data, ptr %field_ptr15, align 4
+  %age = extractvalue %Data %inner16, 0
+  %printf_int17 = sext i32 %age to i64
+  %5 = call i64 (ptr, ...) @printf(ptr @fmt.16, i64 %printf_int17)
+  ret i64 0
+}
+
+define i32 @lang_add_i32(i32 %0, i32 %1) {
+entry:
+  %a = alloca i32, align 4
+  store i32 %0, ptr %a, align 4
+  %b = alloca i32, align 4
+  store i32 %1, ptr %b, align 4
+  %a1 = load i32, ptr %a, align 4
+  %b2 = load i32, ptr %b, align 4
+  %add = add i32 %a1, %b2
+  ret i32 %add
+}
+
+define double @lang_add_f64(double %0, double %1) {
+entry:
+  %a = alloca double, align 8
+  store double %0, ptr %a, align 8
+  %b = alloca double, align 8
+  store double %1, ptr %b, align 8
+  %a1 = load double, ptr %a, align 8
+  %b2 = load double, ptr %b, align 8
+  %fadd = fadd double %a1, %b2
+  ret double %fadd
+}
+
+declare %Compose_i32 @lang_Compose_i32_new.1(i32)
+
+define i32 @lang_Compose_i32_map_i32(ptr %0, ptr %1) {
+entry:
+  %self = alloca ptr, align 8
+  store ptr %0, ptr %self, align 8
+  %f = alloca ptr, align 8
+  store ptr %1, ptr %f, align 8
+  %f1 = load ptr, ptr %f, align 8
+  %deref_ptr = load ptr, ptr %self, align 8
+  %field_ptr = getelementptr inbounds nuw %Compose_i32, ptr %deref_ptr, i32 0, i32 0
+  %inner = load i32, ptr %field_ptr, align 4
+  %indirect_call = call i32 %f1(i32 %inner)
+  ret i32 %indirect_call
+}
+
+declare %Compose_f64 @lang_Compose_f64_new.2(double)
+
+declare %Compose_Data @lang_Compose_Data_new.3(%Data)
+
+declare i64 @printf(ptr, ...)
+
+
+Executing main function via JIT...

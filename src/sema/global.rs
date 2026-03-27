@@ -132,6 +132,8 @@ impl GlobalDefinitionsAnalyzer {
                     )
                     .with_module("global"));
                 }
+                let mut all_params = s.generic_params.clone();
+                all_params.extend(method.generic_params.clone());
                 self.symbol_table.define_with_generics(
                     method_name,
                     Type::Function {
@@ -140,7 +142,7 @@ impl GlobalDefinitionsAnalyzer {
                     },
                     method.visibility,
                     true,
-                    s.generic_params.clone(), // Inherit generic parameters from struct
+                    all_params,
                     None,
                 );
             }
@@ -196,11 +198,18 @@ impl GlobalDefinitionsAnalyzer {
                     )
                     .with_module("global"));
                 }
-                self.symbol_table.define(
+                let mut all_params = e.generic_params.clone();
+                all_params.extend(method.generic_params.clone());
+                self.symbol_table.define_with_generics(
                     method_name,
-                    method.return_ty.clone(),
+                    Type::Function {
+                        params: method.params.iter().map(|p| p.ty.clone()).collect(),
+                        return_type: Box::new(method.return_ty.clone()),
+                    },
                     method.visibility,
                     true,
+                    all_params,
+                    None,
                 );
             }
         }

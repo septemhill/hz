@@ -3278,11 +3278,17 @@ impl Parser {
 
         self.match_token(Token::Semicolon);
 
-        // Replace SelfType and Custom("Self") in method signatures with the struct name
+        // Replace SelfType and Custom("Self") in method signatures with the struct name & generic args
+        let self_generic_args: Vec<Type> = generic_params
+            .iter()
+            .map(|p| Type::GenericParam(p.clone()))
+            .collect();
         for method in &mut methods {
-            method.return_ty.replace_self(&name);
+            method
+                .return_ty
+                .replace_self_with_args(&name, &self_generic_args);
             for param in &mut method.params {
-                param.ty.replace_self(&name);
+                param.ty.replace_self_with_args(&name, &self_generic_args);
             }
         }
 

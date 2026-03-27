@@ -148,6 +148,38 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    /// Get the monomorphized struct name from a generic struct type.
+    /// This looks up the struct in self.structs to find the actual instantiated type name.
+    pub(super) fn get_monomorphized_struct_name(&self, type_name: &str) -> String {
+        eprintln!(
+            "DEBUG get_monomorphized_struct_name: type_name={}",
+            type_name
+        );
+        // Check if the struct exists in our structs map with exact name
+        if let Some(struct_def) = self.structs.get(type_name) {
+            // If the struct has no generic params, it's already monomorphized
+            if struct_def.generic_params.is_empty() {
+                return type_name.to_string();
+            }
+        }
+
+        // If not found exactly or has generic params, try to find a matching monomorphized struct
+        // The struct name might be like "Compose_i32" which is already mangled
+        // We look for structs that have the original type name as a suffix after _
+        for (struct_key, struct_def) in &self.structs {
+            // Check if this is a monomorphized version (has no generic params but name matches pattern)
+            if struct_def.generic_params.is_empty() && struct_key != type_name {
+                // Check if struct_key ends with _type_name
+                if struct_key.ends_with(&format!("_{}", type_name)) {
+                    return struct_key.clone();
+                }
+            }
+        }
+
+        // Return original name if no match found
+        type_name.to_string()
+    }
+
     pub(super) fn llvm_function_return_type(
         &self,
         return_ty: &Type,

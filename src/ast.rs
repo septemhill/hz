@@ -135,43 +135,58 @@ impl Type {
         }
     }
 
-    /// Recursively replace `SelfType` and `Custom("Self")` with the given struct name
+    /// Recursively replace `SelfType` and `Custom("Self")` with the given struct name and optional generic arguments
     pub fn replace_self(&mut self, struct_name: &str) {
+        self.replace_self_with_args(struct_name, &[]);
+    }
+
+    pub fn replace_self_with_args(&mut self, struct_name: &str, generic_args: &[Type]) {
         match self {
             Type::RawPtr => {}
             Type::SelfType => {
                 *self = Type::Custom {
                     name: struct_name.to_string(),
-                    generic_args: Vec::new(),
+                    generic_args: generic_args.to_vec(),
                     is_exported: false,
                 };
             }
-            Type::Custom { name, .. } if name == "Self" => {
+            Type::Custom {
+                name,
+                generic_args: args,
+                ..
+            } if name == "Self" => {
+                eprintln!(
+                    "DEBUG replace_self_with_args Custom(Self): struct_name={}, generic_args={:?}",
+                    struct_name, generic_args
+                );
                 *name = struct_name.to_string();
+                *args = generic_args.to_vec();
             }
             Type::Pointer(inner) | Type::Option(inner) | Type::Result(inner) => {
-                inner.replace_self(struct_name);
+                inner.replace_self_with_args(struct_name, generic_args);
             }
             Type::Tuple(types) => {
                 for t in types {
-                    t.replace_self(struct_name);
+                    t.replace_self_with_args(struct_name, generic_args);
                 }
             }
             Type::Array { element_type, .. } => {
-                element_type.replace_self(struct_name);
+                element_type.replace_self_with_args(struct_name, generic_args);
             }
             Type::Function {
                 params,
                 return_type,
             } => {
                 for param in params {
-                    param.replace_self(struct_name);
+                    param.replace_self_with_args(struct_name, generic_args);
                 }
-                return_type.replace_self(struct_name);
+                return_type.replace_self_with_args(struct_name, generic_args);
             }
-            Type::Custom { generic_args, .. } => {
-                for arg in generic_args {
-                    arg.replace_self(struct_name);
+            Type::Custom {
+                generic_args: args, ..
+            } => {
+                for arg in args {
+                    arg.replace_self_with_args(struct_name, generic_args);
                 }
             }
             _ => {}

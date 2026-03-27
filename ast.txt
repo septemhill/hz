@@ -1,0 +1,171 @@
+    Loaded 'builtin' package successfully
+TypedProgram
+  Imports:
+    "io"
+  StructDef: Data
+    Field: age: i32
+  StructDef: Compose_i32
+    Field: inner: i32
+    FnDef: new -> Compose_i32
+      Params:
+        v: i32
+      Body:
+        Stmt::Return
+          Value (ty: Compose_i32):
+            Expr::Struct: Compose_i32 (ty: Compose_i32)
+              Field: inner:
+                Expr::Ident(v) (ty: i32)
+    FnDef: map -> F
+      Params:
+        self: *Compose
+        f: fn(i32) F
+      Body:
+        Stmt::Return
+          Value (ty: F):
+            Expr::Call: f (ty: F)
+              Expr::MemberAccess: .inner (field) (ty: i32)
+                Expr::Ident(self) (ty: *Compose)
+  StructDef: Compose_f64
+    Field: inner: f64
+    FnDef: new -> Compose_f64
+      Params:
+        v: f64
+      Body:
+        Stmt::Return
+          Value (ty: Compose_f64):
+            Expr::Struct: Compose_f64 (ty: Compose_f64)
+              Field: inner:
+                Expr::Ident(v) (ty: f64)
+    FnDef: map -> F
+      Params:
+        self: *Compose
+        f: fn(f64) F
+      Body:
+        Stmt::Return
+          Value (ty: F):
+            Expr::Call: f (ty: F)
+              Expr::MemberAccess: .inner (field) (ty: f64)
+                Expr::Ident(self) (ty: *Compose)
+  StructDef: Compose_Data
+    Field: inner: Data
+    FnDef: new -> Compose_Data
+      Params:
+        v: Data
+      Body:
+        Stmt::Return
+          Value (ty: Compose_Data):
+            Expr::Struct: Compose_Data (ty: Compose_Data)
+              Field: inner:
+                Expr::Ident(v) (ty: Data)
+    FnDef: map -> F
+      Params:
+        self: *Compose
+        f: fn(Data) F
+      Body:
+        Stmt::Return
+          Value (ty: F):
+            Expr::Call: f (ty: F)
+              Expr::MemberAccess: .inner (field) (ty: Data)
+                Expr::Ident(self) (ty: *Compose)
+  FnDef: transition -> i32
+    Params:
+      i: i32
+    Body:
+      Stmt::Return
+        Value (ty: i32):
+          Expr::Ident(i) (ty: i32)
+  FnDef: main -> void
+    Body:
+      Stmt::Let: const a (ty: i32)
+        Value:
+          Expr::Int(1) (ty: i32)
+      Stmt::Let: const b (ty: i32)
+        Value:
+          Expr::Int(2) (ty: i32)
+      Stmt::Expr (ty: void)
+        Expr::Call: io::println (ty: void)
+          Expr::String("int value: {d}") (ty: []u8)
+          Expr::Call: add_i32 (ty: i32)
+            Expr::Ident(a) (ty: i32)
+            Expr::Ident(b) (ty: i32)
+      Stmt::Let: const c (ty: f64)
+        Value:
+          Expr::Float(22.11) (ty: f64)
+      Stmt::Let: const d (ty: f64)
+        Value:
+          Expr::Float(44.77) (ty: f64)
+      Stmt::Expr (ty: void)
+        Expr::Call: io::println (ty: void)
+          Expr::String("float value: {f}") (ty: []u8)
+          Expr::Call: add_f64 (ty: f64)
+            Expr::Ident(c) (ty: f64)
+            Expr::Ident(d) (ty: f64)
+      Stmt::Let: const comp (ty: Compose_i32)
+        Value:
+          Expr::Call: Compose_i32_new (ty: Compose_i32)
+            Expr::Int(100) (ty: i32)
+      Stmt::Expr (ty: void)
+        Expr::Call: io::println (ty: void)
+          Expr::String("composed int: {d}") (ty: []u8)
+          Expr::MemberAccess: .inner (field) (ty: i32)
+            Expr::Ident(comp) (ty: Compose_i32)
+      Stmt::Let: const t (ty: i32)
+        Value:
+          Expr::Call: Compose_i32_map_i32 (ty: i32)
+            Expr::Ident(transition) (ty: fn(i32) i32)
+      Stmt::Expr (ty: void)
+        Expr::Call: io::println (ty: void)
+          Expr::String("after map: {d}") (ty: []u8)
+          Expr::Ident(t) (ty: i32)
+      Stmt::Let: const comp_f (ty: Compose_f64)
+        Value:
+          Expr::Call: Compose_f64_new (ty: Compose_f64)
+            Expr::Float(3.14) (ty: f64)
+      Stmt::Expr (ty: void)
+        Expr::Call: io::println (ty: void)
+          Expr::String("composed float: {f}") (ty: []u8)
+          Expr::MemberAccess: .inner (field) (ty: f64)
+            Expr::Ident(comp_f) (ty: Compose_f64)
+      Stmt::Let: const vv (ty: Compose_Data)
+        Value:
+          Expr::Call: Compose_Data_new (ty: Compose_Data)
+            Expr::Struct: Data (ty: Data)
+              Field: age:
+                Expr::Int(100) (ty: i32)
+      Stmt::Expr (ty: void)
+        Expr::Call: io::println (ty: void)
+          Expr::String("composed struct: {d}") (ty: []u8)
+          Expr::MemberAccess: .age (field) (ty: i32)
+            Expr::MemberAccess: .inner (field) (ty: Data)
+              Expr::Ident(vv) (ty: Compose_Data)
+      Stmt::Return
+  FnDef: add_i32 -> i32
+    Params:
+      a: i32
+      b: i32
+    Body:
+      Stmt::Return
+        Value (ty: i32):
+          Expr::Binary: Add (ty: i32)
+            Expr::Ident(a) (ty: i32)
+            Expr::Ident(b) (ty: i32)
+  FnDef: add_f64 -> f64
+    Params:
+      a: f64
+      b: f64
+    Body:
+      Stmt::Return
+        Value (ty: f64):
+          Expr::Binary: Add (ty: f64)
+            Expr::Ident(a) (ty: f64)
+            Expr::Ident(b) (ty: f64)
+  FnDef: Compose_i32_map_i32 -> i32
+    Params:
+      self: *Compose
+      f: fn(i32) i32
+    Body:
+      Stmt::Return
+        Value (ty: i32):
+          Expr::Call: f (ty: i32)
+            Expr::MemberAccess: .inner (field) (ty: i32)
+              Expr::Ident(self) (ty: *Compose)

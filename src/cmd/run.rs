@@ -10,7 +10,10 @@ use crate::sema;
 use crate::stdlib;
 
 /// Run the compiled program (JIT)
-pub fn run_jit(source: &str, cli_std_path: Option<std::path::PathBuf>) -> Result<(), Box<dyn Error>> {
+pub fn run_jit(
+    source: &str,
+    cli_std_path: Option<std::path::PathBuf>,
+) -> Result<(), Box<dyn Error>> {
     // Initialize std library
     println!("Loading std library...");
     let mut stdlib = stdlib::StdLib::new();
@@ -46,7 +49,9 @@ pub fn run_jit(source: &str, cli_std_path: Option<std::path::PathBuf>) -> Result
 
     // Generate LLVM IR
     let context = inkwell::context::Context::create();
-    let typed_program = analyzer.get_typed_program().ok_or("No typed program found")?;
+    let typed_program = analyzer
+        .get_typed_program()
+        .ok_or("No typed program found")?;
     let mut monomorphized_structs = HashMap::new();
     for s in &typed_program.structs {
         monomorphized_structs.insert(s.name.clone(), s.clone());
@@ -66,7 +71,9 @@ pub fn run_jit(source: &str, cli_std_path: Option<std::path::PathBuf>) -> Result
 
     let mut lowering_ctx = lower::LoweringContext::new();
     lowering_ctx.set_symbol_table(analyzer.get_symbol_table().clone());
-    let typed_program = analyzer.get_typed_program().ok_or("No typed program found")?;
+    let typed_program = analyzer
+        .get_typed_program()
+        .ok_or("No typed program found")?;
 
     // Declare structs and enums first (needed for function return types)
     for s in &typed_program.structs {

@@ -15,7 +15,6 @@ use crate::parser;
 use crate::sema;
 use crate::stdlib;
 
-
 /// Represents a single compilation unit (a .lang file)
 pub struct CompilationUnit {
     pub path: PathBuf,
@@ -194,16 +193,19 @@ impl BuildSystem {
         // 3. Lower
         let mut lowering_ctx = lower::LoweringContext::new();
         lowering_ctx.set_symbol_table(analyzer.get_symbol_table().clone());
-        let typed_program = analyzer.get_typed_program().ok_or("No typed program found")?;
+        let typed_program = analyzer
+            .get_typed_program()
+            .ok_or("No typed program found")?;
         let mut hir_program = lowering_ctx.lower_program(&program, typed_program);
 
         // 4. Opt
         opt::optimize(&mut hir_program);
 
-
         // 5. Codegen
         let context = inkwell::context::Context::create();
-        let typed_program = analyzer.get_typed_program().ok_or("No typed program found")?;
+        let typed_program = analyzer
+            .get_typed_program()
+            .ok_or("No typed program found")?;
         let mut monomorphized_structs = std::collections::HashMap::new();
         for s in &typed_program.structs {
             monomorphized_structs.insert(s.name.clone(), s.clone());

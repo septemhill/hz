@@ -5,6 +5,7 @@
 pub mod ast;
 pub mod build;
 pub mod hir;
+pub mod init;
 pub mod ir;
 pub mod jit;
 pub mod lsp;
@@ -14,6 +15,7 @@ pub mod typelist;
 pub use ast::dump_ast;
 pub use build::build;
 pub use hir::dump_hir;
+pub use init::init_project;
 pub use ir::generate_ir;
 #[allow(unused_imports)]
 pub use jit::run_jit_command;

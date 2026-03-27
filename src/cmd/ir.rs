@@ -9,7 +9,11 @@ use crate::parser;
 use crate::stdlib;
 
 /// Generate LLVM IR only
-pub fn generate_ir(source: &str, output_path: Option<String>, cli_std_path: Option<std::path::PathBuf>) -> Result<(), Box<dyn Error>> {
+pub fn generate_ir(
+    source: &str,
+    output_path: Option<String>,
+    cli_std_path: Option<std::path::PathBuf>,
+) -> Result<(), Box<dyn Error>> {
     // Initialize std library
     println!("Loading std library...");
     let mut stdlib = stdlib::StdLib::new();
@@ -36,7 +40,9 @@ pub fn generate_ir(source: &str, output_path: Option<String>, cli_std_path: Opti
 
     // Generate LLVM IR
     let context = inkwell::context::Context::create();
-    let typed_program = analyzer.get_typed_program().ok_or("No typed program found")?;
+    let typed_program = analyzer
+        .get_typed_program()
+        .ok_or("No typed program found")?;
     let mut monomorphized_structs = HashMap::new();
     for s in &typed_program.structs {
         monomorphized_structs.insert(s.name.clone(), s.clone());
@@ -56,7 +62,9 @@ pub fn generate_ir(source: &str, output_path: Option<String>, cli_std_path: Opti
 
     let mut lowering_ctx = lower::LoweringContext::new();
     lowering_ctx.set_symbol_table(analyzer.get_symbol_table().clone());
-    let typed_program = analyzer.get_typed_program().ok_or("No typed program found")?;
+    let typed_program = analyzer
+        .get_typed_program()
+        .ok_or("No typed program found")?;
 
     // Declare functions
     for f in &typed_program.functions {

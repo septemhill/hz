@@ -59,13 +59,7 @@ impl SymbolTable {
         }
     }
 
-    pub fn define(
-        &mut self,
-        name: String,
-        ty: Type,
-        visibility: Visibility,
-        is_const: bool,
-    ) {
+    pub fn define(&mut self, name: String, ty: Type, visibility: Visibility, is_const: bool) {
         self.define_with_generics(name, ty, visibility, is_const, Vec::new(), None);
     }
 

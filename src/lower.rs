@@ -1,9 +1,7 @@
 use crate::ast;
 use crate::hir;
 use crate::sema::SymbolTable;
-use crate::sema::infer::{
-    TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind,
-};
+use crate::sema::infer::{TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind};
 
 #[cfg(test)]
 mod tests {
@@ -248,6 +246,7 @@ mod tests {
                 namespace,
                 args,
                 return_ty,
+                target_ty: _,
                 ..
             } => {
                 assert_eq!(name, "println");
@@ -521,6 +520,7 @@ mod tests {
 
         let main_fn = crate::sema::infer::TypedFnDef {
             name: "main".to_string(),
+            original_name: None,
             visibility: Visibility::Public,
             params: vec![],
             return_ty: Type::I64,
@@ -652,8 +652,13 @@ impl LoweringContext {
         // Use typed_program structs
         for s in &typed_program.structs {
             for m in &s.methods {
+                let lowered_name = if m.name.starts_with(&format!("{}_", s.name)) {
+                    m.name.clone()
+                } else {
+                    format!("{}_{}", s.name, m.name)
+                };
                 self.function_returns
-                    .insert(format!("{}_{}", s.name, m.name), m.return_ty.clone());
+                    .insert(lowered_name, m.return_ty.clone());
             }
         }
 
@@ -677,10 +682,14 @@ impl LoweringContext {
         // Lower struct methods and add them to the global function list
         for s in &typed_program.structs {
             for m in &s.methods {
-                let name = format!("{}_{}", s.name, m.name);
+                let name = if m.name.starts_with(&format!("{}_", s.name)) {
+                    m.name.clone()
+                } else {
+                    format!("{}_{}", s.name, m.name)
+                };
                 if seen_names.insert(name.clone()) {
                     let mut hir_fn = self.lower_typed_fn(m);
-                    // Prefix method name with struct name to match codegen expectations
+                    // Prefix method name only when the typed method still uses the short form.
                     hir_fn.name = name;
                     functions.push(hir_fn);
                 }
@@ -1021,11 +1030,13 @@ impl LoweringContext {
                 name,
                 namespace,
                 args,
+                target_ty,
             } => hir::HirExpr::Call {
                 name: name.clone(),
                 namespace: namespace.clone(),
                 args: args.iter().map(|a| self.lower_typed_expr(a)).collect(),
                 return_ty: e.ty.clone(),
+                target_ty: target_ty.clone(),
                 span: e.span,
             },
             TypedExprKind::If {
@@ -1755,6 +1766,7 @@ impl LoweringContext {
                 namespace: namespace.clone(),
                 args: args.iter().map(|a| self.lower_expr(a)).collect(),
                 return_ty: self.infer_type(e).unwrap_or(ast::Type::Void),
+                target_ty: None,
                 span: *span,
             },
             ast::Expr::If {

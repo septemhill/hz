@@ -1,5 +1,7 @@
 use super::*;
 
+use std::collections::hash_map::Entry;
+
 #[allow(unused)]
 impl<'ctx> CodeGenerator<'ctx> {
     pub(crate) fn generate_hir_expr(
@@ -480,6 +482,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 args,
                 ..
             } => {
+                eprintln!("DEBUG: hir_call - name={}, namespace={:?}", name, namespace);
                 // First, check if the callee is a variable that holds a function pointer
                 if namespace.is_none() {
                     if let Some(var_alloca) = self.variables.get(name) {
@@ -534,73 +537,81 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                 }
 
-                let (mangled_name, _is_std, needs_self, is_fn_ptr_field) =
-                    if let Some(ns) = namespace.as_deref() {
-                        // First, check if the namespace is a variable with a struct type
-                        // This handles method calls like "f.next()" where f is a struct instance
-                        // But also handles field access like "c.add" where c is a struct with a function field
-                        if let Some(var_type) = self.variable_types.get(ns) {
-                            if let Type::Custom {
-                                name: type_name, ..
-                            } = var_type
-                            {
-                                // Check if this is a known method - try to find it
-                                let method_name = format!("{}_{}", type_name, name);
-                                let mangled = self.mangle_name(&method_name, false);
+                let (mangled_name, _is_std, needs_self, is_fn_ptr_field) = if let Some(ns) =
+                    namespace.as_deref()
+                {
+                    // First, check if the namespace is a variable with a struct type
+                    // This handles method calls like "f.next()" where f is a struct instance
+                    // But also handles field access like "c.add" where c is a struct with a function field
+                    if let Some(var_type) = self.variable_types.get(ns) {
+                        if let Type::Custom {
+                            name: type_name, ..
+                        } = var_type
+                        {
+                            // Get the monomorphized struct name for method lookup
+                            let mono_type_name = self.get_monomorphized_struct_name(type_name);
+                            eprintln!(
+                                "DEBUG: method lookup - ns={}, type_name={}, mono_type_name={}, method={}",
+                                ns, type_name, mono_type_name, name
+                            );
 
-                                // Check if the method actually exists in the module
-                                let method_exists = self.module.get_function(&mangled).is_some();
+                            // Check if this is a known method - try to find it
+                            let method_name = format!("{}_{}", mono_type_name, name);
+                            let mangled = self.mangle_name(&method_name, false);
 
-                                if method_exists {
-                                    (mangled, false, true, false)
-                                } else {
-                                    // Method doesn't exist - this is likely a function pointer field
-                                    // Return a marker to handle it as field access
-                                    (format!("{}__fn_ptr_field", name), false, false, true)
-                                }
+                            // Check if the method actually exists in the module
+                            let method_exists = self.module.get_function(&mangled).is_some();
+
+                            if method_exists {
+                                (mangled, false, true, false)
                             } else {
-                                // Not a custom type, use the namespace as-is
-                                let actual_package = self
-                                    .imported_packages
-                                    .get(ns)
-                                    .map(|s| s.as_str())
-                                    .unwrap_or(ns);
-
-                                if actual_package == "io" && name == "println" {
-                                    return self.generate_hir_io_println(args);
-                                }
-
-                                (format!("{}_{}", actual_package, name), true, false, false)
+                                // Method doesn't exist - this is likely a function pointer field
+                                // Return a marker to handle it as field access
+                                (format!("{}__fn_ptr_field", name), false, false, true)
                             }
-                        } else if let Some(actual_package) = self.imported_packages.get(ns) {
-                            // Namespace is an imported package
+                        } else {
+                            // Not a custom type, use the namespace as-is
+                            let actual_package = self
+                                .imported_packages
+                                .get(ns)
+                                .map(|s| s.as_str())
+                                .unwrap_or(ns);
+
                             if actual_package == "io" && name == "println" {
                                 return self.generate_hir_io_println(args);
                             }
+
                             (format!("{}_{}", actual_package, name), true, false, false)
-                        } else {
-                            // Namespace is not a known variable or package - likely a local struct/enum or implicit built-in
-                            if ns == "io" && name == "println" {
-                                return self.generate_hir_io_println(args);
-                            }
-                            let combined_name = format!("{}_{}", ns, name);
-                            (self.mangle_name(&combined_name, false), false, false, false)
                         }
+                    } else if let Some(actual_package) = self.imported_packages.get(ns) {
+                        // Namespace is an imported package
+                        if actual_package == "io" && name == "println" {
+                            return self.generate_hir_io_println(args);
+                        }
+                        (format!("{}_{}", actual_package, name), true, false, false)
                     } else {
-                        if name == "main" {
-                            ("main".to_string(), false, false, false)
-                        } else if name == "is_null" || name == "is_not_null" {
-                            // Built-in null checking functions - handled inline
-                            return self.generate_null_check_builtin(name, args);
-                        } else {
-                            (
-                                format!("{}_{}", self.module_name, name),
-                                false,
-                                false,
-                                false,
-                            )
+                        // Namespace is not a known variable or package - likely a local struct/enum or implicit built-in
+                        if ns == "io" && name == "println" {
+                            return self.generate_hir_io_println(args);
                         }
-                    };
+                        let combined_name = format!("{}_{}", ns, name);
+                        (self.mangle_name(&combined_name, false), false, false, false)
+                    }
+                } else {
+                    if name == "main" {
+                        ("main".to_string(), false, false, false)
+                    } else if name == "is_null" || name == "is_not_null" {
+                        // Built-in null checking functions - handled inline
+                        return self.generate_null_check_builtin(name, args);
+                    } else {
+                        (
+                            format!("{}_{}", self.module_name, name),
+                            false,
+                            false,
+                            false,
+                        )
+                    }
+                };
 
                 // Handle function pointer field access
                 if is_fn_ptr_field {
@@ -789,6 +800,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .and_then(|fields| fields.get(member))
                         .copied()
                         .ok_or_else(|| {
+                            eprintln!(
+                                "DEBUG MemberAccess error: field {} not found in struct {}",
+                                member, struct_name
+                            );
                             format!("Field '{}' not found in struct '{}'", member, struct_name)
                         })?;
 
@@ -945,6 +960,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                             })
                         })
                         .ok_or_else(|| {
+                            eprintln!(
+                                "DEBUG Struct instantiation error: field {} not found in struct {}",
+                                field_name, struct_name
+                            );
                             format!(
                                 "Field '{}' not found in struct '{}'",
                                 field_name, struct_name

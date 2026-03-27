@@ -247,9 +247,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 body,
                 span: _,
             } => self.generate_hir_for_stmt(label, var_name, index_var, iterable, body),
-            hir::HirStmt::Switch { condition, cases, .. } => {
-                self.generate_hir_switch_stmt(condition, cases)
-            }
+            hir::HirStmt::Switch {
+                condition, cases, ..
+            } => self.generate_hir_switch_stmt(condition, cases),
             hir::HirStmt::Defer { stmt, .. } => {
                 // Add the deferred statement to the current scope's defer list
                 // It will be executed in LIFO order when the scope exits
