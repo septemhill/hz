@@ -26,11 +26,68 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let mut llvm_args: Vec<BasicMetadataValueEnum<'_>> =
                     vec![fmt_str.as_basic_value_enum().into()];
 
+                // Get string constants for boolean output
+                let true_str = unsafe { self.builder.build_global_string("true", "true_str")? };
+                let false_str = unsafe { self.builder.build_global_string("false", "false_str")? };
+
                 for &(idx, kind) in &arg_specs {
                     if idx + 1 < args.len() {
                         let raw_val = self.generate_hir_expr(&args[idx + 1])?;
-                        let val = self.promote_printf_arg(raw_val, kind)?;
-                        llvm_args.push(val.into());
+
+                        // Special handling for Boolean - convert to string pointer
+                        if matches!(kind, PrintfArgKind::Boolean) {
+                            // Convert to i1 first
+                            let bool_val = if raw_val.is_int_value() {
+                                let int_val = raw_val.into_int_value();
+                                if int_val.get_type().get_bit_width() == 1 {
+                                    int_val
+                                } else {
+                                    self.builder.build_int_cast(
+                                        int_val,
+                                        self.context.bool_type(),
+                                        "to_bool",
+                                    )?
+                                }
+                            } else if raw_val.is_float_value() {
+                                // For floats, compare not equal to 0.0
+                                let float_val = raw_val.into_float_value();
+                                let zero = self.context.f64_type().const_float(0.0);
+                                let cmp = self.builder.build_float_compare(
+                                    inkwell::FloatPredicate::ONE,
+                                    float_val,
+                                    zero,
+                                    "float_to_bool",
+                                )?;
+                                // Convert i1 to i64
+                                self.builder.build_int_z_extend(
+                                    cmp,
+                                    self.context.i64_type(),
+                                    "bool_ext",
+                                )?
+                            } else {
+                                // For pointers, compare with null
+                                let ptr = raw_val.into_pointer_value();
+                                let null_ptr = self
+                                    .context
+                                    .ptr_type(inkwell::AddressSpace::default())
+                                    .const_null();
+                                self.builder.build_int_compare(
+                                    inkwell::IntPredicate::NE,
+                                    ptr,
+                                    null_ptr,
+                                    "ptr_to_bool",
+                                )?
+                            };
+
+                            // Select between true_str and false_str
+                            let selected_str = self
+                                .builder
+                                .build_select(bool_val, true_str, false_str, "bool_str")?;
+                            llvm_args.push(selected_str.into());
+                        } else {
+                            let val = self.promote_printf_arg(raw_val, kind)?;
+                            llvm_args.push(val.into());
+                        }
                     }
                 }
 
@@ -123,6 +180,22 @@ impl<'ctx> CodeGenerator<'ctx> {
                         result.push_str("%llx");
                         if arg_index < num_args {
                             arg_specs.push((arg_index, PrintfArgKind::Integer));
+                            arg_index += 1;
+                        }
+                    }
+                    "X" => {
+                        // Uppercase Hex
+                        result.push_str("%llX");
+                        if arg_index < num_args {
+                            arg_specs.push((arg_index, PrintfArgKind::Integer));
+                            arg_index += 1;
+                        }
+                    }
+                    "b" => {
+                        // Boolean
+                        result.push_str("%s");
+                        if arg_index < num_args {
+                            arg_specs.push((arg_index, PrintfArgKind::Boolean));
                             arg_index += 1;
                         }
                     }
@@ -229,5 +302,4 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         Ok(result.into())
     }
-
 }

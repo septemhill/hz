@@ -59,6 +59,7 @@ EXPECTED_TO_COMPILE: list[str] = [
     "examples/test_generic.lang",
     "examples/test_struct.lang",
     "examples/test_casting.lang",
+    "examples/test_format_specifiers.lang",
 ]
 
 # Examples that are intentionally designed to fail compilation (error test cases)

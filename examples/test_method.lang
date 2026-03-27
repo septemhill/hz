@@ -2,7 +2,7 @@ pub struct Simple {
     name: String,
     age: i32,
 
-    pub fn new() {
+    pub fn new() void {
         return;
     }
 
@@ -17,7 +17,7 @@ pub enum Status {
     WIP,
     Delay,
 
-    pub fn new() {
+    pub fn new() void {
         return;
     }
 };

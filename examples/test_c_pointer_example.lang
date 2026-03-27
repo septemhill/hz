@@ -4,7 +4,6 @@
 // for safe memory management with C functions.
 
 import "io"
-import "c_pointer"
 
 fn main() i32 {
     io.println("=== CPointer Test Suite ===");

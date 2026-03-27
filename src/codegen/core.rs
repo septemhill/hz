@@ -375,6 +375,24 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Ok(value)
                 }
             }
+            PrintfArgKind::Boolean => {
+                // For boolean, we need to convert to string "true"/"false"
+                // This is handled specially in io.rs code generation
+                // Here we just ensure it's properly extended to i64 for the conditional
+                if value.is_int_value() {
+                    let int_val = value.into_int_value();
+                    if int_val.get_type().get_bit_width() == 1 {
+                        Ok(self
+                            .builder
+                            .build_int_z_extend(int_val, self.context.i64_type(), "printf_bool")?
+                            .into())
+                    } else {
+                        Ok(value)
+                    }
+                } else {
+                    Ok(value)
+                }
+            }
         }
     }
 

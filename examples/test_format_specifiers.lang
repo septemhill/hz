@@ -1,0 +1,25 @@
+// Test file for println format specifiers
+import "io";
+
+fn main() void {
+    // Test {X} - uppercase hex
+    var num: i64 = 255;
+    io.println("Hex uppercase: {X}", num);
+    
+    // Test {b} - boolean
+    var flag: bool = true;
+    io.println("Boolean true: {b}", flag);
+    
+    flag = false;
+    io.println("Boolean false: {b}", flag);
+    
+    // Test {x} - lowercase hex still works
+    io.println("Hex lowercase: {x}", num);
+    
+    // Test {d} - decimal still works
+    io.println("Decimal: {d}", num);
+    
+    // Test {f} - float still works
+    var f: f64 = 3.14159;
+    io.println("Float: {f}", f);
+}

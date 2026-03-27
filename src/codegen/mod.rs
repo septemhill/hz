@@ -94,4 +94,5 @@ enum PrintfArgKind {
     String,
     Integer,
     Float,
+    Boolean,
 }

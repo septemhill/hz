@@ -641,6 +641,33 @@ impl TypeInferrer {
                         ).with_module("infer"));
                     }
                 }
+                "X" => {
+                    // {X} requires integer type (uppercase hex)
+                    if !self.is_integer_type(&arg.ty) {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "io.println placeholder #{} {{X}} requires integer type (i8/u8, i16/u16, i32/u32, i64/u64), got {:?}",
+                                idx + 1,
+                                arg.ty
+                            ),
+                            &arg.span,
+                        ).with_module("infer"));
+                    }
+                }
+                "b" => {
+                    // {b} requires boolean type
+                    if !self.is_bool_type(&arg.ty) {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "io.println placeholder #{} {{b}} requires boolean type, got {:?}",
+                                idx + 1,
+                                arg.ty
+                            ),
+                            &arg.span,
+                        )
+                        .with_module("infer"));
+                    }
+                }
                 _ => {
                     // Unknown placeholder - ignore
                 }
@@ -703,6 +730,11 @@ impl TypeInferrer {
     /// Check if type is float type
     fn is_float_type(&self, ty: &Type) -> bool {
         matches!(ty, Type::F32 | Type::F64)
+    }
+
+    /// Check if type is bool type
+    fn is_bool_type(&self, ty: &Type) -> bool {
+        matches!(ty, Type::Bool)
     }
 
     fn infer_int_literal_type(&self, value: i64, span: &Span) -> AnalysisResult<Type> {

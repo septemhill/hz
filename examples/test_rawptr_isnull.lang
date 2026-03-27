@@ -1,15 +1,22 @@
 // Test is_null and is_not_null
 import "io"
 
+external cdecl malloc(size: u64) rawptr;
+external cdecl free(ptr: rawptr) void;
+
 fn main() i32 {
     // Test is_null and is_not_null without malloc
-    const result1 = is_null(0);
-    const result2 = is_not_null(0);
+    const r = malloc(123);
+
+    const result1 = is_null(r);
+    const result2 = is_not_null(r);
     
     io.println("is_null(0): ");
     io.println(result1);
     io.println("is_not_null(0): ");
     io.println(result2);
+
+    free(r);
     
     return 0;
 }
