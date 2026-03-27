@@ -12,12 +12,23 @@ pub fn run_typelist_command(
     source: &str,
     _std_path: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Parse the source file
+    // Parse source code
     let program = parse(source)?;
+
+    // Initialize std library
+    let mut stdlib = crate::stdlib::StdLib::new();
+    let stdlib_path = crate::cmd::resolve_std_path(_std_path);
+    stdlib.set_std_path(stdlib_path.to_str().unwrap());
+    let _ = stdlib.preload_builtins();
+
+    // Load imported packages
+    for (_, package_name) in &program.imports {
+        let _ = stdlib.load_package(package_name);
+    }
 
     // Run semantic analysis to get typed program with monomorphized generics
     let mut analyzer = SemanticAnalyzer::new();
-    match analyzer.analyze(&program) {
+    match analyzer.analyze_with_stdlib(&program, Some(&stdlib)) {
         Ok(_) => {
             // Get the typed program (contains monomorphized types)
             if let Some(typed_program) = analyzer.get_typed_program() {
@@ -312,6 +323,9 @@ fn collect_typed_expr_types(
             collect_typed_expr_types(expr, registry, type_list);
             collect_typed_expr_types(body, registry, type_list);
         }
+        TypedExprKind::Cast { expr, .. } => {
+            collect_typed_expr_types(expr, registry, type_list);
+        }
     }
 }
 
@@ -553,6 +567,9 @@ fn collect_expr_types(
         crate::ast::Expr::Catch { expr, body, .. } => {
             collect_expr_types(expr, registry, type_list);
             collect_expr_types(body, registry, type_list);
+        }
+        crate::ast::Expr::Cast { expr, .. } => {
+            collect_expr_types(expr, registry, type_list);
         }
     }
 }

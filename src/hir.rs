@@ -86,6 +86,13 @@ pub enum HirExpr {
         ty: Type,
         span: Span,
     },
+    /// Type cast expression
+    Cast {
+        target_type: Type,
+        expr: Box<HirExpr>,
+        ty: Type,
+        span: Span,
+    },
 }
 
 impl HirExpr {
@@ -110,6 +117,7 @@ impl HirExpr {
             HirExpr::Struct { ty, .. } => ty,
             HirExpr::Try { ty, .. } => ty,
             HirExpr::Catch { ty, .. } => ty,
+            HirExpr::Cast { ty, .. } => ty,
         }
     }
 }

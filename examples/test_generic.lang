@@ -1,3 +1,5 @@
+import "io"
+
 struct Compose<T> {
     inner: T,
 
@@ -6,6 +8,10 @@ struct Compose<T> {
             inner: v,
         };
     }
+
+    //fn map<F>(self: *Self, f: fn(T) F) F {
+    //    return f(self.inner);
+    //}
 }
 
 struct Data {
@@ -25,15 +31,15 @@ fn main() void {
     const c: f64 = 22.11;
     const d: f64 = 44.77;
 
-    io.println("float value: {f}", add(c, d))
+    io.println("float value: {f}", add(c, d));
 
-    const comp = Compose<i32>.new(100);                                                                                                                                              
-    io.println("composed int: {d}", comp.inner);                                                                                                                                     
+    const comp = Compose<i32>.new(100);
+    io.println("composed int: {d}", comp.inner);
                                                     
-    const comp_f = Compose<f64>.new(3.14);                                                                                                                                           
-    io.println("composed float: {f}", comp_f.inner);                                                                                                                                 
+    const comp_f = Compose<f64>.new(3.14);
+    io.println("composed float: {f}", comp_f.inner);
 
-    const vv = Compose<Data>.new(Data{age: 100});                                                                                                                                    
+    const vv = Compose<Data>.new(Data{age: 100});
     io.println("composed struct: {d}", vv.inner.age);
 
     return;

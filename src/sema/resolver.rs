@@ -14,11 +14,15 @@ pub struct SymbolResolver {
     enums: std::collections::HashMap<String, crate::ast::EnumDef>,
     // Current struct context (if we're inside a struct method)
     current_struct: Option<String>,
+    // Track imported packages to validate package access
+    imports: Vec<(Option<String>, String)>,
 }
 
 fn destructured_binding_type(aggregate_ty: &crate::ast::Type, index: usize) -> crate::ast::Type {
     match aggregate_ty {
-        crate::ast::Type::Tuple(types) => types.get(index).cloned().unwrap_or(crate::ast::Type::I64),
+        crate::ast::Type::Tuple(types) => {
+            types.get(index).cloned().unwrap_or(crate::ast::Type::I64)
+        }
         _ => aggregate_ty.clone(),
     }
 }
@@ -28,12 +32,14 @@ impl SymbolResolver {
         symbol_table: SymbolTable,
         structs: std::collections::HashMap<String, crate::ast::StructDef>,
         enums: std::collections::HashMap<String, crate::ast::EnumDef>,
+        imports: Vec<(Option<String>, String)>,
     ) -> Self {
         SymbolResolver {
             symbol_table,
             structs,
             enums,
             current_struct: None,
+            imports,
         }
     }
 
@@ -364,8 +370,23 @@ impl SymbolResolver {
                 if name == "_" {
                     return Ok(crate::ast::Type::I64);
                 }
-                // Check if it's a known package
+                // Check if it's a known package and if it's actually imported
                 if name == "std" || name == "io" || name == "os" {
+                    // Check if the package is imported
+                    let is_imported = self
+                        .imports
+                        .iter()
+                        .any(|(alias, pkg)| pkg == name || alias.as_deref() == Some(name));
+                    if !is_imported {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "Use of unimported package '{}'. Import it with: import \"{}\"",
+                                name, name,
+                            ),
+                            span,
+                        )
+                        .with_module("resolver"));
+                    }
                     return Ok(crate::ast::Type::I64); // Return placeholder for package
                 }
                 self.symbol_table
@@ -388,6 +409,20 @@ impl SymbolResolver {
             } => {
                 // Check if it's io.println (special case)
                 if namespace.as_deref() == Some("io") && name == "println" {
+                    // Check if io is imported
+                    let is_imported = self
+                        .imports
+                        .iter()
+                        .any(|(alias, pkg)| pkg == "io" || alias.as_deref() == Some("io"));
+                    if !is_imported {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "Use of unimported package 'io'. Import it with: import \"io\""
+                            ),
+                            span,
+                        )
+                        .with_module("resolver"));
+                    }
                     // io.println returns void
                     return Ok(crate::ast::Type::Void);
                 }
@@ -396,6 +431,26 @@ impl SymbolResolver {
                 if namespace.is_none() && (name == "is_null" || name == "is_not_null") {
                     // These functions take a rawptr or pointer and return bool
                     return Ok(crate::ast::Type::Bool);
+                }
+
+                // Check if namespace is an imported package
+                if let Some(ns) = namespace {
+                    if ns == "std" || ns == "io" || ns == "os" {
+                        let is_imported = self
+                            .imports
+                            .iter()
+                            .any(|(alias, pkg)| pkg == ns || alias.as_deref() == Some(ns));
+                        if !is_imported {
+                            return Err(AnalysisError::new_with_span(
+                                &format!(
+                                    "Use of unimported package '{}'. Import it with: import \"{}\"",
+                                    ns, ns
+                                ),
+                                span,
+                            )
+                            .with_module("resolver"));
+                        }
+                    }
                 }
 
                 // For other calls, we'd need to look up the function type
@@ -453,7 +508,12 @@ impl SymbolResolver {
                 }
                 Ok(crate::ast::Type::I64)
             }
-            crate::ast::Expr::Struct { name, fields, generic_args: _, .. } => {
+            crate::ast::Expr::Struct {
+                name,
+                fields,
+                generic_args: _,
+                ..
+            } => {
                 self.symbol_table.resolve(name).ok_or_else(|| {
                     AnalysisError::new(&format!("Undefined struct '{}'", name))
                         .with_module("resolver")

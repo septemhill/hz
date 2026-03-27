@@ -57,7 +57,8 @@ EXPECTED_TO_COMPILE: list[str] = [
     "examples/test_error.lang",
     "examples/test_import_stmt.lang",
     "examples/test_generic.lang",
-    "examples/test_struct.lang"
+    "examples/test_struct.lang",
+    "examples/test_casting.lang",
 ]
 
 # Examples that are intentionally designed to fail compilation (error test cases)
@@ -74,6 +75,7 @@ EXPECTED_TO_FAIL_COMPILE: list[str] = [
     "examples/test_catch_check.lang", # try/catch cannot catch non-error types
     "examples/test_unmatch_if_expr.lang", # if/else blocks with mismatched types
     "examples/test_without_import.lang", # using std library without import should fail
+    "examples/test_casting_error.lang", # invalid casts should fail to compile
 ]
 
 

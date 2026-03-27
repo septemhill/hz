@@ -6,7 +6,7 @@
 use crate::ast::Visibility;
 use crate::ast::{AssignOp, BinaryOp, Expr, FnDef, FnParam, Program, Span, Stmt, Type, UnaryOp};
 use crate::sema::error::{AnalysisError, AnalysisResult};
-use crate::sema::symbol::{Symbol, SymbolTable};
+use crate::sema::symbol::{ConstantValue, Symbol, SymbolTable};
 use std::collections::{HashMap, HashSet};
 
 // ============================================================================
@@ -87,6 +87,11 @@ pub enum TypedExprKind {
         /// Optional capture variable for the error
         error_var: Option<String>,
         body: Box<TypedExpr>,
+    },
+    /// Type cast expression
+    Cast {
+        target_type: Type,
+        expr: Box<TypedExpr>,
     },
 }
 
@@ -368,6 +373,8 @@ pub struct TypeInferrer {
     new_ast_functions: Vec<crate::ast::FnDef>,
     /// New AST-level structs (monomorphized) for lowering pass
     new_ast_structs: Vec<crate::ast::StructDef>,
+    /// Track imported packages to validate package access
+    imports: Vec<(Option<String>, String)>,
 }
 
 impl TypeInferrer {
@@ -378,6 +385,7 @@ impl TypeInferrer {
         enums: HashMap<String, crate::ast::EnumDef>,
         errors: HashMap<String, crate::ast::ErrorDef>,
         functions: HashMap<String, crate::ast::FnDef>,
+        imports: Vec<(Option<String>, String)>,
     ) -> Self {
         TypeInferrer {
             symbol_table,
@@ -394,6 +402,7 @@ impl TypeInferrer {
             new_structs: Vec::new(),
             new_ast_functions: Vec::new(),
             new_ast_structs: Vec::new(),
+            imports: Vec::new(),
         }
     }
 
@@ -773,6 +782,19 @@ impl TypeInferrer {
             if self.types_compatible(expected, inner) {
                 return true;
             }
+        }
+
+        // Allow compatible numeric types
+        if self.is_numeric(expected) && self.is_numeric(actual) {
+            return true;
+        }
+
+        // Allow bool to numeric and numeric to bool conversions
+        if matches!(expected, Type::Bool) && self.is_numeric(actual) {
+            return true;
+        }
+        if self.is_numeric(expected) && matches!(actual, Type::Bool) {
+            return true;
         }
 
         self.is_integer_type(expected) && self.is_integer_type(actual)
@@ -1308,6 +1330,9 @@ impl TypeInferrer {
                         }
                     }
                 } else {
+                    // For single declaration, we might want to store the value if it's a const.
+                    // However, the value is not inferred yet. We'll define it with None first
+                    // and then update it if it's a const.
                     self.symbol_table.define(
                         name.clone(),
                         inferred_ty.clone(),
@@ -1325,6 +1350,15 @@ impl TypeInferrer {
                     let result = self.infer_expr(val_expr)?;
                     // Clear expected_type after inference
                     self.set_expected_type(None);
+
+                    // If it's a constant, update the symbol table with the value
+                    if matches!(mutability, crate::ast::Mutability::Const) {
+                        if let Some(const_val) = self.extract_constant_value(&result) {
+                            if let Some(symbol) = self.symbol_table.resolve_mut(name) {
+                                symbol.const_value = Some(const_val);
+                            }
+                        }
+                    }
                     Some(result)
                 } else {
                     None
@@ -1578,6 +1612,7 @@ impl TypeInferrer {
 
     /// Infer the type of an expression
     fn infer_expr(&mut self, expr: &Expr) -> AnalysisResult<TypedExpr> {
+        eprintln!("DEBUG: infer_expr called");
         // Extract span from the expression
         let span = match expr {
             Expr::Int(_, span) => *span,
@@ -1599,6 +1634,7 @@ impl TypeInferrer {
             Expr::Struct { span, .. } => *span,
             Expr::Try { span, .. } => *span,
             Expr::Catch { span, .. } => *span,
+            Expr::Cast { span, .. } => *span,
         };
 
         match expr {
@@ -1975,6 +2011,7 @@ impl TypeInferrer {
                             ty: substituted_ty,
                             visibility: symbol.visibility,
                             is_const: symbol.is_const,
+                            const_value: None,
                             generic_params: Vec::new(),
                         }
                     } else {
@@ -2014,8 +2051,8 @@ impl TypeInferrer {
                 if let Some(ns) = namespace {
                     if let Some(var_symbol) = self.symbol_table.resolve(ns) {
                         if let Some(struct_full_name) = custom_type_name(&var_symbol.ty) {
-                            // Split into package and struct name if needed, but for now we look up by full name
                             if let Some(struct_def) = self.structs.get(struct_full_name) {
+                                // 1. Check for methods
                                 if let Some(method) =
                                     struct_def.methods.iter().find(|m| &m.name == name)
                                 {
@@ -2028,6 +2065,23 @@ impl TypeInferrer {
                                         ty: method.return_ty.clone(),
                                         span: *span,
                                     });
+                                }
+
+                                // 2. Check for fields that are function types
+                                if let Some(field) =
+                                    struct_def.fields.iter().find(|f| &f.name == name)
+                                {
+                                    if let Type::Function { return_type, .. } = &field.ty {
+                                        return Ok(TypedExpr {
+                                            expr: TypedExprKind::Call {
+                                                name: name.clone(),
+                                                namespace: namespace.clone(),
+                                                args: typed_args,
+                                            },
+                                            ty: return_type.as_ref().clone(),
+                                            span: *span,
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -2237,8 +2291,26 @@ impl TypeInferrer {
                 // Try to resolve as package access
                 if let Expr::Ident(obj_name, _) = object.as_ref() {
                     // Check if obj_name is an imported package
-                    let is_package = self.symbol_table.resolve(obj_name).is_none()
-                        && (obj_name == "std" || obj_name == "io" || obj_name == "os"); // Simple check for now
+                    let is_imported = self
+                        .imports
+                        .iter()
+                        .any(|(alias, pkg)| pkg == obj_name || alias.as_deref() == Some(obj_name));
+                    let is_known_package =
+                        obj_name == "std" || obj_name == "io" || obj_name == "os";
+
+                    if is_known_package && !is_imported {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "Use of unimported package '{}'. Import it with: import \"{}\"",
+                                obj_name, obj_name
+                            ),
+                            span,
+                        )
+                        .with_module("infer"));
+                    }
+
+                    let is_package =
+                        self.symbol_table.resolve(obj_name).is_none() && is_known_package;
 
                     if is_package {
                         return Ok(TypedExpr {
@@ -2347,50 +2419,6 @@ impl TypeInferrer {
                     span: *span,
                 })
             }
-            Expr::Struct {
-                name, fields, span, ..
-            } => {
-                let mut typed_fields = Vec::new();
-
-                // Look up the struct definition to get field types
-                let field_types: std::collections::HashMap<String, Type> =
-                    if let Some(struct_def) = self.structs.get(name) {
-                        struct_def
-                            .fields
-                            .iter()
-                            .map(|f| (f.name.clone(), f.ty.clone()))
-                            .collect()
-                    } else {
-                        std::collections::HashMap::new()
-                    };
-
-                for (field_name, field_expr) in fields {
-                    // Set expected type based on struct field definition
-                    let previous_expected = self.get_expected_type().cloned();
-                    if let Some(field_ty) = field_types.get(field_name) {
-                        self.set_expected_type(Some(field_ty.clone()));
-                    }
-
-                    let typed_field = self.infer_expr(field_expr)?;
-                    typed_fields.push((field_name.clone(), typed_field));
-
-                    // Restore previous expected type
-                    self.set_expected_type(previous_expected);
-                }
-
-                Ok(TypedExpr {
-                    expr: TypedExprKind::Struct {
-                        name: name.clone(),
-                        fields: typed_fields,
-                    },
-                    ty: Type::Custom {
-                        name: name.clone(),
-                        generic_args: vec![],
-                        is_exported: false,
-                    },
-                    span: *span,
-                })
-            }
             Expr::Try { expr, span } => {
                 let typed_expr = self.infer_expr(expr)?;
 
@@ -2474,6 +2502,34 @@ impl TypeInferrer {
                         body: Box::new(typed_body),
                     },
                     ty: result_inner_ty,
+                    span: *span,
+                })
+            }
+            Expr::Cast {
+                target_type,
+                expr,
+                span,
+            } => {
+                // Infer the expression being cast
+                let typed_expr = self.infer_expr(expr)?;
+
+                // Check if the cast is valid
+                let source_type = &typed_expr.ty;
+                let target = target_type;
+
+                // Validate constant cast if the expression is a constant
+                self.validate_const_cast(expr, target, span)?;
+
+                // Validate the cast (bit-width check)
+                self.validate_cast(source_type, target, span)?;
+
+                // Return the target type
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Cast {
+                        target_type: target_type.clone(),
+                        expr: Box::new(typed_expr),
+                    },
+                    ty: target_type.clone(),
                     span: *span,
                 })
             }
@@ -2592,6 +2648,249 @@ impl TypeInferrer {
         )
     }
 
+    /// Validate a type cast
+    /// Returns an error if the cast is not allowed (e.g., f64 -> i32 when value might overflow)
+    fn validate_cast(&self, source: &Type, target: &Type, span: &Span) -> AnalysisResult<()> {
+        // Check if source is a valid type for casting
+        let source_is_numeric = self.is_numeric(source);
+        let source_is_bool = matches!(source, Type::Bool);
+        let target_is_numeric = self.is_numeric(target);
+        let target_is_bool = matches!(target, Type::Bool);
+
+        // Allow casts between numeric types, and between bool and numeric
+        if source_is_numeric && (target_is_numeric || target_is_bool) {
+            // Check for narrowing cast
+            if source_is_numeric && target_is_numeric {
+                let source_bits = self.get_type_bits(source);
+                let target_bits = self.get_type_bits(target);
+                if target_bits < source_bits {
+                    return Err(AnalysisError::new_with_span(
+                        &format!(
+                            "Numeric cast from {} to {} is narrowing and potentially unsafe",
+                            source, target
+                        ),
+                        span,
+                    )
+                    .with_module("infer"));
+                }
+            }
+            return Ok(());
+        }
+
+        if source_is_bool && (target_is_numeric || target_is_bool) {
+            // Bool to numeric or bool to bool is allowed
+            return Ok(());
+        }
+
+        // For f64 -> i32 (and similar), we need to check value range at runtime
+        // For now, we'll allow it but the codegen should handle it
+        if matches!(source, Type::F64) && target_is_numeric {
+            // f64 to integer - allowed but needs runtime check
+            return Ok(());
+        }
+
+        if source_is_numeric && matches!(target, Type::F64) {
+            // Integer to f64 - always allowed
+            return Ok(());
+        }
+
+        // Invalid cast
+        Err(AnalysisError::new_with_span(
+            &format!("Cannot cast from {} to {}", source, target),
+            span,
+        ))
+    }
+
+    /// Validate a constant cast at compile time
+    /// This checks if a constant value can be safely cast to the target type
+    fn validate_const_cast(&self, value: &Expr, target: &Type, span: &Span) -> AnalysisResult<()> {
+        // Only check constant expressions
+        match value {
+            Expr::Ident(name, _) => {
+                // If it's an identifier, check if it's a known constant
+                if let Some(symbol) = self.symbol_table.resolve(name) {
+                    if symbol.is_const {
+                        if let Some(const_val) = &symbol.const_value {
+                            match const_val {
+                                ConstantValue::Int(n) => self.check_int_range(*n, target, span)?,
+                                ConstantValue::Float(f) => {
+                                    self.check_float_range(*f, target, span)?
+                                }
+                                ConstantValue::Bool(_) => {} // Bool to whatever is usually fine or handled elsewhere
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Expr::Int(n, _) => self.check_int_range(*n, target, span),
+            Expr::Float(f, _) => self.check_float_range(*f, target, span),
+            _ => Ok(()),
+        }
+    }
+
+    fn check_float_range(&self, n: f64, target: &Type, span: &Span) -> AnalysisResult<()> {
+        match target {
+            Type::I8 => {
+                if n < i8::MIN as f64 || n > i8::MAX as f64 || n.is_nan() {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} cannot be safely converted to i8", n),
+                        span,
+                    ));
+                }
+            }
+            Type::I16 => {
+                if n < i16::MIN as f64 || n > i16::MAX as f64 || n.is_nan() {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} cannot be safely converted to i16", n),
+                        span,
+                    ));
+                }
+            }
+            Type::I32 => {
+                if n < i32::MIN as f64 || n > i32::MAX as f64 || n.is_nan() {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} cannot be safely converted to i32", n),
+                        span,
+                    ));
+                }
+            }
+            Type::I64 => {
+                if n < i64::MIN as f64 || n > i64::MAX as f64 || n.is_nan() {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} cannot be safely converted to i64", n),
+                        span,
+                    ));
+                }
+            }
+            Type::U8 => {
+                if n < 0.0 || n > u8::MAX as f64 || n.is_nan() {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} cannot be safely converted to u8", n),
+                        span,
+                    ));
+                }
+            }
+            Type::U16 => {
+                if n < 0.0 || n > u16::MAX as f64 || n.is_nan() {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} cannot be safely converted to u16", n),
+                        span,
+                    ));
+                }
+            }
+            Type::U32 => {
+                if n < 0.0 || n > u32::MAX as f64 || n.is_nan() {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} cannot be safely converted to u32", n),
+                        span,
+                    ));
+                }
+            }
+            Type::U64 => {
+                if n < 0.0 || n > u64::MAX as f64 || n.is_nan() {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} cannot be safely converted to u64", n),
+                        span,
+                    ));
+                }
+            }
+            Type::F32 => {
+                if n < f32::MIN as f64 || n > f32::MAX as f64 {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} exceeds f32 range", n),
+                        span,
+                    ));
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn check_int_range(&self, n: i64, target: &Type, span: &Span) -> AnalysisResult<()> {
+        // Check if the integer fits in the target type
+        match target {
+            Type::I8 => {
+                if n < i8::MIN as i64 || n > i8::MAX as i64 {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} exceeds i8 range ({}, {})", n, i8::MIN, i8::MAX),
+                        span,
+                    ));
+                }
+            }
+            Type::I16 => {
+                if n < i16::MIN as i64 || n > i16::MAX as i64 {
+                    return Err(AnalysisError::new_with_span(
+                        &format!(
+                            "Constant {} exceeds i16 range ({}, {})",
+                            n,
+                            i16::MIN,
+                            i16::MAX
+                        ),
+                        span,
+                    ));
+                }
+            }
+            Type::I32 => {
+                if n < i32::MIN as i64 || n > i32::MAX as i64 {
+                    return Err(AnalysisError::new_with_span(
+                        &format!(
+                            "Constant {} exceeds i32 range ({}, {})",
+                            n,
+                            i32::MIN,
+                            i32::MAX
+                        ),
+                        span,
+                    ));
+                }
+            }
+            Type::I64 => {
+                // i64 can hold any i64 value
+            }
+            Type::U8 => {
+                if n < 0 || n > u8::MAX as i64 {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} exceeds u8 range (0, {})", n, u8::MAX),
+                        span,
+                    ));
+                }
+            }
+            Type::U16 => {
+                if n < 0 || n > u16::MAX as i64 {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} exceeds u16 range (0, {})", n, u16::MAX),
+                        span,
+                    ));
+                }
+            }
+            Type::U32 => {
+                if n < 0 || n > u32::MAX as i64 {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} exceeds u32 range (0, {})", n, u32::MAX),
+                        span,
+                    ));
+                }
+            }
+            Type::U64 => {
+                if n < 0 {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Constant {} is negative but target type is u64", n),
+                        span,
+                    ));
+                }
+            }
+            Type::F32 | Type::F64 => {
+                // Integer to float is always allowed
+            }
+            Type::Bool => {
+                // Can convert any integer to bool
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn check_switch_exhaustiveness(
         &self,
         condition_ty: &Type,
@@ -2700,6 +2999,40 @@ impl TypeInferrer {
             .with_module("infer")),
         }
     }
+
+    fn get_type_bits(&self, ty: &Type) -> u32 {
+        match ty {
+            Type::I8 | Type::U8 => 8,
+            Type::I16 | Type::U16 => 16,
+            Type::I32 | Type::U32 | Type::F32 => 32,
+            Type::I64 | Type::U64 | Type::F64 => 64,
+            _ => 0,
+        }
+    }
+
+    fn extract_constant_value(&self, typed_expr: &TypedExpr) -> Option<ConstantValue> {
+        match &typed_expr.expr {
+            TypedExprKind::Int(v) => Some(ConstantValue::Int(*v)),
+            TypedExprKind::Float(v) => Some(ConstantValue::Float(*v)),
+            TypedExprKind::Bool(v) => Some(ConstantValue::Bool(*v)),
+            TypedExprKind::Unary { op, expr } => {
+                if let Some(cv) = self.extract_constant_value(expr) {
+                    match (op, cv) {
+                        (UnaryOp::Neg, ConstantValue::Int(v)) => Some(ConstantValue::Int(-v)),
+                        (UnaryOp::Neg, ConstantValue::Float(v)) => Some(ConstantValue::Float(-v)),
+                        (UnaryOp::Not, ConstantValue::Int(v)) => {
+                            Some(ConstantValue::Int(if v == 0 { 1 } else { 0 }))
+                        }
+                        (UnaryOp::Not, ConstantValue::Bool(v)) => Some(ConstantValue::Bool(!v)),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
 }
 
 // ============================================================================
@@ -2715,7 +3048,14 @@ pub fn infer_types(
     errors: HashMap<String, crate::ast::ErrorDef>,
     functions: HashMap<String, crate::ast::FnDef>,
 ) -> AnalysisResult<TypedProgram> {
-    let mut inferrer = TypeInferrer::new(symbol_table, structs, enums, errors, functions);
+    let mut inferrer = TypeInferrer::new(
+        symbol_table,
+        structs,
+        enums,
+        errors,
+        functions,
+        program.imports.clone(),
+    );
     inferrer.infer_program(program)
 }
 
@@ -3206,6 +3546,10 @@ impl AstDump for TypedExpr {
                 print_indent(indent + 1);
                 println!("Body (ty: {}):", body.ty);
                 body.dump(indent + 2);
+            }
+            TypedExprKind::Cast { target_type, expr } => {
+                println!("Expr::Cast to {} (ty: {})", target_type, self.ty);
+                expr.dump(indent + 1);
             }
         }
     }

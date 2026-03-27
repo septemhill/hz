@@ -1,0 +1,8 @@
+import "io"
+
+fn main() void {
+    const c: i16 = -1;
+    const d: u8 = u8(c);
+
+    return ;
+}

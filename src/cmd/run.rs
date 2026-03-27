@@ -29,6 +29,16 @@ pub fn run_jit(source: &str, cli_std_path: Option<std::path::PathBuf>) -> Result
     println!("Parsing source code...");
     let program = parser::parse(source)?;
 
+    // Load imported packages
+    println!("Loading imported packages...");
+    for (_, package_name) in &program.imports {
+        let _ = stdlib.load_package(package_name);
+    }
+    println!(
+        "Loaded std packages: {:?}",
+        stdlib.packages().keys().collect::<Vec<_>>()
+    );
+
     // Semantic Analysis
     println!("Semantic Analysis...");
     let mut analyzer = sema::SemanticAnalyzer::new();
@@ -51,11 +61,8 @@ pub fn run_jit(source: &str, cli_std_path: Option<std::path::PathBuf>) -> Result
         analyzer.errors.clone(),
     )?;
 
-    // Populate imported packages for codegen
-    for (alias, pkg_name) in &typed_program.imports {
-        let ns = alias.as_deref().unwrap_or(pkg_name);
-        codegen.imported_packages.insert(ns.to_string(), pkg_name.clone());
-    }
+    // Process imports (declares functions from imported packages)
+    codegen.process_imports(&program.imports)?;
 
     let mut lowering_ctx = lower::LoweringContext::new();
     lowering_ctx.set_symbol_table(analyzer.get_symbol_table().clone());

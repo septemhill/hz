@@ -525,6 +525,15 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// Type cast expression (e.g., i32(expr), f64(value))
+    /// This is used for explicit type conversions between primitive types
+    Cast {
+        /// The target type to cast to
+        target_type: Type,
+        /// The expression to cast
+        expr: Box<Expr>,
+        span: Span,
+    },
 }
 
 /// Statement AST node
@@ -713,7 +722,10 @@ impl AstDump for FnDef {
         } else {
             format!("<{}>", self.generic_params.join(", "))
         };
-        println!("FnDef: {}{}{} -> {}", vis, self.name, generics, self.return_ty);
+        println!(
+            "FnDef: {}{}{} -> {}",
+            vis, self.name, generics, self.return_ty
+        );
 
         if !self.params.is_empty() {
             print_indent(indent + 1);
@@ -1155,6 +1167,12 @@ impl AstDump for Expr {
                 print_indent(indent + 1);
                 println!("Body:");
                 body.dump(indent + 2);
+            }
+            Expr::Cast {
+                target_type, expr, ..
+            } => {
+                println!("Expr::Cast to {}", target_type);
+                expr.dump(indent + 1);
             }
         }
     }

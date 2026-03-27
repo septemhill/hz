@@ -717,6 +717,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(expr_value)
             }
             Expr::Struct { .. } => todo!("Codegen for Struct not implemented"),
+            Expr::Cast {
+                target_type, expr, ..
+            } => {
+                // Generate the expression first
+                let expr_value = self.generate_expr(expr)?;
+                // Then convert to target type
+                self.generate_cast(expr_value, target_type)
+            }
         }
     }
 
@@ -980,7 +988,10 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Generate io.println function call
-    pub(super) fn generate_io_println(&mut self, args: &[Expr]) -> CodegenResult<BasicValueEnum<'ctx>> {
+    pub(super) fn generate_io_println(
+        &mut self,
+        args: &[Expr],
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
         // Get printf function from libc
         let printf_type = self.context.i64_type().fn_type(
             &[self
@@ -1606,6 +1617,16 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         // Default: just return the original value if we can't coerce
         Ok(val)
+    }
+
+    /// Generate code for a type cast expression
+    pub(super) fn generate_cast(
+        &mut self,
+        expr_value: BasicValueEnum<'ctx>,
+        target_type: &Type,
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        let target_llvm_type = self.llvm_type(target_type);
+        self.coerce_to_llvm_type(expr_value, target_llvm_type)
     }
 
     /// Print the generated LLVM IR

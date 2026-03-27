@@ -1,0 +1,15 @@
+import "io"
+
+fn main() void {
+    const c: i32 = 100;
+    const d: f64 = f64(c);
+
+    io.println("{f}", d);
+
+    const a: u8 = 14;
+    const b: i16 = i16(a);
+
+    io.println("{d}", b);
+
+    return ;
+}

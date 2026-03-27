@@ -15,7 +15,6 @@ use crate::parser;
 use crate::sema;
 use crate::stdlib;
 
-use ast::FnDef;
 
 /// Represents a single compilation unit (a .lang file)
 pub struct CompilationUnit {

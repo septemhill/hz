@@ -239,6 +239,7 @@ impl TypeAnalyzer {
     fn expr_find_try(&self, expr: &crate::ast::Expr) -> Option<Span> {
         match expr {
             crate::ast::Expr::Try { span, .. } => Some(*span),
+            crate::ast::Expr::Cast { expr, .. } => self.expr_find_try(expr),
             crate::ast::Expr::Call { args, .. } => {
                 for arg in args {
                     if let Some(s) = self.expr_find_try(arg) {
@@ -276,7 +277,11 @@ impl TypeAnalyzer {
                 }
                 self.expr_find_try(body)
             }
-            crate::ast::Expr::Struct { fields, generic_args: _, .. } => {
+            crate::ast::Expr::Struct {
+                fields,
+                generic_args: _,
+                ..
+            } => {
                 for (_, field_expr) in fields {
                     if let Some(s) = self.expr_find_try(field_expr) {
                         return Some(s);
@@ -906,7 +911,12 @@ impl TypeAnalyzer {
                     Ok(crate::ast::Type::I64)
                 }
             }
-            crate::ast::Expr::Struct { name, fields, generic_args: _, span } => {
+            crate::ast::Expr::Struct {
+                name,
+                fields,
+                generic_args: _,
+                span,
+            } => {
                 self.symbol_table
                     .resolve(name)
                     .map(|s| s.ty.clone())
@@ -970,6 +980,16 @@ impl TypeAnalyzer {
                     AnalysisError::new_with_span("Failed to get inner type from Result", span)
                 })
             }
+            crate::ast::Expr::Cast {
+                target_type,
+                expr,
+                span,
+            } => {
+                // First analyze the expression being cast
+                let _ = self.analyze_expression(expr)?;
+                // Return the target type
+                Ok(target_type.clone())
+            }
         }
     }
 
@@ -1005,7 +1025,20 @@ impl TypeAnalyzer {
             }
         }
 
-        self.is_numeric(left) && self.is_numeric(right)
+        // Allow compatible numeric types
+        if self.is_numeric(left) && self.is_numeric(right) {
+            return true;
+        }
+
+        // Allow bool to numeric and numeric to bool conversions
+        if matches!(left, crate::ast::Type::Bool) && self.is_numeric(right) {
+            return true;
+        }
+        if self.is_numeric(left) && matches!(right, crate::ast::Type::Bool) {
+            return true;
+        }
+
+        false
     }
 
     pub fn get_symbol_table(&self) -> &SymbolTable {

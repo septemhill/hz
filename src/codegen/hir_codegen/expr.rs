@@ -2,7 +2,10 @@ use super::*;
 
 #[allow(unused)]
 impl<'ctx> CodeGenerator<'ctx> {
-    pub(crate) fn generate_hir_expr(&mut self, expr: &hir::HirExpr) -> CodegenResult<BasicValueEnum<'ctx>> {
+    pub(crate) fn generate_hir_expr(
+        &mut self,
+        expr: &hir::HirExpr,
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
         match expr {
             hir::HirExpr::Int(v, ty, _) => Ok(self.build_typed_int_constant(*v, ty)),
             hir::HirExpr::Float(v, _, _) => Ok(self.context.f64_type().const_float(*v).into()),
@@ -972,6 +975,15 @@ impl<'ctx> CodeGenerator<'ctx> {
                 ty: _,
                 span: _,
             } => self.generate_hir_catch_expr(expr, body),
+            hir::HirExpr::Cast {
+                target_type,
+                expr,
+                ty: _,
+                span: _,
+            } => {
+                let expr_value = self.generate_hir_expr(expr)?;
+                self.generate_cast(expr_value, target_type)
+            }
         }
     }
 }

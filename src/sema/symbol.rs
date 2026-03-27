@@ -1,6 +1,13 @@
 use crate::ast::{Type, Visibility};
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstantValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+}
+
 #[derive(Debug, Clone)]
 #[allow(unused)]
 pub struct Symbol {
@@ -8,6 +15,7 @@ pub struct Symbol {
     pub ty: Type,
     pub visibility: Visibility,
     pub is_const: bool,
+    pub const_value: Option<ConstantValue>,
     /// Generic type parameters (for functions or structs)
     pub generic_params: Vec<String>,
 }
@@ -58,7 +66,18 @@ impl SymbolTable {
         visibility: Visibility,
         is_const: bool,
     ) {
-        self.define_with_generics(name, ty, visibility, is_const, Vec::new());
+        self.define_with_generics(name, ty, visibility, is_const, Vec::new(), None);
+    }
+
+    pub fn define_with_value(
+        &mut self,
+        name: String,
+        ty: Type,
+        visibility: Visibility,
+        is_const: bool,
+        value: Option<ConstantValue>,
+    ) {
+        self.define_with_generics(name, ty, visibility, is_const, Vec::new(), value);
     }
 
     pub fn define_with_generics(
@@ -68,12 +87,14 @@ impl SymbolTable {
         visibility: Visibility,
         is_const: bool,
         generic_params: Vec<String>,
+        const_value: Option<ConstantValue>,
     ) {
         let symbol = Symbol {
             name: name.clone(),
             ty,
             visibility,
             is_const,
+            const_value,
             generic_params,
         };
         self.scopes[self.current_scope].symbols.insert(name, symbol);
@@ -92,6 +113,19 @@ impl SymbolTable {
                 return Some(symbol);
             }
             scope_idx = scope.parent;
+        }
+        None
+    }
+
+    pub fn resolve_mut(&mut self, name: &str) -> Option<&mut Symbol> {
+        let mut scope_idx = Some(self.current_scope);
+        while let Some(idx) = scope_idx {
+            // We need to work around the borrow checker here.
+            // If the symbol is found, we return it. If not, we move to the parent.
+            if self.scopes[idx].symbols.contains_key(name) {
+                return self.scopes[idx].symbols.get_mut(name);
+            }
+            scope_idx = self.scopes[idx].parent;
         }
         None
     }

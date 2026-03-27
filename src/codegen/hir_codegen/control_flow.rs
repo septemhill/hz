@@ -118,6 +118,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::Struct { ty, .. } => Some(ty),
             hir::HirExpr::Try { .. } => None,
             hir::HirExpr::Catch { .. } => None,
+            hir::HirExpr::Cast { ty, .. } => Some(ty),
         };
 
         let mut is_option = false;
@@ -129,7 +130,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 is_array = true;
             }
             if let Type::Bool = lang_ty {
-                eprintln!("DEBUG: Setting is_bool = true because lang_ty = {:?}", lang_ty);
+                eprintln!(
+                    "DEBUG: Setting is_bool = true because lang_ty = {:?}",
+                    lang_ty
+                );
                 is_bool = true;
             }
         }
@@ -223,12 +227,16 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             if !handled_null_or_option {
-                let start =
-                    self.builder
-                        .build_extract_value(iter_val_load.into_struct_value(), 0, "range_start")?;
-                let end =
-                    self.builder
-                        .build_extract_value(iter_val_load.into_struct_value(), 1, "range_end")?;
+                let start = self.builder.build_extract_value(
+                    iter_val_load.into_struct_value(),
+                    0,
+                    "range_start",
+                )?;
+                let end = self.builder.build_extract_value(
+                    iter_val_load.into_struct_value(),
+                    1,
+                    "range_end",
+                )?;
                 let condition_flag = self.builder.build_int_compare(
                     inkwell::IntPredicate::SLT,
                     start.into_int_value(),
@@ -240,9 +248,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             }
         } else if is_array || iter_type.is_array_type() {
             if let Some(idx_alloca) = array_index_alloca {
-                let current_index =
-                    self.builder
-                        .build_load(self.context.i64_type(), idx_alloca, "array_idx_load")?;
+                let current_index = self.builder.build_load(
+                    self.context.i64_type(),
+                    idx_alloca,
+                    "array_idx_load",
+                )?;
                 let array_type = iter_type.into_array_type();
                 let len = array_type.len();
                 let len_val = self.context.i64_type().const_int(len as u64, false);
@@ -268,9 +278,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         let var_name_clone = var_name.clone();
         if let Some(name) = &var_name_clone {
             if is_option || iter_type.is_struct_type() {
-                let val = self
-                    .builder
-                    .build_extract_value(iter_val_load.into_struct_value(), 0, "captured")?;
+                let val = self.builder.build_extract_value(
+                    iter_val_load.into_struct_value(),
+                    0,
+                    "captured",
+                )?;
                 let alloca = self.builder.build_alloca(val.get_type(), name)?;
                 self.builder.build_store(alloca, val)?;
                 self.variables.insert(name.clone(), alloca);
@@ -373,12 +385,16 @@ impl<'ctx> CodeGenerator<'ctx> {
             if is_option || is_bool {
                 self.builder.build_unconditional_branch(eval_start_block)?;
             } else if iter_type.is_struct_type() {
-                let current_load = self.builder.build_load(iter_type, iter_alloca, "iter_next")?;
+                let current_load = self
+                    .builder
+                    .build_load(iter_type, iter_alloca, "iter_next")?;
                 let current_struct = current_load.into_struct_value();
-                let start =
-                    self.builder
-                        .build_extract_value(current_struct, 0, "next_start")?;
-                let end = self.builder.build_extract_value(current_struct, 1, "next_end")?;
+                let start = self
+                    .builder
+                    .build_extract_value(current_struct, 0, "next_start")?;
+                let end = self
+                    .builder
+                    .build_extract_value(current_struct, 1, "next_end")?;
                 let incremented_start = self.builder.build_int_add(
                     start.into_int_value(),
                     self.context.i64_type().const_int(1, false),
@@ -478,9 +494,20 @@ impl<'ctx> CodeGenerator<'ctx> {
                     {
                         let start = self.generate_hir_expr(left)?;
                         let end = self.generate_hir_expr(right)?;
-                        let start_int = start.into_int_value();
-                        let end_int = end.into_int_value();
                         let cond_int = cond_val.into_int_value();
+                        let cond_type = cond_int.get_type();
+
+                        // Cast start and end to match the condition value's type
+                        let start_int = self.builder.build_int_cast(
+                            start.into_int_value(),
+                            cond_type,
+                            "range_start_cast",
+                        )?;
+                        let end_int = self.builder.build_int_cast(
+                            end.into_int_value(),
+                            cond_type,
+                            "range_end_cast",
+                        )?;
 
                         let ge = self.builder.build_int_compare(
                             inkwell::IntPredicate::UGE,

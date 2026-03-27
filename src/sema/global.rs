@@ -57,6 +57,7 @@ impl GlobalDefinitionsAnalyzer {
                 f.visibility,
                 true,
                 f.generic_params.clone(),
+                None,
             );
         }
         Ok(())
@@ -87,7 +88,10 @@ impl GlobalDefinitionsAnalyzer {
             }
             self.symbol_table.define(
                 ext_fn.name.clone(),
-                ext_fn.return_ty.clone(),
+                Type::Function {
+                    params: ext_fn.params.iter().map(|p| p.ty.clone()).collect(),
+                    return_type: Box::new(ext_fn.return_ty.clone()),
+                },
                 ext_fn.visibility,
                 true,
             );
@@ -114,6 +118,7 @@ impl GlobalDefinitionsAnalyzer {
                 s.visibility,
                 true,
                 s.generic_params.clone(),
+                None,
             );
 
             // Also register struct methods in the symbol table
@@ -136,6 +141,7 @@ impl GlobalDefinitionsAnalyzer {
                     method.visibility,
                     true,
                     s.generic_params.clone(), // Inherit generic parameters from struct
+                    None,
                 );
             }
         }
@@ -161,6 +167,7 @@ impl GlobalDefinitionsAnalyzer {
                 e.visibility,
                 true,
                 e.generic_params.clone(),
+                None,
             );
 
             // Also register enum variants in the symbol table

@@ -2,7 +2,7 @@ use crate::ast;
 use crate::hir;
 use crate::sema::SymbolTable;
 use crate::sema::infer::{
-    TypedExpr, TypedExprKind, TypedFnDef, TypedProgram, TypedStmt, TypedStmtKind,
+    TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind,
 };
 
 #[cfg(test)]
@@ -845,7 +845,10 @@ impl LoweringContext {
                         for i in 1..parts.len() {
                             let mut name_found = None;
                             let mut current = &current_ty;
-                            while let ast::Type::Pointer(inner) | ast::Type::Option(inner) | ast::Type::Result(inner) = current {
+                            while let ast::Type::Pointer(inner)
+                            | ast::Type::Option(inner)
+                            | ast::Type::Result(inner) = current
+                            {
                                 current = inner.as_ref();
                             }
                             if let ast::Type::Custom { name, .. } = current {
@@ -890,7 +893,10 @@ impl LoweringContext {
                         for i in 1..parts.len() {
                             let mut name_found = None;
                             let mut current = &current_ty;
-                            while let ast::Type::Pointer(inner) | ast::Type::Option(inner) | ast::Type::Result(inner) = current {
+                            while let ast::Type::Pointer(inner)
+                            | ast::Type::Option(inner)
+                            | ast::Type::Result(inner) = current
+                            {
                                 current = inner.as_ref();
                             }
                             if let ast::Type::Custom { name, .. } = current {
@@ -1107,6 +1113,12 @@ impl LoweringContext {
                 expr: Box::new(self.lower_typed_expr(expr)),
                 error_var: error_var.clone(),
                 body: Box::new(self.lower_typed_expr(body)),
+                ty: e.ty.clone(),
+                span: e.span,
+            },
+            TypedExprKind::Cast { target_type, expr } => hir::HirExpr::Cast {
+                target_type: target_type.clone(),
+                expr: Box::new(self.lower_typed_expr(expr)),
                 ty: e.ty.clone(),
                 span: e.span,
             },
@@ -1615,20 +1627,26 @@ impl LoweringContext {
                 hir::HirExpr::Null(ast::Type::Pointer(Box::new(ast::Type::Void)), *span)
             }
             ast::Expr::Try { expr, span } => {
-                let ty = self.infer_type(expr).and_then(|t| t.result_inner().map(|i| i.clone())).unwrap_or(ast::Type::Void);
+                let ty = self
+                    .infer_type(expr)
+                    .and_then(|t| t.result_inner().map(|i| i.clone()))
+                    .unwrap_or(ast::Type::Void);
                 hir::HirExpr::Try {
                     expr: Box::new(self.lower_expr(expr)),
                     ty,
                     span: *span,
                 }
-            },
+            }
             ast::Expr::Catch {
                 expr,
                 error_var,
                 body,
                 span,
             } => {
-                let ty = self.infer_type(expr).and_then(|t| t.result_inner().map(|i| i.clone())).unwrap_or(ast::Type::Void);
+                let ty = self
+                    .infer_type(expr)
+                    .and_then(|t| t.result_inner().map(|i| i.clone()))
+                    .unwrap_or(ast::Type::Void);
                 hir::HirExpr::Catch {
                     expr: Box::new(self.lower_expr(expr)),
                     error_var: error_var.clone(),
@@ -1636,7 +1654,7 @@ impl LoweringContext {
                     ty,
                     span: *span,
                 }
-            },
+            }
             ast::Expr::Tuple(vals, span) => hir::HirExpr::Tuple {
                 vals: vals.iter().map(|v| self.lower_expr(v)).collect(),
                 ty: self.infer_type(e).unwrap_or_else(|| {
@@ -1854,6 +1872,16 @@ impl LoweringContext {
                     generic_args: vec![],
                     is_exported: false,
                 },
+                span: *span,
+            },
+            ast::Expr::Cast {
+                target_type,
+                expr,
+                span,
+            } => hir::HirExpr::Cast {
+                target_type: target_type.clone(),
+                expr: Box::new(self.lower_expr(expr)),
+                ty: target_type.clone(),
                 span: *span,
             },
         }

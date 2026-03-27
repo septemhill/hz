@@ -320,6 +320,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::Call { return_ty, .. } => return_ty,
             hir::HirExpr::Try { ty, .. } => ty,
             hir::HirExpr::Catch { ty, .. } => ty,
+            hir::HirExpr::Cast { ty, .. } => ty,
         }
     }
 

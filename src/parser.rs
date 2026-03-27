@@ -68,6 +68,14 @@ pub struct Parser {
     generic_params: Vec<Vec<String>>,
 }
 
+/// Check if an identifier is a primitive type name (for cast expressions)
+fn is_primitive_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool"
+    )
+}
+
 #[allow(unused)]
 impl Parser {
     /// Create a new parser from tokens (iterator)
@@ -220,6 +228,7 @@ impl Parser {
             Expr::Struct { span, .. } => *span,
             Expr::Try { span, .. } => *span,
             Expr::Catch { span, .. } => *span,
+            Expr::Cast { span, .. } => *span,
         }
     }
 }
@@ -635,12 +644,7 @@ fn main() i64 {
 
 /// Parse a source string into an AST Program
 pub fn parse(source: &str) -> Result<Program, ParseError> {
-    // // Step 1: Lexer - create token iterator
-    // eprintln!("DEBUG: Starting lexer...");
     let tokens = lexer_iter(source);
-    // eprintln!("DEBUG: Created token iterator");
-
-    // Step 2: Parser - parse tokens into AST
     let mut parser = Parser::new(tokens);
     parser.parse_program()
 }
@@ -773,20 +777,21 @@ impl Parser {
 
     /// Parse an import statement
     fn parse_import_statement(&mut self) -> Result<Vec<(Option<String>, String)>, ParseError> {
+        eprintln!("DEBUG parse_import_statement: start");
         let mut packages = Vec::new();
 
         // Helper to parse a single package with optional alias
         let parse_package_item = |p: &mut Parser| -> Result<(Option<String>, String), ParseError> {
             p.skip_whitespace();
 
-            let first_token = p
-                .tokens
-                .next()
-                .and_then(|r| r.ok())
-                .ok_or_else(|| ParseError {
-                    message: "Expected package name or alias".to_string(),
-                    location: p.current_token().map(|t| t.span.start),
-                })?;
+            // Use peek to get the token without consuming it
+            let first_token = p.peek(0).cloned().ok_or_else(|| ParseError {
+                message: "Expected package name or alias".to_string(),
+                location: p.current_token().map(|t| t.span.start),
+            })?;
+
+            // Now consume the token since we've peeked
+            p.advance();
 
             match first_token.token {
                 Token::String(name) => {
@@ -799,18 +804,18 @@ impl Parser {
                     // 2. import alias "pkg"
                     // 3. import alias pkg
                     p.skip_whitespace();
-                    if let Some(token_with_span) = p.tokens.peek(0) {
+                    if let Some(token_with_span) = p.peek(0) {
                         match &token_with_span.token {
                             Token::String(pkg_name) => {
                                 // import alias "pkg"
                                 let pkg_name = pkg_name.clone();
-                                p.tokens.next(); // consume pkg_name
+                                p.advance(); // consume pkg_name
                                 Ok((Some(id), pkg_name))
                             }
                             Token::Ident(pkg_name) => {
                                 // import alias pkg
                                 let pkg_name = pkg_name.clone();
-                                p.tokens.next(); // consume pkg_name
+                                p.advance(); // consume pkg_name
                                 Ok((Some(id), pkg_name))
                             }
                             _ => {
@@ -832,27 +837,38 @@ impl Parser {
 
         // Check for grouped imports with parentheses
         if self.match_token(Token::LParen) {
+            eprintln!("DEBUG parse_import_statement: grouped import detected");
             loop {
                 self.skip_whitespace();
 
                 // Check for closing paren
                 if self.match_token(Token::RParen) {
+                    eprintln!("DEBUG parse_import_statement: found RParen, breaking");
                     self.match_token(Token::Semicolon);
                     break;
                 }
 
                 let (alias, name) = parse_package_item(self)?;
                 packages.push((alias, name));
+                eprintln!(
+                    "DEBUG parse_import_statement: parsed package, packages={:?}",
+                    packages
+                );
 
                 self.skip_whitespace();
                 self.match_token(Token::Semicolon);
             }
         } else {
+            eprintln!("DEBUG parse_import_statement: non-grouped import");
             let (alias, name) = parse_package_item(self)?;
             packages.push((alias, name));
             self.match_token(Token::Semicolon);
         }
 
+        eprintln!(
+            "DEBUG parse_import_statement: returning packages={:?}",
+            packages
+        );
         Ok(packages)
     }
 
@@ -997,6 +1013,10 @@ impl Parser {
 
     /// Parse function parameters
     fn parse_function_params(&mut self) -> Result<Vec<FnParam>, ParseError> {
+        eprintln!(
+            "DEBUG parse_function_params: start, current={:?}",
+            self.current()
+        );
         if !self.match_token(Token::LParen) {
             return Err(ParseError {
                 message: "Expected '('".to_string(),
@@ -1072,10 +1092,12 @@ impl Parser {
 
     /// Parse return type (required)
     fn parse_return_type(&mut self) -> Result<Type, ParseError> {
+        eprintln!("DEBUG parse_return_type: start");
         self.skip_whitespace();
 
         // Check for void return type
         if let Some(Token::Ident(id)) = self.current().cloned() {
+            eprintln!("DEBUG parse_return_type: found Ident, id={}", id);
             if id == "void" {
                 self.advance();
                 // Check for error suffix !
@@ -1105,11 +1127,23 @@ impl Parser {
         }
 
         // Try to parse a type (including optional types)
+        eprintln!(
+            "DEBUG parse_return_type: calling parse_type, current={:?}",
+            self.current()
+        );
         if let Ok(ty) = self.parse_type() {
+            eprintln!(
+                "DEBUG parse_return_type: parse_type returned Ok, current now={:?}",
+                self.current()
+            );
             return Ok(ty);
         }
 
         // Return type is required
+        eprintln!(
+            "DEBUG parse_return_type: failed, current={:?}",
+            self.current()
+        );
         Err(ParseError {
             message: "Expected return type (e.g., 'void', 'i64', etc.)".to_string(),
             location: self.current_token().map(|t| t.span.start),
@@ -1118,6 +1152,7 @@ impl Parser {
 
     /// Parse function body
     fn parse_function_body(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        eprintln!("DEBUG parse_function_body: start");
         if !self.match_token(Token::LBrace) {
             return Err(ParseError {
                 message: "Expected '{'".to_string(),
@@ -2004,6 +2039,10 @@ impl Parser {
 
     /// Parse an expression
     fn parse_expression(&mut self) -> Result<Expr, ParseError> {
+        eprintln!(
+            "DEBUG parse_expression: start, current={:?}",
+            self.current()
+        );
         self.set_state(ParserState::ParsingExpression);
 
         // Try to parse assignment first (lowest precedence)
@@ -2264,6 +2303,7 @@ impl Parser {
             let op = if self.match_token(Token::Not) {
                 UnaryOp::Not
             } else {
+                self.match_token(Token::Minus); // Actually consume the minus
                 UnaryOp::Neg
             };
 
@@ -2286,29 +2326,99 @@ impl Parser {
         loop {
             self.skip_whitespace();
 
+            // Check for type cast: Type(expr) - must be done before generic args
+            // Only if the current expression is an identifier that could be a type
+            if let Expr::Ident(type_name, _) = &expr {
+                // Peek next token for LParen for cast
+                if let Some(TokenWithSpan {
+                    token: Token::LParen,
+                    ..
+                }) = self.peek(0)
+                {
+                    // Check if this identifier is a valid primitive type
+                    if is_primitive_type_name(type_name) {
+                        self.advance(); // consume '('
+
+                        // Use parse_binary_expr instead of parse_expression to avoid
+                        // consuming tokens with lower precedence if needed, though
+                        // usually parse_expression is fine inside parentheses.
+                        let inner_expr = self.parse_expression()?;
+
+                        self.skip_whitespace();
+                        if !self.match_token(Token::RParen) {
+                            return Err(ParseError {
+                                message: "Expected ')' after cast expression".to_string(),
+                                location: self.current_token().map(|t| t.span.start),
+                            });
+                        }
+
+                        // Parse the target type from the identifier
+                        let target_type = self.parse_ident_as_type(type_name)?;
+
+                        expr = Expr::Cast {
+                            target_type,
+                            expr: Box::new(inner_expr),
+                            span: Span { start: 0, end: 0 },
+                        };
+                        continue;
+                    }
+                }
+            }
+
             // Generic arguments: <T1, T2, ...>
             // Only parse generic args if the left side is an identifier (function name)
             // This prevents interpreting comparison operators (<, >) as generic args
+            // We use a more careful check: only parse if next token looks like a type
             if let Token::Less = self.current().cloned().unwrap_or(Token::Eof) {
                 if matches!(expr, Expr::Ident(_, _)) {
-                    self.advance(); // consume '<'
-                    let mut args = Vec::new();
-                    loop {
-                        self.skip_whitespace();
-                        if self.match_token(Token::Greater) {
-                            break;
+                    // Check if the next token looks like the start of a type
+                    let next = self.peek(1).map(|t| t.token.clone());
+                    let is_type_start = matches!(
+                        next,
+                        Some(Token::Ident(_))
+                            | Some(Token::Question)
+                            | Some(Token::LBracket)
+                            | Some(Token::Fn)
+                            | Some(Token::Star)
+                            | Some(Token::LParen)
+                    );
+
+                    if is_type_start {
+                        // Save position so we can backtrack if parsing fails
+                        let start_pos = self.current_token().map(|t| t.span.start).unwrap_or(0);
+                        self.advance(); // consume '<'
+                        let mut args = Vec::new();
+                        let mut found_valid = true;
+                        loop {
+                            self.skip_whitespace();
+                            if self.match_token(Token::Greater) {
+                                break;
+                            }
+                            // Try to parse a type - if it fails, this might not be generic args
+                            match self.parse_type() {
+                                Ok(ty) => args.push(ty),
+                                Err(_) => {
+                                    // Failed to parse type, this might not be generic args
+                                    // Backtrack: put back the '<' we consumed
+                                    found_valid = false;
+                                    break;
+                                }
+                            }
+                            self.skip_whitespace();
+                            if self.match_token(Token::Comma) {
+                                continue;
+                            }
+                            if self.match_token(Token::Greater) {
+                                break;
+                            }
                         }
-                        args.push(self.parse_type()?);
-                        self.skip_whitespace();
-                        if self.match_token(Token::Comma) {
+
+                        if found_valid && !args.is_empty() {
+                            generic_args = args;
                             continue;
                         }
-                        if self.match_token(Token::Greater) {
-                            break;
-                        }
+                        // If not valid generic args, fall through to treat '<' as operator
                     }
-                    generic_args = args;
-                    continue;
                 }
             }
 
@@ -2761,6 +2871,12 @@ impl Parser {
 
     /// Parse a type
     fn parse_type(&mut self) -> Result<Type, ParseError> {
+        let current = self.current().cloned();
+        let state = self.state.clone();
+        eprintln!(
+            "DEBUG parse_type: start, current={:?}, state={:?}",
+            current, state
+        );
         self.set_state(ParserState::ParsingType);
 
         self.skip_whitespace();
@@ -3496,6 +3612,46 @@ impl Parser {
             }
         }
         false
+    }
+
+    /// Parse an identifier as a type (for cast expressions)
+    /// e.g., "i32" -> Type::I32, "f64" -> Type::F64, etc.
+    fn parse_ident_as_type(&self, name: &str) -> Result<Type, ParseError> {
+        // Check for basic types
+        let ty = match name {
+            "i8" => Type::I8,
+            "i16" => Type::I16,
+            "i32" => Type::I32,
+            "i64" => Type::I64,
+            "u8" => Type::U8,
+            "u16" => Type::U16,
+            "u32" => Type::U32,
+            "u64" => Type::U64,
+            "f32" => Type::F32,
+            "f64" => Type::F64,
+            "bool" => Type::Bool,
+            "void" => Type::Void,
+            "rawptr" => Type::RawPtr,
+            "self" => Type::SelfType,
+            _ => {
+                // Check if it's a generic param
+                if self.is_generic_param(name) {
+                    Type::GenericParam(name.to_string())
+                } else {
+                    // Treat as custom type
+                    Type::Custom {
+                        name: name.to_string(),
+                        generic_args: Vec::new(),
+                        is_exported: false,
+                    }
+                }
+            }
+        };
+
+        // Check for generic arguments (e.g., Option<i32>)
+        // Note: We can't use self.match_token here because we need to look ahead
+        // For simplicity, let's just return the base type for now
+        Ok(ty)
     }
 
     /// Parse generic parameters (<T, U, ...>)
