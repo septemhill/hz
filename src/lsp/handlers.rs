@@ -13,10 +13,10 @@ pub fn analyze_document(content: &str) -> Vec<serde_json::Value> {
 
     // Try to parse the document
     match crate::parser::parse(content) {
-        Ok(program) => {
+        Ok(mut program) => {
             // Run semantic analysis
             let mut analyzer = crate::sema::SemanticAnalyzer::new();
-            if let Err(error) = analyzer.analyze(&program) {
+            if let Err(error) = analyzer.analyze(&mut program) {
                 // Convert analysis error to LSP diagnostic
                 let message = format!("{:?}", error);
 

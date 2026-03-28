@@ -12,7 +12,7 @@ pub fn dump_ast(
     _cli_std_path: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn Error>> {
     // Parse source code
-    let program = parser::parse(source)?;
+    let mut program = parser::parse(source)?;
 
     // Initialize std library
     let mut stdlib = crate::stdlib::StdLib::new();
@@ -27,7 +27,7 @@ pub fn dump_ast(
 
     // Run semantic analysis to get typed AST
     let mut analyzer = SemanticAnalyzer::new();
-    match analyzer.analyze_with_stdlib(&program, Some(&stdlib)) {
+    match analyzer.analyze_with_stdlib(&mut program, Some(&stdlib)) {
         Ok(_) => {
             if let Some(typed_program) = analyzer.get_typed_program() {
                 typed_program.dump(0);

@@ -25,13 +25,13 @@ pub fn dump_hir(
 
     // Parse source code
     println!("Parsing source code...");
-    let program = parser::parse(source)?;
+    let mut program = parser::parse(source)?;
     println!("    Found {} function(s)", program.functions.len());
 
     // Semantic Analysis
     println!("Semantic Analysis...");
     let mut analyzer = sema::SemanticAnalyzer::new();
-    analyzer.analyze(&program)?;
+    analyzer.analyze(&mut program)?;
 
     // Lower to HIR
     println!("Lowering to HIR...");

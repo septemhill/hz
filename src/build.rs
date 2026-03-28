@@ -162,7 +162,7 @@ impl BuildSystem {
         }
 
         // 1. Parse
-        let program = parser::parse(&source)?;
+        let mut program = parser::parse(&source)?;
 
         // Load imports into stdlib
         for (_, package_name) in &program.imports {
@@ -172,7 +172,7 @@ impl BuildSystem {
         // 2. Sema
         let mut analyzer = sema::SemanticAnalyzer::new();
         analyzer
-            .analyze_with_stdlib(&program, Some(&stdlib))
+            .analyze_with_stdlib(&mut program, Some(&stdlib))
             .map_err(|e| {
                 let file_name = unit.path.to_str().unwrap_or("unknown");
                 // Calculate line number from span offset

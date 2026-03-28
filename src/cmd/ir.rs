@@ -22,7 +22,7 @@ pub fn generate_ir(
 
     // Parse source code
     println!("Parsing source code...");
-    let program = parser::parse(source)?;
+    let mut program = parser::parse(source)?;
 
     // Load imported packages
     println!("Loading imported packages...");
@@ -36,7 +36,7 @@ pub fn generate_ir(
 
     // Run semantic analysis to collect definitions
     let mut analyzer = crate::sema::SemanticAnalyzer::new();
-    analyzer.analyze_with_stdlib(&program, Some(&stdlib))?;
+    analyzer.analyze_with_stdlib(&mut program, Some(&stdlib))?;
 
     // Generate LLVM IR
     let context = inkwell::context::Context::create();

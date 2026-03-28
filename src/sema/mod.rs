@@ -7,6 +7,7 @@ pub mod infer;
 pub mod mutability;
 pub mod resolver;
 pub mod symbol;
+pub mod treeshaker;
 pub mod typelist;
 pub mod types;
 
@@ -25,6 +26,8 @@ pub use mutability::MutabilityAnalyzer;
 pub use resolver::SymbolResolver;
 #[allow(unused_imports)]
 pub use symbol::{Scope, Symbol, SymbolTable};
+#[allow(unused)]
+pub use treeshaker::{TreeShaker, TreeShakerStats, treeshake};
 pub use types::TypeAnalyzer;
 
 // ============================================================================
@@ -70,7 +73,7 @@ impl SemanticAnalyzer {
     /// Analyze with optional stdlib packages for import resolution
     pub fn analyze_with_stdlib(
         &mut self,
-        program: &crate::ast::Program,
+        program: &mut crate::ast::Program,
         stdlib: Option<&crate::stdlib::StdLib>,
     ) -> AnalysisResult<()> {
         // If stdlib is provided, pre-populate symbol table with imported functions
@@ -325,11 +328,23 @@ impl SemanticAnalyzer {
         // Store final symbol table
         self.symbol_table = mutability_analyzer.get_symbol_table().clone();
 
+        // Pass 6: Tree-shaking - remove dead code
+        // We need a mutable reference for treeshaking, but the function signature uses &Program
+        // So we use a separate scope with explicit mutable borrow
+        {
+            let final_symbol_table = self.symbol_table.clone();
+            let stats = crate::sema::treeshake(program, final_symbol_table);
+            eprintln!(
+                "TreeShaker: reachable functions={}, structs={}, enums={}",
+                stats.reachable_functions, stats.reachable_structs, stats.reachable_enums
+            );
+        }
+
         Ok(())
     }
 
     /// Analyze program without stdlib (for backward compatibility)
-    pub fn analyze(&mut self, program: &crate::ast::Program) -> AnalysisResult<()> {
+    pub fn analyze(&mut self, program: &mut crate::ast::Program) -> AnalysisResult<()> {
         self.analyze_with_stdlib(program, None)
     }
 

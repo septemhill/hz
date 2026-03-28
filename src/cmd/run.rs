@@ -30,7 +30,7 @@ pub fn run_jit(
 
     // Parse source code
     println!("Parsing source code...");
-    let program = parser::parse(source)?;
+    let mut program = parser::parse(source)?;
 
     // Load imported packages
     println!("Loading imported packages...");
@@ -45,7 +45,7 @@ pub fn run_jit(
     // Semantic Analysis
     println!("Semantic Analysis...");
     let mut analyzer = sema::SemanticAnalyzer::new();
-    analyzer.analyze_with_stdlib(&program, Some(&stdlib))?;
+    analyzer.analyze_with_stdlib(&mut program, Some(&stdlib))?;
 
     // Generate LLVM IR
     let context = inkwell::context::Context::create();

@@ -13,10 +13,10 @@ fn get_ir_from_source(
     source: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let stdlib = StdLib::new();
-    let program = parser::parse(source)?;
+    let mut program = parser::parse(source)?;
 
     let mut analyzer = SemanticAnalyzer::new();
-    analyzer.analyze_with_stdlib(&program, Some(&stdlib))?;
+    analyzer.analyze_with_stdlib(&mut program, Some(&stdlib))?;
 
     let typed_program = analyzer
         .get_typed_program()

@@ -11,12 +11,12 @@ use crate::sema::{AnalysisError, SemanticAnalyzer};
 fn analyze_source(source: &str) -> Result<(), AnalysisError> {
     let tokens = lexer_iter(source);
     let mut parser = Parser::new(tokens);
-    let program = parser
+    let mut program = parser
         .parse_program()
         .map_err(|e| AnalysisError::new(&e.to_string()))?;
 
     let mut analyzer = SemanticAnalyzer::new();
-    analyzer.analyze(&program)
+    analyzer.analyze(&mut program)
 }
 
 /// Helper function that returns the symbol table after analysis
@@ -25,12 +25,12 @@ fn analyze_source_with_symbols(
 ) -> Result<crate::sema::symbol::SymbolTable, AnalysisError> {
     let tokens = lexer_iter(source);
     let mut parser = Parser::new(tokens);
-    let program = parser
+    let mut program = parser
         .parse_program()
         .map_err(|e| AnalysisError::new(&e.to_string()))?;
 
     let mut analyzer = SemanticAnalyzer::new();
-    analyzer.analyze(&program)?;
+    analyzer.analyze(&mut program)?;
 
     Ok(analyzer.get_symbol_table().clone())
 }
@@ -39,12 +39,12 @@ fn analyze_source_with_symbols(
 fn analyze_source_typed(source: &str) -> Result<crate::sema::TypedProgram, AnalysisError> {
     let tokens = lexer_iter(source);
     let mut parser = Parser::new(tokens);
-    let program = parser
+    let mut program = parser
         .parse_program()
         .map_err(|e| AnalysisError::new(&e.to_string()))?;
 
     let mut analyzer = SemanticAnalyzer::new();
-    analyzer.analyze(&program)?;
+    analyzer.analyze(&mut program)?;
 
     analyzer
         .get_typed_program()
