@@ -1,6 +1,7 @@
 use crate::ast::Type;
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::SymbolTable;
+use std::collections::HashMap;
 
 // List of builtin functions that cannot be overridden
 const BUILTIN_FUNCTIONS: &[&str] = &["is_null", "is_not_null"];
@@ -25,9 +26,11 @@ impl GlobalDefinitionsAnalyzer {
     pub fn analyze(&mut self, program: &crate::ast::Program) -> AnalysisResult<SymbolTable> {
         self.collect_functions(&program.functions)?;
         self.collect_external_functions(&program.external_functions)?;
+        self.collect_interfaces(&program.interfaces)?;
         self.collect_structs(&program.structs)?;
         self.collect_enums(&program.enums)?;
         self.collect_errors(&program.errors)?;
+        self.validate_interface_impls(program)?;
         Ok(self.symbol_table.clone())
     }
 
@@ -150,6 +153,32 @@ impl GlobalDefinitionsAnalyzer {
         Ok(())
     }
 
+    fn collect_interfaces(
+        &mut self,
+        interfaces: &[crate::ast::InterfaceDef],
+    ) -> AnalysisResult<()> {
+        for interface in interfaces {
+            if self.symbol_table.resolve(&interface.name).is_some() {
+                return Err(AnalysisError::new_with_span(
+                    &format!("Duplicate declaration of interface '{}'", interface.name),
+                    &interface.span,
+                )
+                .with_module("global"));
+            }
+            self.symbol_table.define(
+                interface.name.clone(),
+                Type::Custom {
+                    name: interface.name.clone(),
+                    generic_args: vec![],
+                    is_exported: interface.visibility.is_public(),
+                },
+                interface.visibility,
+                true,
+            );
+        }
+        Ok(())
+    }
+
     fn collect_enums(&mut self, enums: &[crate::ast::EnumDef]) -> AnalysisResult<()> {
         for e in enums {
             if self.symbol_table.resolve(&e.name).is_some() {
@@ -239,7 +268,107 @@ impl GlobalDefinitionsAnalyzer {
         Ok(())
     }
 
+    fn validate_interface_impls(&self, program: &crate::ast::Program) -> AnalysisResult<()> {
+        let interfaces: HashMap<String, &crate::ast::InterfaceDef> = program
+            .interfaces
+            .iter()
+            .map(|interface| (interface.name.clone(), interface))
+            .collect();
+
+        for strukt in &program.structs {
+            for interface_impl in &strukt.interface_impls {
+                let interface = interfaces.get(&interface_impl.interface_name).ok_or_else(|| {
+                    AnalysisError::new_with_span(
+                        &format!(
+                            "Unknown interface '{}' in impl block for struct '{}'",
+                            interface_impl.interface_name, strukt.name
+                        ),
+                        &interface_impl.span,
+                    )
+                    .with_module("global")
+                })?;
+
+                let mut missing_methods = Vec::new();
+                for required_method in &interface.methods {
+                    let impl_method = interface_impl
+                        .methods
+                        .iter()
+                        .find(|method| method.name == required_method.name);
+
+                    match impl_method {
+                        Some(method) => {
+                            if !interface_method_compatible(required_method, method) {
+                                return Err(AnalysisError::new_with_span(
+                                    &format!(
+                                        "Method '{}.{}' does not match interface signature",
+                                        strukt.name, required_method.name
+                                    ),
+                                    &method.span,
+                                )
+                                .with_module("global"));
+                            }
+                        }
+                        None => missing_methods.push(required_method.name.clone()),
+                    }
+                }
+
+                if !missing_methods.is_empty() {
+                    return Err(AnalysisError::new_with_span(
+                        &format!(
+                            "Struct '{}' does not fully implement interface '{}'. Missing methods: {}",
+                            strukt.name,
+                            interface.name,
+                            missing_methods.join(", ")
+                        ),
+                        &interface_impl.span,
+                    )
+                    .with_module("global"));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn get_symbol_table(&self) -> &SymbolTable {
         &self.symbol_table
+    }
+}
+
+fn interface_method_compatible(
+    interface_method: &crate::ast::FnDef,
+    impl_method: &crate::ast::FnDef,
+) -> bool {
+    if interface_method.return_ty != impl_method.return_ty {
+        return false;
+    }
+
+    let impl_params = if impl_method
+        .params
+        .first()
+        .is_some_and(|param| is_self_receiver_type(&param.ty))
+    {
+        &impl_method.params[1..]
+    } else {
+        impl_method.params.as_slice()
+    };
+
+    if interface_method.params.len() != impl_params.len() {
+        return false;
+    }
+
+    interface_method
+        .params
+        .iter()
+        .zip(impl_params.iter())
+        .all(|(required, actual)| required.ty == actual.ty)
+}
+
+fn is_self_receiver_type(ty: &Type) -> bool {
+    match ty {
+        Type::SelfType => true,
+        Type::Custom { name, .. } => name == "Self",
+        Type::Pointer(inner) => is_self_receiver_type(inner),
+        _ => false,
     }
 }

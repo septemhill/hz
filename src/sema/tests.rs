@@ -753,3 +753,68 @@ fn main() void {
         result
     );
 }
+
+#[test]
+fn test_interface_impl_missing_method_error() {
+    let source = r#"
+interface Service {
+    fn do_something() void;
+    fn do_something_else() void;
+}
+
+struct Compose<T> {
+    inner: T,
+
+    impl Service {
+        fn do_something(self: Self) void {
+            return;
+        }
+    }
+}
+
+fn main() void {
+    return;
+}
+"#;
+    let result = analyze_source(source);
+    assert!(result.is_err(), "Expected missing interface method error");
+    let err = result.unwrap_err();
+    assert!(
+        err.message.contains("Missing methods: do_something_else"),
+        "Error should list missing interface methods: {}",
+        err
+    );
+}
+
+#[test]
+fn test_generic_interface_constraint_method_call() {
+    let source = r#"
+interface Service {
+    fn do_something() void;
+}
+
+struct Compose<T> {
+    inner: T,
+
+    impl Service {
+        fn do_something(self: Self) void {
+            return;
+        }
+    }
+}
+
+fn call_service<T: Service>(v: T) void {
+    v.do_something();
+}
+
+fn main() void {
+    return;
+}
+"#;
+    let result = analyze_source(source);
+    assert!(
+        result.is_ok(),
+        "Expected generic interface-constrained method call to analyze: {:?}",
+        result
+    );
+}

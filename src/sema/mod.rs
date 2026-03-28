@@ -39,6 +39,7 @@ pub struct SemanticAnalyzer {
     pub symbol_table: SymbolTable,
     pub typed_program: Option<TypedProgram>,
     pub structs: HashMap<String, crate::ast::StructDef>,
+    pub interfaces: HashMap<String, crate::ast::InterfaceDef>,
     pub enums: HashMap<String, crate::ast::EnumDef>,
     pub errors: HashMap<String, crate::ast::ErrorDef>,
     pub functions: HashMap<String, crate::ast::FnDef>,
@@ -51,6 +52,7 @@ impl SemanticAnalyzer {
             symbol_table: SymbolTable::new(),
             typed_program: None,
             structs: HashMap::new(),
+            interfaces: HashMap::new(),
             enums: HashMap::new(),
             errors: HashMap::new(),
             functions: HashMap::new(),
@@ -63,6 +65,7 @@ impl SemanticAnalyzer {
             symbol_table: SymbolTable::new(),
             typed_program: None,
             structs: HashMap::new(),
+            interfaces: HashMap::new(),
             enums: HashMap::new(),
             errors: HashMap::new(),
             functions: HashMap::new(),
@@ -251,6 +254,9 @@ impl SemanticAnalyzer {
                 self.functions.insert(format!("{}_{}", s.name, m.name), m);
             }
         }
+        for i in &program.interfaces {
+            self.interfaces.insert(i.name.clone(), i.clone());
+        }
         for e in &program.enums {
             self.enums.insert(e.name.clone(), e.clone());
             // Register methods in global functions map for monomorphization
@@ -295,6 +301,7 @@ impl SemanticAnalyzer {
             program,
             symbol_table.clone(),
             self.structs.clone(),
+            self.interfaces.clone(),
             self.enums.clone(),
             self.errors.clone(),
             self.functions.clone(),

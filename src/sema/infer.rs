@@ -352,6 +352,8 @@ pub struct TypeInferrer {
     symbol_table: SymbolTable,
     /// Map of struct name to its definition
     structs: HashMap<String, crate::ast::StructDef>,
+    /// Map of interface name to its definition
+    interfaces: HashMap<String, crate::ast::InterfaceDef>,
     /// Map of enum name to its definition
     enums: HashMap<String, crate::ast::EnumDef>,
     /// Map of error name to its definition
@@ -378,6 +380,8 @@ pub struct TypeInferrer {
     new_ast_structs: Vec<crate::ast::StructDef>,
     /// Track imported packages to validate package access
     imports: Vec<(Option<String>, String)>,
+    /// Active interface constraints for the function currently being inferred
+    current_generic_constraints: HashMap<String, Vec<String>>,
 }
 
 impl TypeInferrer {
@@ -385,6 +389,7 @@ impl TypeInferrer {
     pub fn new(
         symbol_table: SymbolTable,
         structs: HashMap<String, crate::ast::StructDef>,
+        interfaces: HashMap<String, crate::ast::InterfaceDef>,
         enums: HashMap<String, crate::ast::EnumDef>,
         errors: HashMap<String, crate::ast::ErrorDef>,
         functions: HashMap<String, crate::ast::FnDef>,
@@ -393,6 +398,7 @@ impl TypeInferrer {
         TypeInferrer {
             symbol_table,
             structs,
+            interfaces,
             enums,
             errors,
             functions,
@@ -405,7 +411,8 @@ impl TypeInferrer {
             new_structs: Vec::new(),
             new_ast_functions: Vec::new(),
             new_ast_structs: Vec::new(),
-            imports: Vec::new(),
+            imports,
+            current_generic_constraints: HashMap::new(),
         }
     }
 
@@ -1201,6 +1208,7 @@ impl TypeInferrer {
             return_ty: self.substitute_type(&f_def.return_ty, &mappings),
             body: f_def.body.clone(),
             generic_params: Vec::new(),
+            generic_constraints: Vec::new(),
             span: f_def.span,
         };
 
@@ -1361,6 +1369,7 @@ impl TypeInferrer {
                     return_ty: self.substitute_type(&m.return_ty, &mappings),
                     body: m.body.clone(),
                     generic_params: Vec::new(),
+                    generic_constraints: Vec::new(),
                     span: m.span,
                 }
             })
@@ -1377,6 +1386,7 @@ impl TypeInferrer {
                 })
                 .collect(),
             methods: instantiated_methods,
+            interface_impls: s_def.interface_impls.clone(),
             visibility: s_def.visibility,
             generic_params: Vec::new(),
             span: s_def.span,
@@ -1400,6 +1410,14 @@ impl TypeInferrer {
     fn infer_fn(&mut self, f: &FnDef) -> AnalysisResult<TypedFnDef> {
         // Enter function scope and add parameters
         self.symbol_table.enter_scope();
+        let previous_generic_constraints = self.current_generic_constraints.clone();
+        self.current_generic_constraints.clear();
+        for (param, interface) in &f.generic_constraints {
+            self.current_generic_constraints
+                .entry(param.clone())
+                .or_default()
+                .push(interface.clone());
+        }
 
         let mappings = self.type_mappings.clone();
         eprintln!(
@@ -1435,6 +1453,7 @@ impl TypeInferrer {
 
         // Restore previous return type
         self.expected_return_type = previous_return_type;
+        self.current_generic_constraints = previous_generic_constraints;
 
         self.symbol_table.exit_scope();
 
@@ -2407,6 +2426,32 @@ impl TypeInferrer {
                 // 3. Resolve as a method call or field function
                 if let Some(ns) = namespace {
                     if let Some(var_symbol) = self.symbol_table.resolve(ns) {
+                        if let Type::GenericParam(param_name) = &var_symbol.ty {
+                            if let Some(interface_names) =
+                                self.current_generic_constraints.get(param_name)
+                            {
+                                for interface_name in interface_names {
+                                    if let Some(interface_def) = self.interfaces.get(interface_name)
+                                    {
+                                        if let Some(method) =
+                                            interface_def.methods.iter().find(|m| &m.name == name)
+                                        {
+                                            return Ok(TypedExpr {
+                                                expr: TypedExprKind::Call {
+                                                    name: name.clone(),
+                                                    namespace: namespace.clone(),
+                                                    args: typed_args,
+                                                    target_ty: Some(var_symbol.ty.clone()),
+                                                },
+                                                ty: method.return_ty.clone(),
+                                                span: *span,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         if let Some(struct_full_name) = custom_type_name(&var_symbol.ty) {
                             if let Some(struct_def) = self.structs.get(struct_full_name) {
                                 // 1. Check for methods
@@ -2689,6 +2734,28 @@ impl TypeInferrer {
                 }
 
                 let typed_object = self.infer_expr(object)?;
+
+                if let Type::GenericParam(param_name) = &typed_object.ty {
+                    if let Some(interface_names) = self.current_generic_constraints.get(param_name) {
+                        for interface_name in interface_names {
+                            if let Some(interface_def) = self.interfaces.get(interface_name) {
+                                if let Some(method) =
+                                    interface_def.methods.iter().find(|m| &m.name == member)
+                                {
+                                    return Ok(TypedExpr {
+                                        expr: TypedExprKind::MemberAccess {
+                                            object: Box::new(typed_object),
+                                            member: member.clone(),
+                                            kind: crate::ast::MemberAccessKind::StructMethod,
+                                        },
+                                        ty: method.return_ty.clone(),
+                                        span: *span,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
 
                 let (kind, ty) = if let Some(name) = custom_type_name(&typed_object.ty) {
                     let struct_def_opt = self.structs.get(name).cloned();
@@ -3403,6 +3470,7 @@ pub fn infer_types(
     program: &Program,
     symbol_table: SymbolTable,
     structs: HashMap<String, crate::ast::StructDef>,
+    interfaces: HashMap<String, crate::ast::InterfaceDef>,
     enums: HashMap<String, crate::ast::EnumDef>,
     errors: HashMap<String, crate::ast::ErrorDef>,
     functions: HashMap<String, crate::ast::FnDef>,
@@ -3410,6 +3478,7 @@ pub fn infer_types(
     let mut inferrer = TypeInferrer::new(
         symbol_table,
         structs,
+        interfaces,
         enums,
         errors,
         functions,

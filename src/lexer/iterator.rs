@@ -187,6 +187,8 @@ impl LexerIterator {
             "return" => Token::Return,
             "import" => Token::Import,
             "struct" => Token::Struct,
+            "interface" => Token::Interface,
+            "impl" => Token::Impl,
             "enum" => Token::Enum,
             "if" => Token::If,
             "else" => Token::Else,

@@ -658,6 +658,7 @@ impl Parser {
         let mut functions = Vec::new();
         let mut external_functions = Vec::new();
         let mut structs = Vec::new();
+        let mut interfaces = Vec::new();
         let mut enums = Vec::new();
         let mut errors = Vec::new();
         let mut imports = Vec::new();
@@ -727,6 +728,14 @@ impl Parser {
                     }
                     self.set_state(ParserState::Initial);
                 }
+                Some(Token::Interface) => {
+                    self.set_state(ParserState::ParsingStruct);
+                    match self.parse_interface() {
+                        Ok(i) => interfaces.push(i),
+                        Err(e) => return Err(e),
+                    }
+                    self.set_state(ParserState::Initial);
+                }
                 Some(Token::Enum) => {
                     self.set_state(ParserState::ParsingEnum);
                     match self.parse_enum() {
@@ -769,6 +778,7 @@ impl Parser {
             functions,
             external_functions,
             structs,
+            interfaces,
             enums,
             errors,
             imports,
@@ -911,7 +921,7 @@ impl Parser {
         };
 
         // Parse generic parameters
-        let generic_params = self.parse_generic_params()?;
+        let (generic_params, generic_constraints) = self.parse_generic_params_and_constraints()?;
         if !generic_params.is_empty() {
             self.generic_params.push(generic_params.clone());
         }
@@ -944,6 +954,7 @@ impl Parser {
             return_ty,
             body,
             generic_params,
+            generic_constraints,
             span,
         })
     }
@@ -3171,6 +3182,7 @@ impl Parser {
 
         let mut fields = Vec::new();
         let mut methods = Vec::new();
+        let mut interface_impls = Vec::new();
 
         loop {
             self.skip_whitespace();
@@ -3197,6 +3209,18 @@ impl Parser {
                     continue;
                 }
                 // Otherwise, continue to parse the next field
+            }
+
+            if self
+                .current()
+                .map(|t| matches!(t, Token::Impl))
+                .unwrap_or(false)
+            {
+                let interface_impl = self.parse_interface_impl()?;
+                methods.extend(interface_impl.methods.clone());
+                interface_impls.push(interface_impl);
+                self.match_token(Token::Comma);
+                continue;
             }
 
             // Check for method (fn keyword) - only if we didn't just handle a trailing comma
@@ -3300,8 +3324,161 @@ impl Parser {
             name,
             fields,
             methods,
+            interface_impls,
             visibility,
             generic_params,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    fn parse_interface(&mut self) -> Result<InterfaceDef, ParseError> {
+        let visibility = if self.match_token(Token::Pub) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        if !self.match_token(Token::Interface) {
+            return Err(ParseError {
+                message: "Expected 'interface' keyword".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        let name = if let Token::Ident(n) = self.current().cloned().ok_or_else(|| ParseError {
+            message: "Expected interface name".to_string(),
+            location: None,
+        })? {
+            let n = n.clone();
+            self.advance();
+            n
+        } else {
+            return Err(ParseError {
+                message: "Expected interface name".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        };
+
+        if !self.match_token(Token::LBrace) {
+            return Err(ParseError {
+                message: "Expected '{'".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        let mut methods = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.match_token(Token::RBrace) {
+                break;
+            }
+            methods.push(self.parse_interface_method_signature()?);
+        }
+
+        self.match_token(Token::Semicolon);
+
+        Ok(InterfaceDef {
+            name,
+            methods,
+            visibility,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    fn parse_interface_method_signature(&mut self) -> Result<FnDef, ParseError> {
+        let visibility = if self.match_token(Token::Pub) {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        };
+
+        if !self.match_token(Token::Fn) {
+            return Err(ParseError {
+                message: "Expected 'fn' keyword".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        let name = if let Token::Ident(name) =
+            self.current().cloned().ok_or_else(|| ParseError {
+                message: "Expected function name".to_string(),
+                location: None,
+            })? {
+            let name = name.clone();
+            self.advance();
+            name
+        } else {
+            return Err(ParseError {
+                message: "Expected function name".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        };
+
+        let (generic_params, generic_constraints) = self.parse_generic_params_and_constraints()?;
+        if !generic_params.is_empty() {
+            self.generic_params.push(generic_params.clone());
+        }
+        let params = self.parse_function_params()?;
+        let return_ty = self.parse_return_type()?;
+        self.match_token(Token::Semicolon);
+        if !generic_params.is_empty() {
+            self.generic_params.pop();
+        }
+
+        Ok(FnDef {
+            name,
+            visibility,
+            params,
+            return_ty,
+            body: Vec::new(),
+            generic_params,
+            generic_constraints,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    fn parse_interface_impl(&mut self) -> Result<InterfaceImpl, ParseError> {
+        if !self.match_token(Token::Impl) {
+            return Err(ParseError {
+                message: "Expected 'impl' keyword".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        let interface_name = if let Token::Ident(n) = self.current().cloned().ok_or_else(|| ParseError {
+            message: "Expected interface name after 'impl'".to_string(),
+            location: None,
+        })? {
+            let n = n.clone();
+            self.advance();
+            n
+        } else {
+            return Err(ParseError {
+                message: "Expected interface name after 'impl'".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        };
+
+        if !self.match_token(Token::LBrace) {
+            return Err(ParseError {
+                message: "Expected '{' after interface name".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        let mut methods = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.match_token(Token::RBrace) {
+                break;
+            }
+            methods.push(self.parse_function()?);
+            self.match_token(Token::Comma);
+        }
+
+        Ok(InterfaceImpl {
+            interface_name,
+            methods,
             span: Span { start: 0, end: 0 },
         })
     }
@@ -3662,11 +3839,20 @@ impl Parser {
 
     /// Parse generic parameters (<T, U, ...>)
     fn parse_generic_params(&mut self) -> Result<Vec<String>, ParseError> {
+        let (params, _) = self.parse_generic_params_and_constraints()?;
+        Ok(params)
+    }
+
+    /// Parse generic parameters with optional interface constraints (<T: Service, U>)
+    fn parse_generic_params_and_constraints(
+        &mut self,
+    ) -> Result<(Vec<String>, Vec<(String, String)>), ParseError> {
         if !self.match_token(Token::Less) {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
 
         let mut params = Vec::new();
+        let mut constraints = Vec::new();
 
         loop {
             self.skip_whitespace();
@@ -3679,8 +3865,27 @@ impl Parser {
                 message: "Expected generic parameter".to_string(),
                 location: None,
             })? {
-                params.push(n);
+                let param_name = n;
+                params.push(param_name.clone());
                 self.advance();
+
+                self.skip_whitespace();
+                if self.match_token(Token::Colon) {
+                    self.skip_whitespace();
+                    if let Token::Ident(interface_name) =
+                        self.current().cloned().ok_or_else(|| ParseError {
+                            message: "Expected interface name in generic constraint".to_string(),
+                            location: None,
+                        })? {
+                        constraints.push((param_name, interface_name));
+                        self.advance();
+                    } else {
+                        return Err(ParseError {
+                            message: "Expected interface name in generic constraint".to_string(),
+                            location: self.current_token().map(|t| t.span.start),
+                        });
+                    }
+                }
             }
 
             self.skip_whitespace();
@@ -3694,7 +3899,7 @@ impl Parser {
             }
         }
 
-        Ok(params)
+        Ok((params, constraints))
     }
 
     /// Parse generic type arguments: <T1, T2, ...>

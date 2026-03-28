@@ -390,9 +390,27 @@ pub struct StructDef {
     pub name: String,
     pub fields: Vec<StructField>,
     pub methods: Vec<FnDef>,
+    pub interface_impls: Vec<InterfaceImpl>,
     pub visibility: Visibility,
     /// Generic type parameters (e.g., T, U)
     pub generic_params: Vec<String>,
+    pub span: Span,
+}
+
+/// Interface definition
+#[derive(Debug, Clone)]
+pub struct InterfaceDef {
+    pub name: String,
+    pub methods: Vec<FnDef>,
+    pub visibility: Visibility,
+    pub span: Span,
+}
+
+/// Interface implementation block inside a struct
+#[derive(Debug, Clone)]
+pub struct InterfaceImpl {
+    pub interface_name: String,
+    pub methods: Vec<FnDef>,
     pub span: Span,
 }
 
@@ -632,6 +650,8 @@ pub struct FnDef {
     pub body: Vec<Stmt>,
     /// Generic type parameters (e.g., T, U)
     pub generic_params: Vec<String>,
+    /// Interface constraints for generic params (e.g., T: Service)
+    pub generic_constraints: Vec<(String, String)>,
     pub span: Span,
 }
 
@@ -658,6 +678,7 @@ pub struct Program {
     pub functions: Vec<FnDef>,
     pub external_functions: Vec<ExternalFnDef>,
     pub structs: Vec<StructDef>,
+    pub interfaces: Vec<InterfaceDef>,
     pub enums: Vec<EnumDef>,
     pub errors: Vec<ErrorDef>,
     pub imports: Vec<(Option<String>, String)>, // (alias, package_name)
@@ -709,6 +730,9 @@ impl AstDump for Program {
         for s in &self.structs {
             s.dump(indent + 1);
         }
+        for i in &self.interfaces {
+            i.dump(indent + 1);
+        }
         for e in &self.enums {
             e.dump(indent + 1);
         }
@@ -737,9 +761,21 @@ impl AstDump for FnDef {
         } else {
             format!("<{}>", self.generic_params.join(", "))
         };
+        let constraints = if self.generic_constraints.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " where {}",
+                self.generic_constraints
+                    .iter()
+                    .map(|(param, interface)| format!("{}: {}", param, interface))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
         println!(
-            "FnDef: {}{}{} -> {}",
-            vis, self.name, generics, self.return_ty
+            "FnDef: {}{}{}{} -> {}",
+            vis, self.name, generics, constraints, self.return_ty
         );
 
         if !self.params.is_empty() {
@@ -803,6 +839,28 @@ impl AstDump for StructDef {
 
         for m in &self.methods {
             m.dump(indent + 1);
+        }
+        for interface_impl in &self.interface_impls {
+            print_indent(indent + 1);
+            println!("Impl {}", interface_impl.interface_name);
+            for method in &interface_impl.methods {
+                method.dump(indent + 2);
+            }
+        }
+    }
+}
+
+impl AstDump for InterfaceDef {
+    fn dump(&self, indent: usize) {
+        print_indent(indent);
+        let vis = if self.visibility.is_public() {
+            "pub "
+        } else {
+            ""
+        };
+        println!("InterfaceDef: {}{}", vis, self.name);
+        for method in &self.methods {
+            method.dump(indent + 1);
         }
     }
 }
