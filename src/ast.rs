@@ -638,6 +638,8 @@ pub enum Stmt {
     DeferBang { stmt: Box<Stmt>, span: Span },
     /// Break statement (exits a loop)
     Break { label: Option<String>, span: Span },
+    /// Continue statement (skips to next iteration)
+    Continue { label: Option<String>, span: Span },
 }
 
 /// Function definition AST node
@@ -1089,6 +1091,14 @@ impl AstDump for Stmt {
                     "".to_string()
                 };
                 println!("Stmt::Break{}", lbl);
+            }
+            Stmt::Continue { label, .. } => {
+                let lbl = if let Some(l) = label {
+                    format!(" {}", l)
+                } else {
+                    "".to_string()
+                };
+                println!("Stmt::Continue{}", lbl);
             }
         }
     }

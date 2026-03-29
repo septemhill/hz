@@ -154,6 +154,7 @@ impl TypeAnalyzer {
             crate::ast::Stmt::Assign { value, .. } => self.expr_find_try(value),
             crate::ast::Stmt::Import { .. } => None,
             crate::ast::Stmt::Break { .. } => None,
+            crate::ast::Stmt::Continue { .. } => None,
         }
     }
 
@@ -614,6 +615,7 @@ impl TypeAnalyzer {
                 Ok(())
             }
             crate::ast::Stmt::Break { .. } => Ok(()),
+            crate::ast::Stmt::Continue { .. } => Ok(()),
         }
     }
 

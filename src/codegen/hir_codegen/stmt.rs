@@ -301,6 +301,45 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 Ok(())
             }
+            hir::HirStmt::Continue { label, span } => {
+                // For labeled continues, search through all loop levels
+                // For unlabeled continues, use the innermost loop
+                let mut target_block = None;
+
+                // Iterate through all loop levels (from innermost to outermost)
+                for loop_stack in self.loop_continue_blocks.iter().rev() {
+                    // Find the appropriate continue block in this loop level
+                    if let Some(block) = loop_stack.iter().find_map(|(block, l)| {
+                        if l.as_ref() == label.as_ref() {
+                            Some(*block)
+                        } else if label.is_none() {
+                            // If no label specified, use this loop
+                            Some(*block)
+                        } else {
+                            None
+                        }
+                    }) {
+                        target_block = Some(block);
+                        break;
+                    }
+                }
+
+                if let Some(target_block) = target_block {
+                    self.builder.build_unconditional_branch(target_block)?;
+                } else if label.is_some() {
+                    return Err(format!(
+                        "continue statement with label '{}' not found in scope at span {:?}",
+                        label.as_deref().unwrap(),
+                        span
+                    )
+                    .into());
+                } else {
+                    return Err(
+                        format!("continue statement outside of loop at span {:?}", span).into(),
+                    );
+                }
+                Ok(())
+            }
         }
     }
 }

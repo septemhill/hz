@@ -241,7 +241,9 @@ fn collect_typed_stmt_types(
         TypedStmtKind::Defer { stmt, .. } | TypedStmtKind::DeferBang { stmt, .. } => {
             collect_typed_stmt_types(stmt, registry, type_list);
         }
-        TypedStmtKind::Import { .. } | TypedStmtKind::Break { .. } => {}
+        TypedStmtKind::Import { .. }
+        | TypedStmtKind::Break { .. }
+        | TypedStmtKind::Continue { .. } => {}
     }
 }
 
@@ -494,7 +496,9 @@ fn collect_stmt_types(
         crate::ast::Stmt::Defer { stmt, .. } | crate::ast::Stmt::DeferBang { stmt, .. } => {
             collect_stmt_types(stmt, registry, type_list);
         }
-        crate::ast::Stmt::Import { .. } | crate::ast::Stmt::Break { .. } => {}
+        crate::ast::Stmt::Import { .. }
+        | crate::ast::Stmt::Break { .. }
+        | crate::ast::Stmt::Continue { .. } => {}
     }
 }
 

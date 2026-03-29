@@ -178,6 +178,11 @@ pub enum HirStmt {
         label: Option<String>,
         span: Span,
     },
+    /// Continue statement (skips to next iteration)
+    Continue {
+        label: Option<String>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]

@@ -534,6 +534,37 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 Ok(())
             }
+            Stmt::Continue { label, span } => {
+                // Continue statement - similar handling as in HirStmt
+                // Continue branches to the condition block to start the next iteration
+                if let Some(loop_stack) = self.loop_continue_blocks.last() {
+                    // Find the appropriate continue block
+                    if let Some(target_block) = loop_stack.iter().find_map(|(block, l)| {
+                        if l.as_ref() == label.as_ref() {
+                            Some(*block)
+                        } else if label.is_none() {
+                            // If no label specified, use the innermost loop
+                            Some(*block)
+                        } else {
+                            None
+                        }
+                    }) {
+                        self.builder.build_unconditional_branch(target_block)?;
+                    } else {
+                        return Err(format!(
+                            "continue statement with label '{}' not found in scope at span {:?}",
+                            label.as_deref().unwrap_or("none"),
+                            span
+                        )
+                        .into());
+                    }
+                } else {
+                    return Err(
+                        format!("continue statement outside of loop at span {:?}", span).into(),
+                    );
+                }
+                Ok(())
+            }
         }
     }
 

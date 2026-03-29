@@ -281,6 +281,7 @@ impl Lexer {
             "try" => Token::Try,
             "catch" => Token::Catch,
             "break" => Token::Break,
+            "continue" => Token::Continue,
             "rawptr" => Token::RawPtr,
             "_" => Token::Underscore,
             _ => Token::Ident(ident.clone()),

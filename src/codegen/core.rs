@@ -28,6 +28,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             defer_bang_stack: Vec::new(),
             return_type: None,
             loop_end_blocks: Vec::new(),
+            loop_continue_blocks: Vec::new(),
             stdlib,
             imported_packages: HashMap::new(),
             module_name: module_name.to_string(),

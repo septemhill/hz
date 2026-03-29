@@ -178,6 +178,8 @@ pub enum TypedStmtKind {
     DeferBang { stmt: Box<TypedStmt> },
     /// Break statement
     Break { label: Option<String> },
+    /// Continue statement
+    Continue { label: Option<String> },
 }
 
 #[derive(Debug, Clone)]
@@ -1484,6 +1486,7 @@ impl TypeInferrer {
             Stmt::Defer { span, .. } => *span,
             Stmt::DeferBang { span, .. } => *span,
             Stmt::Break { span, .. } => *span,
+            Stmt::Continue { span, .. } => *span,
         };
 
         match stmt {
@@ -1833,6 +1836,12 @@ impl TypeInferrer {
             }
             Stmt::Break { label, span } => Ok(TypedStmt {
                 stmt: TypedStmtKind::Break {
+                    label: label.clone(),
+                },
+                span: *span,
+            }),
+            Stmt::Continue { label, span } => Ok(TypedStmt {
+                stmt: TypedStmtKind::Continue {
                     label: label.clone(),
                 },
                 span: *span,
@@ -2736,7 +2745,8 @@ impl TypeInferrer {
                 let typed_object = self.infer_expr(object)?;
 
                 if let Type::GenericParam(param_name) = &typed_object.ty {
-                    if let Some(interface_names) = self.current_generic_constraints.get(param_name) {
+                    if let Some(interface_names) = self.current_generic_constraints.get(param_name)
+                    {
                         for interface_name in interface_names {
                             if let Some(interface_def) = self.interfaces.get(interface_name) {
                                 if let Some(method) =
@@ -3865,6 +3875,14 @@ impl AstDump for TypedStmt {
                     "".to_string()
                 };
                 println!("Stmt::Break{}", lbl);
+            }
+            TypedStmtKind::Continue { label } => {
+                let lbl = if let Some(l) = label {
+                    format!(" {}", l)
+                } else {
+                    "".to_string()
+                };
+                println!("Stmt::Continue{}", lbl);
             }
         }
     }

@@ -51,6 +51,13 @@ fn main() i64 {
         x += 1;
     }
 
+    for (1..5) |v| {
+        if (v > 3) {
+            continue;
+        }
+        io.println(v);
+    }
+
     return 0;
 }
 

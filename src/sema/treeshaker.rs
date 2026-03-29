@@ -207,6 +207,7 @@ impl TreeShaker {
                 }
             }
             Stmt::Break { .. } => {}
+            Stmt::Continue { .. } => {}
             Stmt::Defer { stmt, .. } => {
                 changed = self.traverse_stmt(stmt);
             }

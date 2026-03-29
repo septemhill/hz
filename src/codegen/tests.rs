@@ -419,6 +419,131 @@ fn test_generate_for_range_stmt() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn test_generate_continue_uses_loop_latch() -> Result<(), Box<dyn std::error::Error>> {
+    let context = Context::create();
+    let stdlib = StdLib::new();
+    let mut codegen = CodeGenerator::new(
+        &context,
+        "test_module",
+        stdlib,
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+    )?;
+
+    let fn_type = context.void_type().fn_type(&[], false);
+    let function = codegen.module.add_function("test_fn", fn_type, None);
+    let entry_block = context.append_basic_block(function, "entry");
+    codegen.builder.position_at_end(entry_block);
+    codegen.current_function = Some(function);
+    codegen.current_block = Some(entry_block);
+    codegen.return_type = Some(Type::Void);
+
+    let for_stmt = HirStmt::For {
+        label: None,
+        var_name: Some("i".to_string()),
+        index_var: None,
+        iterable: HirExpr::Binary {
+            op: BinaryOp::Range,
+            left: Box::new(HirExpr::Int(1, Type::I64, Span::default())),
+            right: Box::new(HirExpr::Int(5, Type::I64, Span::default())),
+            ty: Type::Tuple(vec![Type::I64, Type::I64]),
+            span: Span::default(),
+        },
+        body: Box::new(HirStmt::If {
+            condition: HirExpr::Binary {
+                op: BinaryOp::Gt,
+                left: Box::new(HirExpr::Ident(
+                    "i".to_string(),
+                    Type::I64,
+                    Span::default(),
+                )),
+                right: Box::new(HirExpr::Int(3, Type::I64, Span::default())),
+                ty: Type::Bool,
+                span: Span::default(),
+            },
+            capture: None,
+            then_branch: Box::new(HirStmt::Continue {
+                label: None,
+                span: Span::default(),
+            }),
+            else_branch: None,
+            span: Span::default(),
+        }),
+        span: Span::default(),
+    };
+
+    codegen.generate_hir_stmt(&for_stmt)?;
+
+    let ir = codegen.print_ir();
+    assert!(ir.contains("for_continue:"));
+    assert!(ir.contains("then:"));
+    assert!(ir.contains("br label %for_continue"));
+    assert!(ir.contains("start_inc = add i64"));
+
+    Ok(())
+}
+
+#[test]
+fn test_generate_option_for_re_evaluates_iterable_and_stops_on_null(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = Context::create();
+    let stdlib = StdLib::new();
+    let mut codegen = CodeGenerator::new(
+        &context,
+        "test_module",
+        stdlib,
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+    )?;
+
+    let fn_type = context.void_type().fn_type(&[], false);
+    let function = codegen.module.add_function("test_fn", fn_type, None);
+    let entry_block = context.append_basic_block(function, "entry");
+    codegen.builder.position_at_end(entry_block);
+    codegen.current_function = Some(function);
+    codegen.current_block = Some(entry_block);
+    codegen.return_type = Some(Type::Void);
+
+    let option_i64_type = context
+        .struct_type(&[context.i64_type().into(), context.bool_type().into()], false);
+    let next_fn_type = option_i64_type.fn_type(&[], false);
+    codegen
+        .module
+        .add_function("test_module_next", next_fn_type, None);
+
+    let for_stmt = HirStmt::For {
+        label: None,
+        var_name: Some("item".to_string()),
+        index_var: None,
+        iterable: HirExpr::Call {
+            name: "next".to_string(),
+            namespace: None,
+            args: vec![],
+            return_ty: Type::Option(Box::new(Type::I64)),
+            target_ty: None,
+            span: Span::default(),
+        },
+        body: Box::new(HirStmt::Expr(HirExpr::Int(0, Type::I64, Span::default()))),
+        span: Span::default(),
+    };
+
+    codegen.generate_hir_stmt(&for_stmt)?;
+
+    let ir = codegen.print_ir();
+    let for_eval_pos = ir.find("for_eval:").ok_or("missing for_eval block")?;
+    let call_pos = ir
+        .find("call { i64, i1 } @test_module_next()")
+        .ok_or("missing next() call in IR")?;
+    assert!(call_pos > for_eval_pos);
+    assert_eq!(ir.matches("call { i64, i1 } @test_module_next()").count(), 1);
+    assert!(ir.contains("br i1 %is_null, label %for_end, label %for_body"));
+
+    Ok(())
+}
+
+#[test]
 fn test_generate_switch_stmt() -> Result<(), Box<dyn std::error::Error>> {
     let context = Context::create();
     let stdlib = StdLib::new();

@@ -38,6 +38,7 @@ pub enum Token {
     Try,
     Catch,
     Break,
+    Continue,
     RawPtr,
 
     // Identifiers
@@ -149,6 +150,7 @@ impl Token {
             Token::Try => "try",
             Token::Catch => "catch",
             Token::Break => "break",
+            Token::Continue => "continue",
             Token::RawPtr => "rawptr",
             Token::FatArrow => "=>",
             Token::Assign => "=",

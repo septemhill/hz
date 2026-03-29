@@ -252,7 +252,9 @@ fn collect_types_from_stmt(stmt: &crate::ast::Stmt, types: &mut Vec<Type>) {
         crate::ast::Stmt::Defer { stmt, .. } | crate::ast::Stmt::DeferBang { stmt, .. } => {
             collect_types_from_stmt(stmt, types);
         }
-        crate::ast::Stmt::Import { .. } | crate::ast::Stmt::Break { .. } => {}
+        crate::ast::Stmt::Import { .. }
+        | crate::ast::Stmt::Break { .. }
+        | crate::ast::Stmt::Continue { .. } => {}
     }
 }
 

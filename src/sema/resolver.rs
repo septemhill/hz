@@ -361,6 +361,10 @@ impl SymbolResolver {
                 // Break statement - no special analysis needed at resolve phase
                 Ok(())
             }
+            crate::ast::Stmt::Continue { .. } => {
+                // Continue statement - no special analysis needed at resolve phase
+                Ok(())
+            }
         }
     }
 

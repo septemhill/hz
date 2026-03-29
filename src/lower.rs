@@ -978,6 +978,10 @@ impl LoweringContext {
                 label: None,
                 span: s.span,
             },
+            TypedStmtKind::Continue { .. } => hir::HirStmt::Continue {
+                label: None,
+                span: s.span,
+            },
             TypedStmtKind::Switch { condition, cases } => hir::HirStmt::Switch {
                 condition: self.lower_typed_expr(condition),
                 cases: cases
@@ -1600,6 +1604,10 @@ impl LoweringContext {
                 })
             }
             ast::Stmt::Break { label, span } => hir::HirStmt::Break {
+                label: label.clone(),
+                span: *span,
+            },
+            ast::Stmt::Continue { label, span } => hir::HirStmt::Continue {
                 label: label.clone(),
                 span: *span,
             },

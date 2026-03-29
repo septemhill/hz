@@ -79,25 +79,6 @@ impl<'ctx> CodeGenerator<'ctx> {
     ) -> CodegenResult<()> {
         let function = self.current_function.unwrap();
 
-        let eval_start_block = self.context.append_basic_block(function, "for_eval");
-        let cond_block = self.context.append_basic_block(function, "for_cond");
-        let body_block = self.context.append_basic_block(function, "for_body");
-        let end_block = self.context.append_basic_block(function, "for_end");
-
-        let iter_val = self.generate_hir_expr(iterable)?;
-        let iter_type = iter_val.get_type();
-
-        eprintln!(
-            "DEBUG for loop: iter_val type = {:?}, LLVM type = {:?}",
-            iterable, iter_type
-        );
-
-        let iter_alloca = self.builder.build_alloca(iter_type, "iter_var")?;
-        self.builder.build_store(iter_alloca, iter_val)?;
-
-        self.builder.build_unconditional_branch(eval_start_block)?;
-        self.builder.position_at_end(eval_start_block);
-
         let iter_lang_type = match iterable {
             hir::HirExpr::Int(_, ty, _) => Some(ty),
             hir::HirExpr::Float(_, ty, _) => Some(ty),
@@ -120,6 +101,23 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::Catch { .. } => None,
             hir::HirExpr::Cast { ty, .. } => Some(ty),
         };
+
+        let iter_type = iter_lang_type
+            .map(|ty| self.llvm_type(ty))
+            .ok_or("unsupported iterable expression type in for loop")?;
+
+        let eval_start_block = self.context.append_basic_block(function, "for_eval");
+        let cond_block = self.context.append_basic_block(function, "for_cond");
+        let body_block = self.context.append_basic_block(function, "for_body");
+        let continue_block = self.context.append_basic_block(function, "for_continue");
+        let end_block = self.context.append_basic_block(function, "for_end");
+
+        eprintln!(
+            "DEBUG for loop: iter_val type = {:?}, LLVM type = {:?}",
+            iterable, iter_type
+        );
+
+        let iter_alloca = self.builder.build_alloca(iter_type, "iter_var")?;
 
         let mut is_option = false;
         let mut is_bool = false;
@@ -162,6 +160,13 @@ impl<'ctx> CodeGenerator<'ctx> {
             is_option, is_bool, is_array
         );
 
+        let reevaluate_each_iteration = is_option || is_bool;
+
+        if !reevaluate_each_iteration {
+            let iter_val = self.generate_hir_expr(iterable)?;
+            self.builder.build_store(iter_alloca, iter_val)?;
+        }
+
         let array_index_alloca = if is_array {
             let idx = self
                 .builder
@@ -172,9 +177,18 @@ impl<'ctx> CodeGenerator<'ctx> {
         } else {
             None
         };
-        self.builder.build_unconditional_branch(cond_block)?;
+        self.builder.build_unconditional_branch(eval_start_block)?;
 
         self.loop_end_blocks.push(vec![(end_block, label.clone())]);
+        self.loop_continue_blocks
+            .push(vec![(continue_block, label.clone())]);
+
+        self.builder.position_at_end(eval_start_block);
+        if reevaluate_each_iteration {
+            let iter_val = self.generate_hir_expr(iterable)?;
+            self.builder.build_store(iter_alloca, iter_val)?;
+        }
+        self.builder.build_unconditional_branch(cond_block)?;
 
         self.builder.position_at_end(cond_block);
         let iter_val_load = self
@@ -193,7 +207,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 "is_null",
             )?;
             self.builder
-                .build_conditional_branch(is_null, body_block, end_block)?;
+                .build_conditional_branch(is_null, end_block, body_block)?;
         } else if is_bool {
             eprintln!("DEBUG: is_bool branch, iter_val_load = {:?}", iter_val_load);
             self.builder.build_conditional_branch(
@@ -382,66 +396,68 @@ impl<'ctx> CodeGenerator<'ctx> {
 
         let current_block = self.builder.get_insert_block().unwrap();
         if current_block.get_terminator().is_none() {
-            if is_option || is_bool {
-                self.builder.build_unconditional_branch(eval_start_block)?;
-            } else if iter_type.is_struct_type() {
-                let current_load = self
-                    .builder
-                    .build_load(iter_type, iter_alloca, "iter_next")?;
-                let current_struct = current_load.into_struct_value();
-                let start = self
-                    .builder
-                    .build_extract_value(current_struct, 0, "next_start")?;
-                let end = self
-                    .builder
-                    .build_extract_value(current_struct, 1, "next_end")?;
-                let incremented_start = self.builder.build_int_add(
-                    start.into_int_value(),
+            self.builder.build_unconditional_branch(continue_block)?;
+        }
+
+        self.builder.position_at_end(continue_block);
+        if is_option || is_bool {
+            self.builder.build_unconditional_branch(eval_start_block)?;
+        } else if iter_type.is_struct_type() {
+            let current_load = self
+                .builder
+                .build_load(iter_type, iter_alloca, "iter_next")?;
+            let current_struct = current_load.into_struct_value();
+            let start = self
+                .builder
+                .build_extract_value(current_struct, 0, "next_start")?;
+            let end = self
+                .builder
+                .build_extract_value(current_struct, 1, "next_end")?;
+            let incremented_start = self.builder.build_int_add(
+                start.into_int_value(),
+                self.context.i64_type().const_int(1, false),
+                "start_inc",
+            )?;
+
+            let mut new_struct: inkwell::values::AggregateValueEnum =
+                iter_type.into_struct_type().const_zero().into();
+            new_struct = self
+                .builder
+                .build_insert_value(
+                    new_struct.into_struct_value(),
+                    incremented_start,
+                    0,
+                    "new_iter",
+                )?
+                .into();
+            new_struct = self
+                .builder
+                .build_insert_value(new_struct.into_struct_value(), end, 1, "new_iter_final")?
+                .into();
+            self.builder
+                .build_store(iter_alloca, new_struct.as_basic_value_enum())?;
+
+            self.builder.build_unconditional_branch(cond_block)?;
+        } else if is_array {
+            if let Some(idx_alloca) = array_index_alloca {
+                let current_index =
+                    self.builder
+                        .build_load(self.context.i64_type(), idx_alloca, "array_idx_inc")?;
+                let incremented = self.builder.build_int_add(
+                    current_index.into_int_value(),
                     self.context.i64_type().const_int(1, false),
-                    "start_inc",
+                    "array_idx_next",
                 )?;
-
-                let mut new_struct: inkwell::values::AggregateValueEnum =
-                    iter_type.into_struct_type().const_zero().into();
-                new_struct = self
-                    .builder
-                    .build_insert_value(
-                        new_struct.into_struct_value(),
-                        incremented_start,
-                        0,
-                        "new_iter",
-                    )?
-                    .into();
-                new_struct = self
-                    .builder
-                    .build_insert_value(new_struct.into_struct_value(), end, 1, "new_iter_final")?
-                    .into();
-                self.builder
-                    .build_store(iter_alloca, new_struct.as_basic_value_enum())?;
-
-                self.builder.build_unconditional_branch(cond_block)?;
-            } else if is_array {
-                if let Some(idx_alloca) = array_index_alloca {
-                    let current_index = self.builder.build_load(
-                        self.context.i64_type(),
-                        idx_alloca,
-                        "array_idx_inc",
-                    )?;
-                    let incremented = self.builder.build_int_add(
-                        current_index.into_int_value(),
-                        self.context.i64_type().const_int(1, false),
-                        "array_idx_next",
-                    )?;
-                    self.builder.build_store(idx_alloca, incremented)?;
-                }
-                self.builder.build_unconditional_branch(cond_block)?;
-            } else {
-                self.builder.build_unconditional_branch(cond_block)?;
+                self.builder.build_store(idx_alloca, incremented)?;
             }
+            self.builder.build_unconditional_branch(cond_block)?;
+        } else {
+            self.builder.build_unconditional_branch(cond_block)?;
         }
 
         self.builder.position_at_end(end_block);
         self.loop_end_blocks.pop();
+        self.loop_continue_blocks.pop();
 
         if let Some(name) = &var_name_clone {
             self.variables.remove(name);

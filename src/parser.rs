@@ -1234,6 +1234,7 @@ impl Parser {
             Token::If => self.parse_if_stmt(),
             Token::For => self.parse_for_stmt(None),
             Token::Break => self.parse_break_stmt(),
+            Token::Continue => self.parse_continue_stmt(),
             Token::LBrace => self.parse_block_stmt(),
             Token::Switch => self.parse_switch_stmt(),
             Token::Defer => self.parse_defer_stmt(),
@@ -1299,6 +1300,39 @@ impl Parser {
         self.match_token(Token::Semicolon);
 
         Ok(Stmt::Break {
+            label,
+            span: Span { start: 0, end: 0 },
+        })
+    }
+
+    /// Parse continue statement
+    fn parse_continue_stmt(&mut self) -> Result<Stmt, ParseError> {
+        self.advance(); // consume 'continue'
+
+        self.skip_whitespace();
+
+        // Check for optional label (e.g., continue outer;)
+        let label = if let Token::Ident(name) = self.current().cloned().unwrap_or(Token::Eof) {
+            // Check if it's followed by a semicolon (not part of an expression)
+            if let Some(next) = self.peek(1) {
+                if next.token == Token::Semicolon || next.token == Token::RBrace {
+                    let label = name;
+                    self.advance(); // consume label
+                    Some(label)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Consume optional semicolon
+        self.match_token(Token::Semicolon);
+
+        Ok(Stmt::Continue {
             label,
             span: Span { start: 0, end: 0 },
         })
@@ -1752,8 +1786,8 @@ impl Parser {
         if has_lparen {
             // Check if it's empty parentheses: for () { ... } - infinite loop
             if self.match_token(Token::RParen) {
-                // Empty parentheses - infinite loop, use null as placeholder
-                iterable = Expr::Null(Span { start: 0, end: 0 });
+                // Empty parentheses - infinite loop, use `true` as the loop condition
+                iterable = Expr::Bool(true, Span { start: 0, end: 0 });
             } else {
                 // Parse the expression (could be range, array, condition, etc.)
                 iterable = self.parse_expression()?;
@@ -1763,8 +1797,8 @@ impl Parser {
             }
         } else {
             // No opening parenthesis - this is infinite loop: for { ... }
-            // Use null as placeholder for iterable
-            iterable = Expr::Null(Span { start: 0, end: 0 });
+            // Represent it as `true` so later stages treat it like a while(true)
+            iterable = Expr::Bool(true, Span { start: 0, end: 0 });
         }
 
         self.skip_whitespace();
@@ -3445,10 +3479,11 @@ impl Parser {
             });
         }
 
-        let interface_name = if let Token::Ident(n) = self.current().cloned().ok_or_else(|| ParseError {
-            message: "Expected interface name after 'impl'".to_string(),
-            location: None,
-        })? {
+        let interface_name = if let Token::Ident(n) =
+            self.current().cloned().ok_or_else(|| ParseError {
+                message: "Expected interface name after 'impl'".to_string(),
+                location: None,
+            })? {
             let n = n.clone();
             self.advance();
             n
@@ -3876,7 +3911,8 @@ impl Parser {
                         self.current().cloned().ok_or_else(|| ParseError {
                             message: "Expected interface name in generic constraint".to_string(),
                             location: None,
-                        })? {
+                        })?
+                    {
                         constraints.push((param_name, interface_name));
                         self.advance();
                     } else {

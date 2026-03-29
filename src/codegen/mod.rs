@@ -65,6 +65,10 @@ pub struct CodeGenerator<'ctx> {
     // Each entry is a vector of (end_block, label) pairs
     loop_end_blocks: Vec<Vec<(inkwell::basic_block::BasicBlock<'ctx>, Option<String>)>>,
 
+    // Stack of loop continue blocks for continue statements
+    // Each entry is a vector of (continue_block, label) pairs
+    loop_continue_blocks: Vec<Vec<(inkwell::basic_block::BasicBlock<'ctx>, Option<String>)>>,
+
     // Standard library
     stdlib: StdLib,
 
