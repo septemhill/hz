@@ -756,6 +756,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Then convert to target type
                 self.generate_cast(expr_value, target_type)
             }
+            Expr::Dereference { expr, .. } => {
+                // Dereference should be handled in HIR codegen
+                todo!("Codegen for Dereference not implemented in AST codegen")
+            }
         }
     }
 
@@ -952,6 +956,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                     "not",
                 )?;
                 Ok(result.into())
+            }
+            UnaryOp::Ref => {
+                // Reference operator returns a pointer to the value
+                // The value should already be a pointer from the alloca
+                Ok(val)
             }
         }
     }

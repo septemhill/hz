@@ -59,10 +59,16 @@ fn main() void {
 
     service_infc(comp);
 
+    service_core_infc(comp);
+
     return;
 }
 
 fn service_infc<T: Service>(v: T) void {
     v.do_something();
     v.do_something_else();
+}
+
+fn service_core_infc<T: ServiceCore>(v: T) void {
+    v.do_something();
 }

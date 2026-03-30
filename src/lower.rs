@@ -1140,6 +1140,11 @@ impl LoweringContext {
                 ty: e.ty.clone(),
                 span: e.span,
             },
+            TypedExprKind::Dereference { expr } => hir::HirExpr::Dereference {
+                expr: Box::new(self.lower_typed_expr(expr)),
+                ty: e.ty.clone(),
+                span: e.span,
+            },
         }
     }
 
@@ -1907,6 +1912,18 @@ impl LoweringContext {
                 ty: target_type.clone(),
                 span: *span,
             },
+            // Dereference is handled in lower_typed_expr
+            ast::Expr::Dereference { expr, span } => {
+                // This path is not reached when using type inference,
+                // but we handle it just in case
+                let lowered = self.lower_expr(expr);
+                let ty = ast::Type::Void; // Will be inferred by type checker
+                hir::HirExpr::Dereference {
+                    expr: Box::new(lowered),
+                    ty,
+                    span: *span,
+                }
+            }
         }
     }
 }

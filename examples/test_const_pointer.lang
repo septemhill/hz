@@ -1,0 +1,43 @@
+import "io"
+
+struct Point2D {
+    x: i64,
+    y: i64,
+}
+
+fn main() i32 {
+    const height: i64 = 10;
+    const age: i64 = 123;
+
+    // 1. const variable cannot be reassigned (Invalid)
+    // height = 20; // 這行如果取消註釋，應該會報錯: Cannot reassign constant variable 'height'
+
+    // 2. const pointer
+    const i64_ptr: *i64 = &height;
+
+    // 3. Modify the value pointed to by the pointer (Valid)
+    i64_ptr.* = 999;
+    io.println("height after i64_ptr.* = 999: {d}", height); // Should be 999
+
+    // 4. Modify the pointer itself (Invalid)
+    // i64_ptr = &age; // Cannot reassign constant variable 'i64_ptr'
+
+    const p: Point2D = Point2D { x: 10, y: 20 };
+    const p_ptr: *Point2D = &p;
+
+    // 5. const struct pointer
+    p_ptr.* = Point2D { x: 30, y: 40 };
+    io.println("p after p_ptr.* = Point2D: x: {d}, y: {d} ", p.x, p.y); // Should be { x: 30, y: 40 }
+
+    // 6. Modify the pointer itself (Invalid)
+    // p_ptr = &Point2D { x: 50, y: 60 }; // Cannot reassign constant variable 'p_ptr'
+
+    const p2: Point2D = Point2D { x: 10, y: 20 };
+    const p2_ptr: *Point2D = &p2;
+
+    // 7. const struct pointer to member field
+    p2_ptr.*.x += 30;
+    io.println("p2 after p2_ptr.*.x = 30: x: {d}, y: {d}", p2.x, p2.y); // Should be { x: 30, y: 20 }
+
+    return 0;
+}

@@ -1,0 +1,40 @@
+import "io"
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn test_basic_ref() void {
+    var x: i32 = 42;
+    const ptr_x: *i32 = &x;
+    io.println("x = 42");
+    // We can't easily print the pointer value itself, but we can dereference it
+    io.println("ptr_x.* = {d}", ptr_x.*);
+    
+    ptr_x.* = 100;
+    io.println("After ptr_x.* = 100, x = {d}", x);
+}
+
+fn test_struct_ref() void {
+    var p = Point { x: 10, y: 20 };
+    const ptr_p: *Point = &p;
+    
+    io.println("p.x = 10, p.y = 20");
+    io.println("ptr_p.*.x = {d}", ptr_p.*.x);
+    
+    ptr_p.*.y = 30;
+    io.println("After ptr_p.*.y = 30, p.y = {d}", p.y);
+
+
+    // Test reference to a field
+    const ptr_x: *i32 = &p.x;
+    ptr_x.* = 50;
+    io.println("After ptr_x.* = 50 (where ptr_x = &p.x), p.x = {d}", p.x);
+}
+
+fn main() i32 {
+    test_basic_ref();
+    test_struct_ref();
+    return 0;
+}

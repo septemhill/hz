@@ -4,6 +4,77 @@ use std::collections::hash_map::Entry;
 
 #[allow(unused)]
 impl<'ctx> CodeGenerator<'ctx> {
+    /// Generate the address of an l-value (identifier, member access, dereference, etc.)
+    pub(crate) fn generate_hir_lvalue_address(
+        &mut self,
+        expr: &hir::HirExpr,
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        match expr {
+            hir::HirExpr::Ident(name, _, _) => {
+                // Look up the variable's allocation pointer
+                if let Some(ptr) = self.variables.get(name) {
+                    Ok(ptr.as_basic_value_enum())
+                } else if let Some(ptr) = self.const_variables.get(name) {
+                    Ok(ptr.as_basic_value_enum())
+                } else {
+                    Err(format!("Variable not found for address-of: {}", name).into())
+                }
+            }
+            hir::HirExpr::MemberAccess { object, member, .. } => {
+                // Address of a field: GEP into the struct
+                let obj_addr = self.generate_hir_lvalue_address(object)?;
+                let obj_ptr = obj_addr.into_pointer_value();
+
+                // Get struct name and field index
+                let struct_name = match object.ty() {
+                    Type::Pointer(inner) => {
+                        if let Type::Custom { name, .. } = &**inner {
+                            name.clone()
+                        } else {
+                            return Err("Member access on non-custom pointer type".into());
+                        }
+                    }
+                    Type::Custom { name, .. } => name.clone(),
+                    _ => return Err("Member access on non-struct type".into()),
+                };
+
+                let field_idx = self
+                    .struct_field_indices
+                    .get(&struct_name)
+                    .and_then(|fields| fields.get(member))
+                    .copied()
+                    .ok_or_else(|| format!("Field '{}' not found in struct '{}'", member, struct_name))?;
+
+                let struct_type = self
+                    .context
+                    .get_struct_type(&struct_name)
+                    .ok_or_else(|| format!("Struct type not found: {}", struct_name))?;
+
+                // For pointers, we need to load the pointer first
+                let final_obj_ptr = if matches!(object.ty(), Type::Pointer(_)) {
+                    let opaque_ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                    self.builder
+                        .build_load(opaque_ptr_type, obj_ptr, "deref_ptr")?
+                        .into_pointer_value()
+                } else {
+                    obj_ptr
+                };
+
+                let field_ptr = self
+                    .builder
+                    .build_struct_gep(struct_type, final_obj_ptr, field_idx, "field_ptr")
+                    .map_err(|e| e.to_string())?;
+
+                Ok(field_ptr.into())
+            }
+            hir::HirExpr::Dereference { expr, .. } => {
+                // Address of a dereference: just evaluate the pointer expression
+                self.generate_hir_expr(expr)
+            }
+            _ => Err("Expression is not an l-value (cannot take address)".into()),
+        }
+    }
+
     pub(crate) fn generate_hir_expr(
         &mut self,
         expr: &hir::HirExpr,
@@ -472,6 +543,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                             "not",
                         )?;
                         cmp.into()
+                    }
+                    UnaryOp::Ref => {
+                        // Reference - return the address of the value
+                        return self.generate_hir_lvalue_address(expr);
                     }
                 };
                 Ok(val)
@@ -1002,6 +1077,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             } => {
                 let expr_value = self.generate_hir_expr(expr)?;
                 self.generate_cast(expr_value, target_type)
+            }
+            hir::HirExpr::Dereference { expr, ty, span: _ } => {
+                // Generate the pointer expression
+                let ptr_value = self.generate_hir_expr(expr)?;
+                // Get the LLVM type for the inner type
+                let llvm_type = self.llvm_type(ty);
+                // Convert to pointer value
+                let ptr = ptr_value.into_pointer_value();
+                // Load the value from the pointer
+                let loaded = self.builder.build_load(llvm_type, ptr, "deref_load")?;
+                Ok(loaded.into())
             }
         }
     }

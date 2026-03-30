@@ -61,6 +61,7 @@ pub enum Token {
     Semicolon, // ;
     Colon,     // :
     Dot,       // .
+    DotStar,   // .*
     // Arrow,     // ->
     Question, // ?
     DotDot,   // ..
@@ -135,6 +136,7 @@ impl Token {
             Token::Semicolon => ";",
             Token::Colon => ":",
             Token::Dot => ".",
+            Token::DotStar => ".*",
             // Token::Arrow => "->",
             Token::Question => "?",
             Token::DotDot => "..",

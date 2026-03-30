@@ -326,6 +326,32 @@ impl BinaryOp {
     }
 }
 
+impl std::fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BinaryOp::Add => write!(f, "+"),
+            BinaryOp::Sub => write!(f, "-"),
+            BinaryOp::Mul => write!(f, "*"),
+            BinaryOp::Div => write!(f, "/"),
+            BinaryOp::Mod => write!(f, "%"),
+            BinaryOp::Eq => write!(f, "=="),
+            BinaryOp::Ne => write!(f, "!="),
+            BinaryOp::Lt => write!(f, "<"),
+            BinaryOp::Gt => write!(f, ">"),
+            BinaryOp::Le => write!(f, "<="),
+            BinaryOp::Ge => write!(f, ">="),
+            BinaryOp::And => write!(f, "&&"),
+            BinaryOp::Or => write!(f, "||"),
+            BinaryOp::Range => write!(f, ".."),
+            BinaryOp::BitAnd => write!(f, "&"),
+            BinaryOp::BitOr => write!(f, "|"),
+            BinaryOp::BitXor => write!(f, "^"),
+            BinaryOp::Shl => write!(f, "<<"),
+            BinaryOp::Shr => write!(f, ">>"),
+        }
+    }
+}
+
 /// Unary operators
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
@@ -333,6 +359,18 @@ pub enum UnaryOp {
     Neg, // - (negation)
     Pos, // + (positive)
     Not, // ! (logical not)
+    Ref, // & (reference)
+}
+
+impl std::fmt::Display for UnaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UnaryOp::Neg => write!(f, "-"),
+            UnaryOp::Pos => write!(f, "+"),
+            UnaryOp::Not => write!(f, "!"),
+            UnaryOp::Ref => write!(f, "&"),
+        }
+    }
 }
 
 /// Assignment operators
@@ -564,6 +602,12 @@ pub enum Expr {
         /// The target type to cast to
         target_type: Type,
         /// The expression to cast
+        expr: Box<Expr>,
+        span: Span,
+    },
+    /// Pointer dereference (e.g., ptr.*)
+    Dereference {
+        /// The pointer expression to dereference
         expr: Box<Expr>,
         span: Span,
     },
@@ -1254,6 +1298,10 @@ impl AstDump for Expr {
                 target_type, expr, ..
             } => {
                 println!("Expr::Cast to {}", target_type);
+                expr.dump(indent + 1);
+            }
+            Expr::Dereference { expr, .. } => {
+                println!("Expr::Dereference");
                 expr.dump(indent + 1);
             }
         }

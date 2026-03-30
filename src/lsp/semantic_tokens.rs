@@ -211,7 +211,8 @@ fn get_token_type(token: &Token) -> Option<SemanticTokenType> {
         | Token::Comma
         | Token::Semicolon
         | Token::Colon
-        | Token::Dot => Some(SemanticTokenType::Punctuation),
+        | Token::Dot
+        | Token::DotStar => Some(SemanticTokenType::Punctuation),
 
         Token::Eof => None,
         Token::Error(_) => Some(SemanticTokenType::Variable),

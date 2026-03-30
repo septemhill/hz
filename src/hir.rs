@@ -1,4 +1,5 @@
 use crate::ast::{BinaryOp, Mutability, Span, Type, UnaryOp, Visibility};
+use std::fmt;
 
 #[derive(Debug, Clone)]
 #[allow(unused)]
@@ -95,6 +96,12 @@ pub enum HirExpr {
         ty: Type,
         span: Span,
     },
+    /// Pointer dereference
+    Dereference {
+        expr: Box<HirExpr>,
+        ty: Type,
+        span: Span,
+    },
 }
 
 impl HirExpr {
@@ -120,6 +127,7 @@ impl HirExpr {
             HirExpr::Try { ty, .. } => ty,
             HirExpr::Catch { ty, .. } => ty,
             HirExpr::Cast { ty, .. } => ty,
+            HirExpr::Dereference { ty, .. } => ty,
         }
     }
 }
@@ -208,4 +216,329 @@ pub struct HirFn {
 pub struct HirProgram {
     pub functions: Vec<HirFn>,
     // Add structs, enums, etc.
+}
+
+impl fmt::Display for HirProgram {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, func) in self.functions.iter().enumerate() {
+            if i > 0 {
+                writeln!(f)?;
+            }
+            write!(f, "{}", func)?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for HirFn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let vis = match self.visibility {
+            Visibility::Public => "pub ",
+            Visibility::Private => "",
+        };
+        write!(f, "{}fn {}(", vis, self.name)?;
+        for (i, (param_name, param_ty)) in self.params.iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            write!(f, "{}: {}", param_name, param_ty)?;
+        }
+        write!(f, ") -> {}", self.return_ty)?;
+        writeln!(f, " {{")?;
+        for stmt in &self.body {
+            write!(f, "{}", stmt.with_indent(1))?;
+        }
+        write!(f, "}}")?;
+        Ok(())
+    }
+}
+
+impl HirStmt {
+    pub fn with_indent(&self, indent: usize) -> String {
+        let indent_str = "    ".repeat(indent);
+        match self {
+            HirStmt::Expr(expr) => format!("{}{};\n", indent_str, expr),
+            HirStmt::Let {
+                name,
+                ty,
+                value,
+                mutability,
+                ..
+            } => {
+                let mut_str = match mutability {
+                    Mutability::Var => "var ",
+                    Mutability::Const => "",
+                };
+                match value {
+                    Some(v) => format!("{}{}let {} {} = {};\n", indent_str, mut_str, name, ty, v),
+                    None => format!("{}{}let {}: {};\n", indent_str, mut_str, name, ty),
+                }
+            }
+            HirStmt::Assign { target, value, .. } => {
+                format!("{}{} = {};\n", indent_str, target, value)
+            }
+            HirStmt::Return(expr, _) => match expr {
+                Some(e) => format!("{}return {};\n", indent_str, e),
+                None => format!("{}return;\n", indent_str),
+            },
+            HirStmt::If {
+                condition,
+                capture,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let capture_str = match capture {
+                    Some(c) => format!(" @{}", c),
+                    None => String::new(),
+                };
+                let mut result = format!("{}{}if{} {{", indent_str, condition, capture_str);
+                result.push_str(&then_branch.with_indent(indent + 1));
+                result.push_str(&format!("{}}}", indent_str));
+                if let Some(else_br) = else_branch {
+                    result.push_str(" else {");
+                    result.push_str(&else_br.with_indent(indent + 1));
+                    result.push_str(&format!("{}}}", indent_str));
+                }
+                result.push('\n');
+                result
+            }
+            HirStmt::Switch {
+                condition, cases, ..
+            } => {
+                let mut result = format!("{}switch {} {{\n", indent_str, condition);
+                for case in cases {
+                    result.push_str(&case.with_indent(indent + 1));
+                }
+                result.push_str(&format!("{}}}\n", indent_str));
+                result
+            }
+            HirStmt::For {
+                label,
+                var_name,
+                index_var,
+                iterable,
+                body,
+                ..
+            } => {
+                let label_str = match label {
+                    Some(l) => format!("'{}", l),
+                    None => String::new(),
+                };
+                let var_str = match var_name {
+                    Some(v) => format!(", {}", v),
+                    None => String::new(),
+                };
+                let idx_str = match index_var {
+                    Some(i) => format!(", {}", i),
+                    None => String::new(),
+                };
+                let mut result = format!(
+                    "{}for{}{}{} in {} {{\n",
+                    indent_str, label_str, var_str, idx_str, iterable
+                );
+                result.push_str(&body.with_indent(indent + 1));
+                result.push_str(&format!("{}}}\n", indent_str));
+                result
+            }
+            HirStmt::Defer { stmt, .. } => {
+                let mut result = format!("{}defer {{", indent_str);
+                result.push_str(&stmt.with_indent(indent + 1));
+                result.push_str(&format!("{}}}\n", indent_str));
+                result
+            }
+            HirStmt::DeferBang { stmt, .. } => {
+                let mut result = format!("{}defer! {{", indent_str);
+                result.push_str(&stmt.with_indent(indent + 1));
+                result.push_str(&format!("{}}}\n", indent_str));
+                result
+            }
+            HirStmt::Break { label, .. } => match label {
+                Some(l) => format!("{}break '{};\n", indent_str, l),
+                None => format!("{}break;\n", indent_str),
+            },
+            HirStmt::Continue { label, .. } => match label {
+                Some(l) => format!("{}continue '{};\n", indent_str, l),
+                None => format!("{}continue;\n", indent_str),
+            },
+        }
+    }
+}
+
+impl fmt::Display for HirStmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.with_indent(0))
+    }
+}
+
+impl HirCase {
+    pub fn with_indent(&self, indent: usize) -> String {
+        let indent_str = "    ".repeat(indent);
+        let patterns = self
+            .patterns
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let mut result = format!("{}{} => {{", indent_str, patterns);
+        result.push_str(&self.body.with_indent(indent + 1));
+        result.push_str(&format!("{}}}", indent_str));
+        result.push('\n');
+        result
+    }
+}
+
+impl fmt::Display for HirCase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.with_indent(0))
+    }
+}
+
+impl fmt::Display for HirExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HirExpr::Int(n, ty, _) => write!(f, "{}: {}", n, ty),
+            HirExpr::Float(n, ty, _) => write!(f, "{}: {}", n, ty),
+            HirExpr::Bool(b, ty, _) => write!(f, "{}: {}", b, ty),
+            HirExpr::String(s, ty, _) => write!(f, "\"{}\": {}", s, ty),
+            HirExpr::Char(c, ty, _) => write!(f, "'{}': {}", c, ty),
+            HirExpr::Null(ty, _) => write!(f, "null: {}", ty),
+            HirExpr::Ident(name, ty, _) => write!(f, "{}: {}", name, ty),
+            HirExpr::Tuple { vals, ty, .. } => {
+                let vals_str = vals
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "({}): {}", vals_str, ty)
+            }
+            HirExpr::TupleIndex {
+                tuple, index, ty, ..
+            } => {
+                write!(f, "{}.{}: {}", tuple, index, ty)
+            }
+            HirExpr::Array { vals, ty, .. } => {
+                let vals_str = vals
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "[{}]: {}", vals_str, ty)
+            }
+            HirExpr::Binary {
+                op,
+                left,
+                right,
+                ty,
+                ..
+            } => {
+                write!(f, "({} {} {}): {}", left, op, right, ty)
+            }
+            HirExpr::Unary { op, expr, ty, .. } => {
+                write!(f, "({}{}): {}", op, expr, ty)
+            }
+            HirExpr::Call {
+                name,
+                namespace,
+                args,
+                return_ty,
+                target_ty,
+                ..
+            } => {
+                let ns = namespace
+                    .as_ref()
+                    .map(|n| format!("{}::", n))
+                    .unwrap_or_default();
+                let target = target_ty
+                    .as_ref()
+                    .map(|t| format!("[{}]", t))
+                    .unwrap_or_default();
+                let args_str = args
+                    .iter()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(
+                    f,
+                    "{}({}){}: {}",
+                    format!("{}{}", ns, name),
+                    args_str,
+                    target,
+                    return_ty
+                )
+            }
+            HirExpr::If {
+                condition,
+                capture,
+                then_branch,
+                else_branch,
+                ty,
+                ..
+            } => {
+                let capture_str = match capture {
+                    Some(c) => format!(" @{}", c),
+                    None => String::new(),
+                };
+                write!(
+                    f,
+                    "if{} {} then {} else {}",
+                    capture_str, condition, then_branch, else_branch
+                )
+            }
+            HirExpr::Block {
+                stmts, expr, ty, ..
+            } => {
+                write!(f, "{{ ")?;
+                for stmt in stmts {
+                    write!(f, "{}; ", stmt)?;
+                }
+                if let Some(e) = expr {
+                    write!(f, "{}", e)?;
+                }
+                write!(f, " }}: {}", ty)
+            }
+            HirExpr::MemberAccess {
+                object, member, ty, ..
+            } => {
+                write!(f, "{}.{}: {}", object, member, ty)
+            }
+            HirExpr::Struct {
+                name, fields, ty, ..
+            } => {
+                let fields_str = fields
+                    .iter()
+                    .map(|(n, v)| format!("{}: {}", n, v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{} {{ {} }}: {}", name, fields_str, ty)
+            }
+            HirExpr::Try { expr, ty, .. } => {
+                write!(f, "try {}", expr)
+            }
+            HirExpr::Catch {
+                expr,
+                error_var,
+                body,
+                ty,
+                ..
+            } => {
+                let err_str = error_var
+                    .as_ref()
+                    .map(|e| format!(" @{}", e))
+                    .unwrap_or_default();
+                write!(f, "catch{} {} {}", err_str, expr, body)
+            }
+            HirExpr::Cast {
+                target_type,
+                expr,
+                ty,
+                ..
+            } => {
+                write!(f, "({} as {}): {}", expr, target_type, ty)
+            }
+            HirExpr::Dereference { expr, ty, .. } => {
+                write!(f, "(*{}): {}", expr, ty)
+            }
+        }
+    }
 }

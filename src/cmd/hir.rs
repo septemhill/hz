@@ -43,15 +43,15 @@ pub fn dump_hir(
         .ok_or("No typed program found")?;
     let hir_program = lowering_ctx.lower_program(&program, typed_program);
 
-    // Format HIR using Debug
-    let hir_debug = format!("{:?}", hir_program);
+    // Format HIR using Display (pretty print)
+    let hir_pretty = hir_program.to_string();
 
     // Output HIR
     if let Some(ref path) = output_path {
-        std::fs::write(path, &hir_debug)?;
+        std::fs::write(path, &hir_pretty)?;
         println!("HIR written to {}", path);
     } else {
-        println!("{}", hir_debug);
+        println!("{}", hir_pretty);
     }
 
     Ok(())

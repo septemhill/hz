@@ -241,6 +241,7 @@ impl TypeAnalyzer {
         match expr {
             crate::ast::Expr::Try { span, .. } => Some(*span),
             crate::ast::Expr::Cast { expr, .. } => self.expr_find_try(expr),
+            crate::ast::Expr::Dereference { expr, .. } => self.expr_find_try(expr),
             crate::ast::Expr::Call { args, .. } => {
                 for arg in args {
                     if let Some(s) = self.expr_find_try(arg) {
@@ -299,6 +300,7 @@ impl TypeAnalyzer {
                 None
             }
             crate::ast::Expr::TupleIndex { tuple, .. } => self.expr_find_try(tuple),
+            crate::ast::Expr::Dereference { expr, .. } => self.expr_find_try(expr),
             // Base cases - no try expression
             crate::ast::Expr::Int(_, _)
             | crate::ast::Expr::Float(_, _)
@@ -794,6 +796,10 @@ impl TypeAnalyzer {
                             ))
                         }
                     }
+                    crate::ast::UnaryOp::Ref => {
+                        // &expr returns a pointer to expr
+                        Ok(crate::ast::Type::Pointer(Box::new(e_ty)))
+                    }
                 }
             }
             crate::ast::Expr::Call {
@@ -991,6 +997,19 @@ impl TypeAnalyzer {
                 let _ = self.analyze_expression(expr)?;
                 // Return the target type
                 Ok(target_type.clone())
+            }
+            crate::ast::Expr::Dereference { expr, span } => {
+                // Analyze the pointer expression
+                let ptr_ty = self.analyze_expression(expr)?;
+                // Check if it's a pointer type and return inner type
+                if let crate::ast::Type::Pointer(inner) = ptr_ty {
+                    Ok(inner.as_ref().clone())
+                } else {
+                    Err(AnalysisError::new_with_span(
+                        &format!("Cannot dereference non-pointer type: {}", ptr_ty),
+                        span,
+                    ))
+                }
             }
         }
     }

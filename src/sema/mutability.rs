@@ -63,6 +63,12 @@ impl MutabilityAnalyzer {
                         // Split by dot - the first part is the base identifier
                         let parts: Vec<&str> = target.split('.').collect();
                         if let Some(base) = parts.first() {
+                            // Check if this is a dereference (contains *)
+                            // For dereferences, we skip the const check for now as we don't have pointers to const
+                            if parts.contains(&"*") {
+                                return Ok(());
+                            }
+
                             // Check if the base identifier is in the symbol table
                             // or if it's a special case like 'self' (method receiver)
                             if *base != "self" {

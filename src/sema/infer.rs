@@ -95,6 +95,8 @@ pub enum TypedExprKind {
         target_type: Type,
         expr: Box<TypedExpr>,
     },
+    /// Pointer dereference
+    Dereference { expr: Box<TypedExpr> },
 }
 
 #[allow(unused)]
@@ -282,6 +284,19 @@ fn custom_type_name(ty: &Type) -> Option<&str> {
     }
 }
 
+fn align_to_u64(value: u64, align: u64) -> AnalysisResult<u64> {
+    if align == 0 {
+        return Err(AnalysisError::new("Alignment must be greater than zero").with_module("infer"));
+    }
+    let remainder = value % align;
+    if remainder == 0 {
+        return Ok(value);
+    }
+    value.checked_add(align - remainder).ok_or_else(|| {
+        AnalysisError::new("Type metadata overflow while aligning").with_module("infer")
+    })
+}
+
 fn format_typed_binding_names(names: &[Option<String>], ty: &Type) -> String {
     let bindings: Vec<String> = names
         .iter()
@@ -428,6 +443,129 @@ impl TypeInferrer {
             imports,
             current_generic_constraints: HashMap::new(),
         }
+    }
+
+    fn builtin_layout_of(&mut self, ty: &Type) -> AnalysisResult<(u64, u64)> {
+        let resolved = self.substitute_type(ty, &HashMap::new());
+        let mut visiting = HashSet::new();
+        self.type_layout_of(&resolved, &mut visiting)
+    }
+
+    fn type_layout_of(
+        &mut self,
+        ty: &Type,
+        visiting: &mut HashSet<String>,
+    ) -> AnalysisResult<(u64, u64)> {
+        match ty {
+            Type::Void => Ok((0, 1)),
+            Type::Bool | Type::I8 | Type::U8 => Ok((1, 1)),
+            Type::I16 | Type::U16 => Ok((2, 2)),
+            Type::I32 | Type::U32 | Type::F32 => Ok((4, 4)),
+            Type::I64
+            | Type::U64
+            | Type::F64
+            | Type::RawPtr
+            | Type::Pointer(_)
+            | Type::Function { .. }
+            | Type::Error => Ok((8, 8)),
+            Type::GenericParam(name) => {
+                if let Some(mapped) = self.type_mappings.get(name).cloned() {
+                    self.type_layout_of(&mapped, visiting)
+                } else {
+                    Err(AnalysisError::new(&format!(
+                        "Cannot evaluate type metadata for unresolved generic parameter '{}'",
+                        name
+                    ))
+                    .with_module("infer"))
+                }
+            }
+            Type::Option(inner) | Type::Result(inner) => {
+                let (payload_size, payload_align) = self.type_layout_of(inner, visiting)?;
+                let tag_align = 1u64;
+                let tag_offset = align_to_u64(payload_size, tag_align)?;
+                let total = tag_offset.checked_add(1).ok_or_else(|| {
+                    AnalysisError::new("Type metadata overflow while computing tagged layout")
+                        .with_module("infer")
+                })?;
+                let align = payload_align.max(tag_align);
+                Ok((align_to_u64(total, align)?, align))
+            }
+            Type::Tuple(types) => self.aggregate_layout_of(types, visiting),
+            Type::Array { size, element_type } => match size {
+                Some(count) => {
+                    let (elem_size, elem_align) = self.type_layout_of(element_type, visiting)?;
+                    let total = elem_size.checked_mul(*count as u64).ok_or_else(|| {
+                        AnalysisError::new("Type metadata overflow while computing array size")
+                            .with_module("infer")
+                    })?;
+                    Ok((total, elem_align))
+                }
+                None => Ok((8, 8)),
+            },
+            Type::Custom {
+                name, generic_args, ..
+            } => {
+                if visiting.contains(name) {
+                    return Err(AnalysisError::new(&format!(
+                        "Recursive type layout is not supported for '{}'",
+                        name
+                    ))
+                    .with_module("infer"));
+                }
+                let struct_def = self.structs.get(name).cloned().ok_or_else(|| {
+                    AnalysisError::new(&format!("Unknown type '{}' in type metadata query", name))
+                        .with_module("infer")
+                })?;
+                visiting.insert(name.clone());
+
+                let mut mappings = HashMap::new();
+                for (index, generic_name) in struct_def.generic_params.iter().enumerate() {
+                    if let Some(arg) = generic_args.get(index) {
+                        mappings.insert(
+                            generic_name.clone(),
+                            self.substitute_type(arg, &HashMap::new()),
+                        );
+                    }
+                }
+
+                let mut field_types = Vec::new();
+                for field in &struct_def.fields {
+                    field_types.push(self.substitute_type(&field.ty, &mappings));
+                }
+
+                let layout = self.aggregate_layout_of(&field_types, visiting);
+                visiting.remove(name);
+                layout
+            }
+            Type::SelfType | Type::ImmInt | Type::ImmFloat => Err(AnalysisError::new(&format!(
+                "Type metadata is not available for '{}'",
+                ty
+            ))
+            .with_module("infer")),
+        }
+    }
+
+    fn aggregate_layout_of(
+        &mut self,
+        field_types: &[Type],
+        visiting: &mut HashSet<String>,
+    ) -> AnalysisResult<(u64, u64)> {
+        let mut offset = 0u64;
+        let mut max_align = 1u64;
+
+        for field_ty in field_types {
+            let (field_size, field_align) = self.type_layout_of(field_ty, visiting)?;
+            offset = align_to_u64(offset, field_align)?;
+            offset = offset.checked_add(field_size).ok_or_else(|| {
+                AnalysisError::new("Type metadata overflow while computing aggregate layout")
+                    .with_module("infer")
+            })?;
+            if field_align > max_align {
+                max_align = field_align;
+            }
+        }
+
+        Ok((align_to_u64(offset, max_align)?, max_align))
     }
 
     /// Substitute generic parameters in a type with concrete types
@@ -1902,6 +2040,7 @@ impl TypeInferrer {
             Expr::Try { span, .. } => *span,
             Expr::Catch { span, .. } => *span,
             Expr::Cast { span, .. } => *span,
+            Expr::Dereference { span, .. } => *span,
         };
 
         match expr {
@@ -2997,6 +3136,30 @@ impl TypeInferrer {
                     span: *span,
                 })
             }
+            Expr::Dereference { expr, span } => {
+                // Infer the pointer expression
+                let typed_expr = self.infer_expr(expr)?;
+
+                // Check if it's a pointer type
+                let inner_type = match &typed_expr.ty {
+                    Type::Pointer(inner) => inner.as_ref().clone(),
+                    _ => {
+                        return Err(AnalysisError::new_with_span(
+                            &format!("Cannot dereference non-pointer type: {}", typed_expr.ty),
+                            span,
+                        ));
+                    }
+                };
+
+                // Return the inner type
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Dereference {
+                        expr: Box::new(typed_expr),
+                    },
+                    ty: inner_type,
+                    span: *span,
+                })
+            }
         }
     }
 
@@ -3091,6 +3254,11 @@ impl TypeInferrer {
                             .with_module("infer"),
                     )
                 }
+            }
+            UnaryOp::Ref => {
+                // Reference operator: &expr creates a pointer to expr
+                // For now, we just return a pointer type
+                Ok(Type::Pointer(Box::new(expr_ty.clone())))
             }
         }
     }
@@ -4069,6 +4237,10 @@ impl AstDump for TypedExpr {
             }
             TypedExprKind::Cast { target_type, expr } => {
                 println!("Expr::Cast to {} (ty: {})", target_type, self.ty);
+                expr.dump(indent + 1);
+            }
+            TypedExprKind::Dereference { expr } => {
+                println!("Expr::Dereference (ty: {})", self.ty);
                 expr.dump(indent + 1);
             }
         }

@@ -100,6 +100,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::Try { .. } => None,
             hir::HirExpr::Catch { .. } => None,
             hir::HirExpr::Cast { ty, .. } => Some(ty),
+            hir::HirExpr::Dereference { ty, .. } => Some(ty),
         };
 
         let iter_type = iter_lang_type

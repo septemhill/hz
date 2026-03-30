@@ -1,0 +1,5 @@
+Initial x: 42
+After ptr.* += 10, x: 52
+After ptr.* *= 2, x: 104
+After ptr.* -= 4, x: 100
+y after y += 50: 150

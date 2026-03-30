@@ -207,7 +207,14 @@ impl Lexer {
             ',' => Ok(Token::Comma),
             ';' => Ok(Token::Semicolon),
             ':' => Ok(Token::Colon),
-            '.' => Ok(Token::Dot),
+            '.' => {
+                // Check for .*
+                if self.pos < self.source.len() && self.source[self.pos] == '*' {
+                    self.pos += 1;
+                    return Ok(Token::DotStar);
+                }
+                Ok(Token::Dot)
+            }
             '?' => Ok(Token::Question),
             '=' => Ok(Token::Assign),
             '+' => Ok(Token::Plus),

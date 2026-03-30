@@ -229,6 +229,7 @@ impl Parser {
             Expr::Try { span, .. } => *span,
             Expr::Catch { span, .. } => *span,
             Expr::Cast { span, .. } => *span,
+            Expr::Dereference { span, .. } => *span,
         }
     }
 }
@@ -2030,21 +2031,30 @@ impl Parser {
                     let span_end = self.get_expr_span(&value);
 
                     // Convert to a setter expression - format the target string
-                    fn format_target(expr: &Expr) -> String {
-                        match expr {
-                            Expr::Ident(name, _) => name.clone(),
-                            Expr::MemberAccess {
-                                object,
-                                member,
-                                kind: _,
-                                ..
-                            } => {
-                                format!("{}.{}", format_target(object.as_ref()), member)
-                            }
-                            _ => "".to_string(),
-                        }
-                    }
-                    let target = format!("{}.{}", format_target(object.as_ref()), member);
+                    let target = format!("{}.{}", self.format_target_for_expr(object.as_ref()), member);
+                    return Ok(Stmt::Assign {
+                        target,
+                        op,
+                        value,
+                        span: Span {
+                            start: span.start,
+                            end: span_end.end,
+                        },
+                    });
+                }
+            }
+            Expr::Dereference { expr, span } => {
+                // Handle pointer dereference assignment like ptr.* = value
+                if let Some(op) = self.match_assign_op() {
+                    let value = self.parse_expression()?;
+                    self.skip_whitespace();
+                    self.match_token(Token::Semicolon);
+
+                    // Get the end span from the value expression
+                    let span_end = self.get_expr_span(&value);
+
+                    // Format the target string - pointer dereference target
+                    let target = format!("{}.*", self.format_target_for_expr(expr.as_ref()));
                     return Ok(Stmt::Assign {
                         target,
                         op,
@@ -2068,7 +2078,7 @@ impl Parser {
     }
 
     /// Helper to format an expression as string for assignment target
-    fn format_target_for_expr(self: Self, expr: &Expr) -> String {
+    fn format_target_for_expr(&self, expr: &Expr) -> String {
         match expr {
             Expr::Ident(name, _) => name.clone(),
             Expr::MemberAccess { object, member, .. } => {
@@ -2077,6 +2087,9 @@ impl Parser {
                     self.format_target_for_expr(object.as_ref()),
                     member
                 )
+            }
+            Expr::Dereference { expr, .. } => {
+                format!("{}.*", self.format_target_for_expr(expr.as_ref()))
             }
             _ => "".to_string(),
         }
@@ -2342,7 +2355,7 @@ impl Parser {
         Ok(left)
     }
 
-    /// Parse unary expression (!, -)
+    /// Parse unary expression (!, -, &)
     fn parse_unary_expr(&mut self) -> Result<Expr, ParseError> {
         if let Token::Not | Token::Minus = self.current().cloned().unwrap_or(Token::Eof) {
             let op = if self.match_token(Token::Not) {
@@ -2355,6 +2368,16 @@ impl Parser {
             let expr = Box::new(self.parse_unary_expr()?);
             return Ok(Expr::Unary {
                 op,
+                expr,
+                span: Span { start: 0, end: 0 },
+            });
+        }
+
+        // Handle reference operator (&expr)
+        if self.match_token(Token::Ampersand) {
+            let expr = Box::new(self.parse_unary_expr()?);
+            return Ok(Expr::Unary {
+                op: UnaryOp::Ref,
                 expr,
                 span: Span { start: 0, end: 0 },
             });
@@ -2574,6 +2597,7 @@ impl Parser {
             }
 
             // Member access or Tuple index: .member or .0
+            // Also handle pointer dereference: .*
             if self.match_token(Token::Dot) {
                 let current = self.current().cloned().ok_or_else(|| ParseError {
                     message: "Expected index or member name".to_string(),
@@ -2600,6 +2624,15 @@ impl Parser {
                             span: expr_span,
                         };
                     }
+                    Token::Star => {
+                        // ptr.* - handle pointer dereference here
+                        self.advance();
+                        let expr_span = self.get_expr_span(&expr);
+                        expr = Expr::Dereference {
+                            expr: Box::new(expr),
+                            span: expr_span,
+                        };
+                    }
                     _ => {
                         return Err(ParseError {
                             message: "Expected index or member name".to_string(),
@@ -2607,6 +2640,16 @@ impl Parser {
                         });
                     }
                 }
+                continue;
+            }
+
+            // Pointer dereference: ptr.*
+            if self.match_token(Token::DotStar) {
+                let expr_span = self.get_expr_span(&expr);
+                expr = Expr::Dereference {
+                    expr: Box::new(expr),
+                    span: expr_span,
+                };
                 continue;
             }
 

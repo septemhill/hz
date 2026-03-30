@@ -320,6 +320,9 @@ fn collect_types_from_expr(expr: &crate::ast::Expr, types: &mut Vec<Type>) {
         crate::ast::Expr::Cast { expr, .. } => {
             collect_types_from_expr(expr, types);
         }
+        crate::ast::Expr::Dereference { expr, .. } => {
+            collect_types_from_expr(expr, types);
+        }
     }
 }
 

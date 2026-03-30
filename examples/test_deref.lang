@@ -1,0 +1,14 @@
+import io;
+
+fn main() void {
+    // Test pointer dereference for reading
+    const c: i64 = 123;
+    const ptr = &c;
+    io.println("value: {d}", ptr.*);
+
+    // Test pointer dereference for assignment
+    var b: i64 = 443;
+    var ptr2 = &b;
+    ptr2.* = 999;
+    io.println("value after assign: {d}", ptr2.*);
+}

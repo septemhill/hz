@@ -328,6 +328,9 @@ fn collect_typed_expr_types(
         TypedExprKind::Cast { expr, .. } => {
             collect_typed_expr_types(expr, registry, type_list);
         }
+        TypedExprKind::Dereference { expr, .. } => {
+            collect_typed_expr_types(expr, registry, type_list);
+        }
     }
 }
 
@@ -573,6 +576,9 @@ fn collect_expr_types(
             collect_expr_types(body, registry, type_list);
         }
         crate::ast::Expr::Cast { expr, .. } => {
+            collect_expr_types(expr, registry, type_list);
+        }
+        crate::ast::Expr::Dereference { expr, .. } => {
             collect_expr_types(expr, registry, type_list);
         }
     }

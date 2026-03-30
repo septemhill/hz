@@ -354,6 +354,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::Try { ty, .. } => ty,
             hir::HirExpr::Catch { ty, .. } => ty,
             hir::HirExpr::Cast { ty, .. } => ty,
+            hir::HirExpr::Dereference { ty, .. } => ty,
         }
     }
 

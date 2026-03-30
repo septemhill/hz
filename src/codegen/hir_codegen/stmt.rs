@@ -60,108 +60,111 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return Ok(());
                 }
 
-                if target.contains('.') {
-                    let parts: Vec<&str> = target.split('.').collect();
-                    let obj_name = parts[0];
-                    let member = parts[1];
+                let parts: Vec<&str> = target.split('.').collect();
+                let base_name = parts[0];
 
-                    let ptr = self.variables.get(obj_name).ok_or("Var not found")?.clone();
-                    let var_ty = self.variable_types.get(obj_name).unwrap();
+                let mut current_ptr = self
+                    .variables
+                    .get(base_name)
+                    .or_else(|| self.const_variables.get(base_name))
+                    .ok_or_else(|| format!("Variable not found: {}", base_name))?
+                    .clone();
 
-                    // First, get the struct name from the variable type
-                    let struct_name = match var_ty {
-                        Type::Pointer(inner) => {
-                            if let Type::Custom { name, .. } = &**inner {
-                                name.clone()
-                            } else {
-                                return Err("Member assignment on non-custom pointer type".into());
-                            }
-                        }
-                        Type::Custom { name, .. } => name.clone(),
-                        _ => return Err("Member assignment on non-struct type".into()),
-                    };
+                let mut current_ty = self
+                    .variable_types
+                    .get(base_name)
+                    .ok_or_else(|| format!("Variable type not found: {}", base_name))?
+                    .clone();
 
-                    // Look up the field index from our mapping
-                    let field_idx = self
-                        .struct_field_indices
-                        .get(&struct_name)
-                        .and_then(|fields| fields.get(member))
-                        .copied()
-                        .ok_or_else(|| {
-                            format!("Field '{}' not found in struct '{}'", member, struct_name)
-                        })?;
+                let opaque_ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
 
-                    // Determine struct_ptr and struct_type based on whether the variable is a pointer to a struct or the struct itself
-                    let (struct_ptr, struct_type) = if let Type::Pointer(inner) = var_ty {
-                        if let Type::Custom {
-                            name: struct_name, ..
-                        } = &**inner
-                        {
-                            let st =
-                                self.context
-                                    .get_struct_type(struct_name)
-                                    .unwrap_or_else(|| {
-                                        panic!("Struct lookup failed for: {}", struct_name)
-                                    });
-                            // The alloca holds a pointer to the struct. Load it using the generic pointer type.
-                            let opaque_ptr_type =
-                                self.context.ptr_type(inkwell::AddressSpace::default());
-                            let loaded_ptr = self
-                                .builder
-                                .build_load(opaque_ptr_type, ptr, "obj_ptr")?
-                                .into_pointer_value();
-                            (loaded_ptr, st)
-                        } else {
-                            return Err("Member assignment on non-custom pointer type".into());
-                        }
-                    } else if let Type::Custom {
-                        name: struct_name, ..
-                    } = var_ty
-                    {
-                        let st = self
-                            .context
-                            .get_struct_type(struct_name)
-                            .unwrap_or_else(|| panic!("Struct lookup failed for: {}", struct_name));
-                        // ptr is alloca to struct
-                        (ptr, st)
-                    } else {
-                        return Err("Member assignment on non-struct type".into());
-                    };
+                // Iterate through the parts (starting from the second one)
+                for i in 1..parts.len() {
+                    let part = parts[i];
 
-                    let field_ptr = self
-                        .builder
-                        .build_struct_gep(struct_type, struct_ptr, field_idx, "field_ptr")
-                        .map_err(|e| e.to_string())?;
-
-                    // Get the exact field type to coerce the assigned value
-                    let field_type = struct_type.get_field_type_at_index(field_idx).unwrap();
-                    let mut llvm_val = self.generate_hir_expr(value)?;
-
-                    // Simple int casting for assignment coercion if needed
-                    if field_type.is_int_type() && llvm_val.is_int_value() {
-                        llvm_val = self
+                    if part == "*" {
+                        // Dereference
+                        current_ptr = self
                             .builder
-                            .build_int_cast(
-                                llvm_val.into_int_value(),
-                                field_type.into_int_type(),
-                                "assign_cast",
-                            )?
-                            .into();
-                    }
+                            .build_load(opaque_ptr_type, current_ptr, "deref_ptr")?
+                            .into_pointer_value();
 
-                    self.builder.build_store(field_ptr, llvm_val)?;
-                    return Ok(());
+                        current_ty = match current_ty {
+                            Type::Pointer(inner) => inner.as_ref().clone(),
+                            _ => return Err("Dereference on non-pointer type".into()),
+                        };
+                    } else {
+                        // Member access
+                        let struct_name = match &current_ty {
+                            Type::Pointer(inner) => {
+                                // If it's a pointer, we need to load it first to get to the struct
+                                current_ptr = self
+                                    .builder
+                                    .build_load(opaque_ptr_type, current_ptr, "struct_ptr")?
+                                    .into_pointer_value();
+
+                                let inner_ty = inner.as_ref().clone();
+                                if let Type::Custom { name, .. } = inner_ty {
+                                    current_ty = Type::Custom {
+                                        name: name.clone(),
+                                        generic_args: Vec::new(),
+                                        is_exported: false,
+                                    };
+                                    name
+                                } else {
+                                    return Err("Member access on non-custom pointer type".into());
+                                }
+                            }
+                            Type::Custom { name, .. } => name.clone(),
+                            _ => {
+                                return Err(format!(
+                                    "Member access on non-struct type: {:?}",
+                                    current_ty
+                                )
+                                .into())
+                            }
+                        };
+
+                        let field_idx = self
+                            .struct_field_indices
+                            .get(&struct_name)
+                            .and_then(|fields| fields.get(part))
+                            .copied()
+                            .ok_or_else(|| {
+                                format!("Field '{}' not found in struct '{}'", part, struct_name)
+                            })?;
+
+                        let struct_type = self
+                            .context
+                            .get_struct_type(&struct_name)
+                            .ok_or_else(|| format!("Struct type not found: {}", struct_name))?;
+
+                        current_ptr = self
+                            .builder
+                            .build_struct_gep(struct_type, current_ptr, field_idx, "field_ptr")
+                            .map_err(|e| e.to_string())?;
+
+                        // Update current_ty to the field type
+                        let struct_def = self
+                            .structs
+                            .get(&struct_name)
+                            .ok_or_else(|| format!("Struct definition not found: {}", struct_name))?;
+                        let field_def = struct_def
+                            .fields
+                            .iter()
+                            .find(|f| f.name == part)
+                            .ok_or_else(|| {
+                                format!("Field '{}' not found in struct '{}'", part, struct_name)
+                            })?;
+                        current_ty = field_def.ty.clone();
+                    }
                 }
 
-                let ptr = self.variables.get(target).ok_or("Var not found")?.clone();
-                let expected_t = self
-                    .variable_types
-                    .get(target)
-                    .ok_or("Var type not found")?
-                    .clone();
+                // Now we have the final pointer to store into
                 let mut llvm_val = self.generate_hir_expr(value)?;
-                llvm_val = self.coerce_type(llvm_val, &expected_t)?;
-                self.builder.build_store(ptr, llvm_val)?;
+                llvm_val = self.coerce_type(llvm_val, &current_ty)?;
+
+                self.builder.build_store(current_ptr, llvm_val)?;
                 Ok(())
             }
             hir::HirStmt::Return(value, _) => {

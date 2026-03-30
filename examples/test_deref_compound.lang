@@ -1,0 +1,24 @@
+import "io"
+
+fn main() i32 {
+    var x: i64 = 42;
+    const ptr: *i64 = &x;
+    
+    io.println("Initial x: {d}", x);
+    
+    ptr.* += 10;
+    io.println("After ptr.* += 10, x: {d}", x);
+    
+    ptr.* *= 2;
+    io.println("After ptr.* *= 2, x: {d}", x);
+    
+    ptr.* -= 4;
+    io.println("After ptr.* -= 4, x: {d}", x);
+
+    // Verify it works with simple variables too
+    var y: i64 = 100;
+    y += 50;
+    io.println("y after y += 50: {d}", y);
+
+    return 0;
+}
