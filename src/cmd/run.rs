@@ -45,7 +45,7 @@ pub fn run_jit(
     // Semantic Analysis
     println!("Semantic Analysis...");
     let mut analyzer = sema::SemanticAnalyzer::new();
-    analyzer.analyze_with_stdlib(&mut program, Some(&stdlib))?;
+    analyzer.analyze_with_stdlib(&mut program, Some(&stdlib), true)?;
 
     // Generate LLVM IR
     let context = inkwell::context::Context::create();

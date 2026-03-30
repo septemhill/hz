@@ -172,7 +172,7 @@ impl BuildSystem {
         // 2. Sema
         let mut analyzer = sema::SemanticAnalyzer::new();
         analyzer
-            .analyze_with_stdlib(&mut program, Some(&stdlib))
+            .analyze_with_stdlib(&mut program, Some(&stdlib), true)
             .map_err(|e| {
                 let file_name = unit.path.to_str().unwrap_or("unknown");
                 // Calculate line number from span offset

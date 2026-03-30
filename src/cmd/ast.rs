@@ -10,6 +10,7 @@ use crate::sema::SemanticAnalyzer;
 pub fn dump_ast(
     source: &str,
     _cli_std_path: Option<std::path::PathBuf>,
+    enable_tree_shaking: bool,
 ) -> Result<(), Box<dyn Error>> {
     // Parse source code
     let mut program = parser::parse(source)?;
@@ -27,7 +28,7 @@ pub fn dump_ast(
 
     // Run semantic analysis to get typed AST
     let mut analyzer = SemanticAnalyzer::new();
-    match analyzer.analyze_with_stdlib(&mut program, Some(&stdlib)) {
+    match analyzer.analyze_with_stdlib(&mut program, Some(&stdlib), enable_tree_shaking) {
         Ok(_) => {
             if let Some(typed_program) = analyzer.get_typed_program() {
                 typed_program.dump(0);

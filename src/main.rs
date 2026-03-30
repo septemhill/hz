@@ -76,6 +76,9 @@ enum Commands {
         /// Output file for IR (optional)
         #[arg(short = 'o', long = "output", value_name = "OUTPUT")]
         output: Option<std::path::PathBuf>,
+        /// Disable tree-shaking
+        #[arg(long = "no-tree-shaking")]
+        no_tree_shaking: bool,
     },
     /// Dump HIR (High-level Intermediate Representation)
     Hir {
@@ -85,12 +88,18 @@ enum Commands {
         /// Output file for HIR (optional)
         #[arg(short = 'o', long = "output", value_name = "OUTPUT")]
         output: Option<std::path::PathBuf>,
+        /// Disable tree-shaking
+        #[arg(long = "no-tree-shaking")]
+        no_tree_shaking: bool,
     },
     /// Dump AST (Abstract Syntax Tree)
     Ast {
         /// Source file to dump AST from
         #[arg(value_name = "FILE")]
         source: std::path::PathBuf,
+        /// Disable tree-shaking
+        #[arg(long = "no-tree-shaking")]
+        no_tree_shaking: bool,
     },
     /// List all types with their unique IDs
     Typelist {
@@ -138,19 +147,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let source_content = fs::read_to_string(&source)?;
             cmd::jit::run_jit_command(&source_content, cli.std_path)?;
         }
-        Commands::Ir { source, output } => {
+        Commands::Ir {
+            source,
+            output,
+            no_tree_shaking,
+        } => {
             let source_content = fs::read_to_string(&source)?;
             let output_path = output.map(|p| p.to_string_lossy().to_string());
-            cmd::generate_ir(&source_content, output_path, cli.std_path)?;
+            cmd::generate_ir(&source_content, output_path, cli.std_path, !no_tree_shaking)?;
         }
-        Commands::Hir { source, output } => {
+        Commands::Hir {
+            source,
+            output,
+            no_tree_shaking,
+        } => {
             let source_content = fs::read_to_string(&source)?;
             let output_path = output.map(|p| p.to_string_lossy().to_string());
-            cmd::dump_hir(&source_content, output_path, cli.std_path)?;
+            cmd::dump_hir(&source_content, output_path, cli.std_path, !no_tree_shaking)?;
         }
-        Commands::Ast { source } => {
+        Commands::Ast {
+            source,
+            no_tree_shaking,
+        } => {
             let source_content = fs::read_to_string(&source)?;
-            cmd::dump_ast(&source_content, cli.std_path)?;
+            cmd::dump_ast(&source_content, cli.std_path, !no_tree_shaking)?;
         }
         Commands::Lsp { verbose } => {
             cmd::run_lsp(verbose, cli.std_path);

@@ -6,6 +6,7 @@
 use crate::lexer::iter as lexer_iter;
 use crate::parser::Parser;
 use crate::sema::{AnalysisError, SemanticAnalyzer};
+use crate::stdlib::StdLib;
 
 /// Helper function to parse source code and run semantic analysis
 fn analyze_source(source: &str) -> Result<(), AnalysisError> {
@@ -816,5 +817,250 @@ fn main() void {
         result.is_ok(),
         "Expected generic interface-constrained method call to analyze: {:?}",
         result
+    );
+}
+
+// ==========================================================================
+// Tree-shaking Tests
+// ==========================================================================
+
+/// Helper function to analyze source with tree-shaking control
+fn analyze_source_with_treeshaking(
+    source: &str,
+    enable_tree_shaking: bool,
+) -> Result<(usize, usize, usize), AnalysisError> {
+    let tokens = lexer_iter(source);
+    let mut parser = Parser::new(tokens);
+    let mut program = parser
+        .parse_program()
+        .map_err(|e| AnalysisError::new(&e.to_string()))?;
+
+    let stdlib = StdLib::new();
+    let mut analyzer = SemanticAnalyzer::new();
+    analyzer.analyze_with_stdlib(&mut program, Some(&stdlib), enable_tree_shaking)?;
+
+    // Return counts of functions, structs, enums
+    Ok((
+        program.functions.len(),
+        program.structs.len(),
+        program.enums.len(),
+    ))
+}
+
+/// Test that tree-shaking is enabled by default
+#[test]
+fn test_treeshaking_enabled() {
+    let source = r#"
+        fn main() i64 {
+            return add(1, 2);
+        }
+
+        fn add(a: i64, b: i64) i64 {
+            return a + b;
+        }
+
+        // This function is never called and should be removed
+        fn unused_function() i64 {
+            return 999;
+        }
+    "#;
+
+    // With tree-shaking enabled (true)
+    let (funcs, _, _) = analyze_source_with_treeshaking(source, true).unwrap();
+
+    // Should have at least main and add (unused_function removed)
+    assert!(
+        funcs == 2,
+        "With tree-shaking, should exactly 2 functions (main, add)"
+    );
+}
+
+/// Test that disabling tree-shaking keeps all functions
+#[test]
+fn test_treeshaking_disabled_keeps_all() {
+    let source = r#"
+        fn main() i64 {
+            return add(1, 2);
+        }
+
+        fn add(a: i64, b: i64) i64 {
+            return a + b;
+        }
+
+        // This function is never called but should be kept when tree-shaking is disabled
+        fn unused_function() i64 {
+            return 999;
+        }
+    "#;
+
+    // With tree-shaking disabled (false)
+    let (funcs, _, _) = analyze_source_with_treeshaking(source, false).unwrap();
+
+    // Should have all 3 functions
+    assert_eq!(
+        funcs, 3,
+        "Without tree-shaking, should have all 3 functions"
+    );
+}
+
+/// Test tree-shaking removes unused struct
+#[test]
+fn test_treeshaking_removes_unused_struct() {
+    // Simplified test - just verify parsing works
+    let source = r#"
+        fn main() i64 {
+            return 1;
+        }
+
+        struct Point2D {
+            x: i64,
+            y: i64,
+        }
+    "#;
+
+    // First just verify parsing works
+    let result = analyze_source_with_treeshaking(source, true);
+    assert!(result.is_ok(), "Basic source should parse: {:?}", result);
+
+    let (funcs, structs, _) = result.unwrap();
+    assert_eq!(funcs, 1, "Should have 1 function");
+    assert_eq!(structs, 0, "Should have 0 structs");
+}
+
+/// Test tree-shaking removes unused enum
+#[test]
+fn test_treeshaking_removes_unused_enum() {
+    // Simplified test - just verify parsing works
+    let source = r#"
+        fn main() i64 {
+            return 1;
+        }
+
+        enum Color {
+            Red,
+            Green,
+            Blue,
+        }
+
+        enum Result {
+            Ok,
+            Err,
+        }
+    "#;
+
+    // First just verify parsing works
+    let result = analyze_source_with_treeshaking(source, true);
+    assert!(result.is_ok(), "Basic source should parse: {:?}", result);
+
+    let (funcs, _, enums) = result.unwrap();
+    assert_eq!(funcs, 1, "Should have 1 function");
+    assert_eq!(enums, 0, "Should have 0 enums");
+}
+
+/// Test that public functions are kept even if not called
+#[test]
+fn test_treeshaking_keeps_public_functions() {
+    let source = r#"
+        fn main() i64 {
+            return 1;
+        }
+
+        pub fn public_function() i64 {
+            return 42;
+        }
+
+        // This private function is never called
+        fn private_unused() i64 {
+            return 999;
+        }
+    "#;
+
+    // With tree-shaking enabled
+    let (funcs, _, _) = analyze_source_with_treeshaking(source, true).unwrap();
+    assert!(funcs >= 2, "Should keep main and public_function");
+}
+
+/// Test tree-shaking with nested calls
+#[test]
+fn test_treeshaking_nested_calls() {
+    let source = r#"
+        fn main() i64 {
+            return double(add(1, 2));
+        }
+
+        fn add(a: i64, b: i64) i64 {
+            return a + b;
+        }
+
+        fn double(x: i64) i64 {
+            return x * 2;
+        }
+
+        // Never called
+        fn unused() i64 {
+            return 999;
+        }
+    "#;
+
+    // With tree-shaking enabled
+    let (funcs, _, _) = analyze_source_with_treeshaking(source, true).unwrap();
+    assert_eq!(funcs, 3, "Should have 3 functions (main, add, double)");
+
+    // Without tree-shaking
+    let (funcs_no_ts, _, _) = analyze_source_with_treeshaking(source, false).unwrap();
+    assert_eq!(funcs_no_ts, 4, "Should have all 4 functions");
+}
+
+/// Test difference: with vs without tree-shaking shows different results
+#[test]
+fn test_treeshaking_difference() {
+    let source = r#"
+        fn main() i64 {
+            return used_func();
+        }
+
+        fn used_func() i64 {
+            return 10;
+        }
+
+        fn unused_func1() i64 { return 1; }
+        fn unused_func2() i64 { return 2; }
+        fn unused_func3() i64 { return 3; }
+    "#;
+
+    // Test with tree-shaking enabled
+    let (count_with_ts, _, _) = analyze_source_with_treeshaking(source, true).unwrap();
+
+    // Test with tree-shaking disabled
+    let (count_without_ts, _, _) = analyze_source_with_treeshaking(source, false).unwrap();
+
+    assert_eq!(
+        count_with_ts, 2,
+        "With tree-shaking should have 2 functions"
+    );
+
+    assert_eq!(
+        count_without_ts, 5,
+        "Without tree-shaking should have 5 functions"
+    );
+
+    // Verify difference is visible
+    assert!(
+        count_without_ts >= count_with_ts,
+        "Without tree-shaking should have >= functions (with: {}, without: {})",
+        count_with_ts,
+        count_without_ts
+    );
+
+    // Without tree-shaking should have all 5
+    assert_eq!(
+        count_without_ts, 5,
+        "Without tree-shaking should have all 5 functions"
+    );
+
+    // With tree-shaking should have at most 2
+    assert!(
+        count_with_ts <= 2,
+        "With tree-shaking should have at most 2 functions"
     );
 }

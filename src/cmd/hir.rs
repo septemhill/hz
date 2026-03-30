@@ -12,6 +12,7 @@ pub fn dump_hir(
     source: &str,
     output_path: Option<String>,
     cli_std_path: Option<std::path::PathBuf>,
+    enable_tree_shaking: bool,
 ) -> Result<(), Box<dyn Error>> {
     // Initialize std library
     println!("Loading std library...");
@@ -31,7 +32,7 @@ pub fn dump_hir(
     // Semantic Analysis
     println!("Semantic Analysis...");
     let mut analyzer = sema::SemanticAnalyzer::new();
-    analyzer.analyze(&mut program)?;
+    analyzer.analyze_with_stdlib(&mut program, Some(&stdlib), enable_tree_shaking)?;
 
     // Lower to HIR
     println!("Lowering to HIR...");

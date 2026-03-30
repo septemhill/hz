@@ -78,6 +78,7 @@ impl SemanticAnalyzer {
         &mut self,
         program: &mut crate::ast::Program,
         stdlib: Option<&crate::stdlib::StdLib>,
+        enable_tree_shaking: bool,
     ) -> AnalysisResult<()> {
         // If stdlib is provided, pre-populate symbol table with imported functions
         if let Some(stdlib) = stdlib {
@@ -335,10 +336,10 @@ impl SemanticAnalyzer {
         // Store final symbol table
         self.symbol_table = mutability_analyzer.get_symbol_table().clone();
 
-        // Pass 6: Tree-shaking - remove dead code
-        // We need a mutable reference for treeshaking, but the function signature uses &Program
-        // So we use a separate scope with explicit mutable borrow
-        {
+        // Pass 6: Tree-shaking - remove dead code (optional)
+        if enable_tree_shaking {
+            // We need a mutable reference for treeshaking, but the function signature uses &Program
+            // So we use a separate scope with explicit mutable borrow
             let final_symbol_table = self.symbol_table.clone();
             let stats = crate::sema::treeshake(program, final_symbol_table);
             eprintln!(
@@ -352,7 +353,7 @@ impl SemanticAnalyzer {
 
     /// Analyze program without stdlib (for backward compatibility)
     pub fn analyze(&mut self, program: &mut crate::ast::Program) -> AnalysisResult<()> {
-        self.analyze_with_stdlib(program, None)
+        self.analyze_with_stdlib(program, None, true)
     }
 
     #[allow(unused)]

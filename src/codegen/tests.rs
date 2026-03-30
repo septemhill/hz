@@ -16,7 +16,7 @@ fn get_ir_from_source(
     let mut program = parser::parse(source)?;
 
     let mut analyzer = SemanticAnalyzer::new();
-    analyzer.analyze_with_stdlib(&mut program, Some(&stdlib))?;
+    analyzer.analyze_with_stdlib(&mut program, Some(&stdlib), true)?;
 
     let typed_program = analyzer
         .get_typed_program()
@@ -453,11 +453,7 @@ fn test_generate_continue_uses_loop_latch() -> Result<(), Box<dyn std::error::Er
         body: Box::new(HirStmt::If {
             condition: HirExpr::Binary {
                 op: BinaryOp::Gt,
-                left: Box::new(HirExpr::Ident(
-                    "i".to_string(),
-                    Type::I64,
-                    Span::default(),
-                )),
+                left: Box::new(HirExpr::Ident("i".to_string(), Type::I64, Span::default())),
                 right: Box::new(HirExpr::Int(3, Type::I64, Span::default())),
                 ty: Type::Bool,
                 span: Span::default(),
@@ -485,8 +481,8 @@ fn test_generate_continue_uses_loop_latch() -> Result<(), Box<dyn std::error::Er
 }
 
 #[test]
-fn test_generate_option_for_re_evaluates_iterable_and_stops_on_null(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn test_generate_option_for_re_evaluates_iterable_and_stops_on_null()
+-> Result<(), Box<dyn std::error::Error>> {
     let context = Context::create();
     let stdlib = StdLib::new();
     let mut codegen = CodeGenerator::new(
@@ -506,8 +502,10 @@ fn test_generate_option_for_re_evaluates_iterable_and_stops_on_null(
     codegen.current_block = Some(entry_block);
     codegen.return_type = Some(Type::Void);
 
-    let option_i64_type = context
-        .struct_type(&[context.i64_type().into(), context.bool_type().into()], false);
+    let option_i64_type = context.struct_type(
+        &[context.i64_type().into(), context.bool_type().into()],
+        false,
+    );
     let next_fn_type = option_i64_type.fn_type(&[], false);
     codegen
         .module
@@ -537,7 +535,10 @@ fn test_generate_option_for_re_evaluates_iterable_and_stops_on_null(
         .find("call { i64, i1 } @test_module_next()")
         .ok_or("missing next() call in IR")?;
     assert!(call_pos > for_eval_pos);
-    assert_eq!(ir.matches("call { i64, i1 } @test_module_next()").count(), 1);
+    assert_eq!(
+        ir.matches("call { i64, i1 } @test_module_next()").count(),
+        1
+    );
     assert!(ir.contains("br i1 %is_null, label %for_end, label %for_body"));
 
     Ok(())
