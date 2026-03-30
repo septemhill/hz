@@ -11,8 +11,8 @@ pub mod treeshaker;
 pub mod typelist;
 pub mod types;
 
-use crate::ast::Type;
-use std::collections::HashMap;
+use crate::ast::{ErrorDef, ErrorVariant, Type};
+use std::collections::{HashMap, HashSet};
 
 #[cfg(test)]
 mod tests;
@@ -80,6 +80,8 @@ impl SemanticAnalyzer {
         stdlib: Option<&crate::stdlib::StdLib>,
         enable_tree_shaking: bool,
     ) -> AnalysisResult<()> {
+        normalize_error_unions(&mut program.errors)?;
+
         // If stdlib is provided, pre-populate symbol table with imported functions
         if let Some(stdlib) = stdlib {
             // Collect all functions from imported packages
@@ -370,4 +372,71 @@ impl Default for SemanticAnalyzer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn normalize_error_unions(errors: &mut [ErrorDef]) -> AnalysisResult<()> {
+    let error_map: HashMap<String, ErrorDef> = errors
+        .iter()
+        .cloned()
+        .map(|error| (error.name.clone(), error))
+        .collect();
+    let mut expanded_cache: HashMap<String, Vec<ErrorVariant>> = HashMap::new();
+
+    for error in errors.iter_mut() {
+        let mut visiting = HashSet::new();
+        error.variants =
+            expand_error_variants(&error.name, &error_map, &mut expanded_cache, &mut visiting)?;
+    }
+
+    Ok(())
+}
+
+fn expand_error_variants(
+    error_name: &str,
+    error_map: &HashMap<String, ErrorDef>,
+    expanded_cache: &mut HashMap<String, Vec<ErrorVariant>>,
+    visiting: &mut HashSet<String>,
+) -> AnalysisResult<Vec<ErrorVariant>> {
+    if let Some(variants) = expanded_cache.get(error_name) {
+        return Ok(variants.clone());
+    }
+
+    if !visiting.insert(error_name.to_string()) {
+        return Err(
+            AnalysisError::new(&format!("Cyclic error union involving '{}'", error_name))
+                .with_module("sema"),
+        );
+    }
+
+    let error_def = error_map.get(error_name).ok_or_else(|| {
+        AnalysisError::new(&format!("Unknown error type '{}'", error_name)).with_module("sema")
+    })?;
+
+    let mut expanded_variants = Vec::new();
+    let mut seen_variants = HashSet::new();
+
+    for variant in &error_def.variants {
+        let included_error = if variant.associated_types.is_empty() {
+            error_map.get(&variant.name)
+        } else {
+            None
+        };
+
+        if let Some(included_error) = included_error {
+            let nested_variants =
+                expand_error_variants(&included_error.name, error_map, expanded_cache, visiting)?;
+
+            for nested_variant in nested_variants {
+                if seen_variants.insert(nested_variant.name.clone()) {
+                    expanded_variants.push(nested_variant);
+                }
+            }
+        } else if seen_variants.insert(variant.name.clone()) {
+            expanded_variants.push(variant.clone());
+        }
+    }
+
+    visiting.remove(error_name);
+    expanded_cache.insert(error_name.to_string(), expanded_variants.clone());
+    Ok(expanded_variants)
 }

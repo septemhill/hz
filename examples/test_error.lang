@@ -6,10 +6,13 @@ pub error FileError {
 }
 
 error StatusError {
-
+    InvalidCode,
 }
 
-error UnionError = FileError | StatusError;
+error UnionError {
+    FileError,
+    StatusError,
+}
 
 fn file_not_found_error() i64! {
     return 1;

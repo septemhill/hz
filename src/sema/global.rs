@@ -277,16 +277,19 @@ impl GlobalDefinitionsAnalyzer {
 
         for strukt in &program.structs {
             for interface_impl in &strukt.interface_impls {
-                let interface = interfaces.get(&interface_impl.interface_name).ok_or_else(|| {
-                    AnalysisError::new_with_span(
-                        &format!(
-                            "Unknown interface '{}' in impl block for struct '{}'",
-                            interface_impl.interface_name, strukt.name
-                        ),
-                        &interface_impl.span,
-                    )
-                    .with_module("global")
-                })?;
+                let interface =
+                    interfaces
+                        .get(&interface_impl.interface_name)
+                        .ok_or_else(|| {
+                            AnalysisError::new_with_span(
+                                &format!(
+                                    "Unknown interface '{}' in impl block for struct '{}'",
+                                    interface_impl.interface_name, strukt.name
+                                ),
+                                &interface_impl.span,
+                            )
+                            .with_module("global")
+                        })?;
 
                 let mut missing_methods = Vec::new();
                 for required_method in &interface.methods {

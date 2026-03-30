@@ -3703,45 +3703,6 @@ impl Parser {
             });
         };
 
-        // Check for error union syntax: error X = A | B | C
-        if self.match_token(Token::Assign) {
-            // Parse union types
-            let mut union_types = Vec::new();
-            loop {
-                self.skip_whitespace();
-
-                if let Token::Ident(type_name) =
-                    self.current().cloned().ok_or_else(|| ParseError {
-                        message: "Expected error type in union".to_string(),
-                        location: None,
-                    })?
-                {
-                    union_types.push(Type::Custom {
-                        name: type_name,
-                        generic_args: vec![],
-                        is_exported: false,
-                    });
-                    self.advance();
-                }
-
-                self.skip_whitespace();
-
-                if !self.match_token(Token::Pipe) {
-                    break;
-                }
-            }
-
-            self.match_token(Token::Semicolon);
-
-            return Ok(ErrorDef {
-                name,
-                variants: vec![],
-                union_types: Some(union_types),
-                visibility,
-                span: Span { start: 0, end: 0 },
-            });
-        }
-
         // Parse variants (error with { ... })
         if !self.match_token(Token::LBrace) {
             return Err(ParseError {
@@ -3817,7 +3778,6 @@ impl Parser {
         Ok(ErrorDef {
             name,
             variants,
-            union_types: None,
             visibility,
             span: Span { start: 0, end: 0 },
         })

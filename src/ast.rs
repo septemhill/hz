@@ -447,8 +447,6 @@ pub struct ErrorVariant {
 pub struct ErrorDef {
     pub name: String,
     pub variants: Vec<ErrorVariant>,
-    /// For error union types: Some(types) for `error X = A | B`
-    pub union_types: Option<Vec<Type>>,
     pub visibility: Visibility,
     pub span: Span,
 }
@@ -909,20 +907,15 @@ impl AstDump for ErrorDef {
         };
         println!("ErrorDef: {}{}", vis, self.name);
 
-        if let Some(union) = &self.union_types {
+        for v in &self.variants {
             print_indent(indent + 1);
-            println!("Union: {:?}", union);
-        } else {
-            for v in &self.variants {
-                print_indent(indent + 1);
-                let vvis = if v.visibility.is_public() { "pub " } else { "" };
-                let types = if v.associated_types.is_empty() {
-                    "".to_string()
-                } else {
-                    format!("({:?})", v.associated_types)
-                };
-                println!("Variant: {}{}{}", vvis, v.name, types);
-            }
+            let vvis = if v.visibility.is_public() { "pub " } else { "" };
+            let types = if v.associated_types.is_empty() {
+                "".to_string()
+            } else {
+                format!("({:?})", v.associated_types)
+            };
+            println!("Variant: {}{}{}", vvis, v.name, types);
         }
     }
 }

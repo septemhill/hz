@@ -300,7 +300,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let alloca = self.builder.build_alloca(val.get_type(), name)?;
                 self.builder.build_store(alloca, val)?;
                 self.variables.insert(name.clone(), alloca);
-                self.variable_types.insert(name.clone(), Type::I64);
+                self.variable_types
+                    .insert(name.clone(), self.llvm_type_to_lang(&val.get_type()));
             } else if is_array {
                 if let Some(idx_alloca) = array_index_alloca {
                     let current_index = self.builder.build_load(
@@ -364,7 +365,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let alloca = self.builder.build_alloca(val.get_type(), name)?;
                 self.builder.build_store(alloca, val)?;
                 self.variables.insert(name.clone(), alloca);
-                self.variable_types.insert(name.clone(), Type::I64);
+                self.variable_types
+                    .insert(name.clone(), self.llvm_type_to_lang(&val.get_type()));
             } else if is_array {
                 if let Some(idx_alloca) = array_index_alloca {
                     let current_index = self.builder.build_load(
@@ -440,9 +442,11 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder.build_unconditional_branch(cond_block)?;
         } else if is_array {
             if let Some(idx_alloca) = array_index_alloca {
-                let current_index =
-                    self.builder
-                        .build_load(self.context.i64_type(), idx_alloca, "array_idx_inc")?;
+                let current_index = self.builder.build_load(
+                    self.context.i64_type(),
+                    idx_alloca,
+                    "array_idx_inc",
+                )?;
                 let incremented = self.builder.build_int_add(
                     current_index.into_int_value(),
                     self.context.i64_type().const_int(1, false),

@@ -170,13 +170,6 @@ pub fn collect_types_from_program(program: &crate::ast::Program) -> Vec<Type> {
                 collect_types_from_type(field, &mut types);
             }
         }
-
-        // Add union types if present
-        if let Some(union_types) = &error_def.union_types {
-            for ty in union_types {
-                collect_types_from_type(ty, &mut types);
-            }
-        }
     }
 
     types

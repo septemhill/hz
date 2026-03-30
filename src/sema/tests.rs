@@ -756,6 +756,57 @@ fn main() void {
 }
 
 #[test]
+fn test_error_union_block_expands_error_members() {
+    let source = r#"
+error FileError {
+    NotFound(String),
+    PermissionDenied,
+}
+
+error StatusError {
+    BadStatus(i64),
+}
+
+error UnionError {
+    FileError,
+    StatusError,
+}
+
+fn main() void {
+    const x = UnionError.PermissionDenied;
+    const y = UnionError.BadStatus;
+}
+"#;
+
+    let symbols = analyze_source_with_symbols(source).unwrap();
+    assert!(
+        symbols.resolve("UnionError.PermissionDenied").is_some(),
+        "Union error should expose expanded FileError members"
+    );
+    assert!(
+        symbols.resolve("UnionError.BadStatus").is_some(),
+        "Union error should expose expanded StatusError members"
+    );
+
+    let typed_program = analyze_source_typed(source).unwrap();
+    let union_error = typed_program
+        .errors
+        .iter()
+        .find(|error| error.name == "UnionError")
+        .expect("UnionError should exist");
+    let variant_names = union_error
+        .variants
+        .iter()
+        .map(|variant| variant.name.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        variant_names,
+        vec!["NotFound", "PermissionDenied", "BadStatus"]
+    );
+}
+
+#[test]
 fn test_interface_impl_missing_method_error() {
     let source = r#"
 interface Service {

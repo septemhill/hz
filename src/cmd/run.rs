@@ -79,7 +79,7 @@ pub fn run_jit(
     for s in &typed_program.structs {
         codegen.declare_struct(s)?;
     }
-    for e in &program.enums {
+    for e in analyzer.enums.values() {
         codegen.declare_enum(e)?;
     }
 
