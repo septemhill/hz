@@ -1,8 +1,16 @@
 import "io"
 
+interface ServiceCore {
+    do_something() void,
+}
+
+interface ServiceExtra {
+    do_something_else() void,
+}
+
 interface Service {
-    fn do_something() void;
-    fn do_something_else() void;
+    ServiceCore,
+    ServiceExtra,
 }
 
 struct Compose<T> {
@@ -31,14 +39,6 @@ struct Compose<T> {
     }
 }
 
-struct Data {
-    age: i32,
-}
-
-fn add<T>(a: T, b: T) T {
-    return a + b;
-}
-
 fn transition_i32(i: u8) i32 {
     return i32(i);
 }
@@ -64,6 +64,5 @@ fn main() void {
 
 fn service_infc<T: Service>(v: T) void {
     v.do_something();
-
     v.do_something_else();
 }

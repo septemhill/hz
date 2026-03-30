@@ -1,36 +1,45 @@
+import "io"
+
+pub interface TemplateBase {
+    MethodOne() void,
+    MethodTwo() void,
+}
+
+pub interface TemplateMath {
+    MethodThree(i64, i64) i64,
+}
+
 pub interface Template {
-    fn MethodOne();
-    fn MethodTwo();
-    fn MethodThree(i64, i64) i64;
-};
+    TemplateBase,
+    TemplateMath,
+}
 
 pub struct Service {
-    name: String,
-    age: i32,
+    impl Template {
+        fn MethodOne(self: Self) void {
+            io.println("MethodOne");
+        }
 
-    pub fn MethodOne() {
-        io.println("MethodOne");
+        fn MethodTwo(self: Self) void {
+            io.println("MethodTwo");
+        }
+
+        fn MethodThree(self: Self, a: i64, b: i64) i64 {
+            return a + b;
+        }
     }
+}
 
-    pub fn MethodTwo() {
-        io.println("MethodTwo");
-    }
-
-    pub fn MethodThree(a: i32, b: i64) i64 {
-        return a + b;
-    }
-};
-
-pub fn validate(srv: Template) {
+pub fn validate<T: Template>(service: T) void {
     service.MethodOne();
     service.MethodTwo();
-    const f = service.MethodThree(1, 2);
-    io.println(f);
+    const total = service.MethodThree(1, 2);
+    io.println(total);
 }
 
 fn main() void {
-    const service: Service = Service {
-        name: "Service",
-        age: 10,
+    const service = Service {
     };
+
+    validate(service);
 }

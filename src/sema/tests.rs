@@ -756,6 +756,77 @@ fn main() void {
 }
 
 #[test]
+fn test_interface_compose_expands_methods() {
+    let source = r#"
+interface A {
+    AOne() void,
+    ATwo() void,
+}
+
+interface B {
+    BOne() i32,
+    BTwo() i32,
+}
+
+interface C {
+    A,
+    B,
+    COne() i64,
+}
+
+struct Compose {
+    impl C {
+        fn AOne(self: Self) void {
+            return;
+        }
+
+        fn ATwo(self: Self) void {
+            return;
+        }
+
+        fn BOne(self: Self) i32 {
+            return 1;
+        }
+
+        fn BTwo(self: Self) i32 {
+            return 2;
+        }
+
+        fn COne(self: Self) i64 {
+            return 3;
+        }
+    }
+}
+
+fn main() void {
+    const value = Compose {};
+    value.AOne();
+    _ = value.BOne();
+    _ = value.COne();
+}
+"#;
+
+    let tokens = lexer_iter(source);
+    let mut parser = Parser::new(tokens);
+    let mut program = parser.parse_program().unwrap();
+    let mut analyzer = SemanticAnalyzer::new();
+    analyzer.analyze(&mut program).unwrap();
+
+    let composed = program
+        .interfaces
+        .iter()
+        .find(|interface| interface.name == "C")
+        .expect("C should exist");
+    let method_names = composed
+        .methods
+        .iter()
+        .map(|method| method.name.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(method_names, vec!["AOne", "ATwo", "BOne", "BTwo", "COne"]);
+}
+
+#[test]
 fn test_error_union_block_expands_error_members() {
     let source = r#"
 error FileError {

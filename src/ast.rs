@@ -402,6 +402,8 @@ pub struct StructDef {
 pub struct InterfaceDef {
     pub name: String,
     pub methods: Vec<FnDef>,
+    /// Composed interfaces included by name.
+    pub composed_interfaces: Vec<String>,
     pub visibility: Visibility,
     pub span: Span,
 }
@@ -859,6 +861,10 @@ impl AstDump for InterfaceDef {
             ""
         };
         println!("InterfaceDef: {}{}", vis, self.name);
+        for composed in &self.composed_interfaces {
+            print_indent(indent + 1);
+            println!("Compose: {}", composed);
+        }
         for method in &self.methods {
             method.dump(indent + 1);
         }

@@ -543,6 +543,7 @@ mod tests {
             functions: vec![main_fn],
             external_functions: Vec::new(),
             structs: Vec::new(),
+            interfaces: Vec::new(),
             enums: Vec::new(),
             errors: Vec::new(),
             imports: Vec::new(),

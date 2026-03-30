@@ -11,7 +11,7 @@ pub mod treeshaker;
 pub mod typelist;
 pub mod types;
 
-use crate::ast::{ErrorDef, ErrorVariant, Type};
+use crate::ast::{ErrorDef, ErrorVariant, FnDef, InterfaceDef, Type};
 use std::collections::{HashMap, HashSet};
 
 #[cfg(test)]
@@ -80,6 +80,7 @@ impl SemanticAnalyzer {
         stdlib: Option<&crate::stdlib::StdLib>,
         enable_tree_shaking: bool,
     ) -> AnalysisResult<()> {
+        normalize_interfaces(&mut program.interfaces)?;
         normalize_error_unions(&mut program.errors)?;
 
         // If stdlib is provided, pre-populate symbol table with imported functions
@@ -372,6 +373,102 @@ impl Default for SemanticAnalyzer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn normalize_interfaces(interfaces: &mut [InterfaceDef]) -> AnalysisResult<()> {
+    let interface_map: HashMap<String, InterfaceDef> = interfaces
+        .iter()
+        .cloned()
+        .map(|interface| (interface.name.clone(), interface))
+        .collect();
+    let mut expanded_cache: HashMap<String, Vec<FnDef>> = HashMap::new();
+
+    for interface in interfaces.iter_mut() {
+        let mut visiting = HashSet::new();
+        interface.methods = expand_interface_methods(
+            &interface.name,
+            &interface_map,
+            &mut expanded_cache,
+            &mut visiting,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn expand_interface_methods(
+    interface_name: &str,
+    interface_map: &HashMap<String, InterfaceDef>,
+    expanded_cache: &mut HashMap<String, Vec<FnDef>>,
+    visiting: &mut HashSet<String>,
+) -> AnalysisResult<Vec<FnDef>> {
+    if let Some(methods) = expanded_cache.get(interface_name) {
+        return Ok(methods.clone());
+    }
+
+    if !visiting.insert(interface_name.to_string()) {
+        return Err(AnalysisError::new(&format!(
+            "Cyclic interface composition involving '{}'",
+            interface_name
+        ))
+        .with_module("sema"));
+    }
+
+    let interface_def = interface_map.get(interface_name).ok_or_else(|| {
+        AnalysisError::new(&format!("Unknown interface '{}'", interface_name)).with_module("sema")
+    })?;
+
+    let mut expanded_methods = Vec::new();
+    for composed_name in &interface_def.composed_interfaces {
+        let composed_methods =
+            expand_interface_methods(composed_name, interface_map, expanded_cache, visiting)?;
+        for method in composed_methods {
+            merge_interface_method(&mut expanded_methods, method, interface_name)?;
+        }
+    }
+
+    for method in &interface_def.methods {
+        merge_interface_method(&mut expanded_methods, method.clone(), interface_name)?;
+    }
+
+    visiting.remove(interface_name);
+    expanded_cache.insert(interface_name.to_string(), expanded_methods.clone());
+    Ok(expanded_methods)
+}
+
+fn merge_interface_method(
+    expanded_methods: &mut Vec<FnDef>,
+    method: FnDef,
+    interface_name: &str,
+) -> AnalysisResult<()> {
+    if let Some(existing) = expanded_methods
+        .iter()
+        .find(|existing| existing.name == method.name)
+    {
+        if !interface_methods_equal(existing, &method) {
+            return Err(AnalysisError::new(&format!(
+                "Conflicting interface method '{}' while composing '{}'",
+                method.name, interface_name
+            ))
+            .with_module("sema"));
+        }
+        return Ok(());
+    }
+
+    expanded_methods.push(method);
+    Ok(())
+}
+
+fn interface_methods_equal(left: &FnDef, right: &FnDef) -> bool {
+    left.name == right.name
+        && left.return_ty == right.return_ty
+        && left
+            .params
+            .iter()
+            .map(|param| &param.ty)
+            .eq(right.params.iter().map(|param| &param.ty))
+        && left.generic_params == right.generic_params
+        && left.generic_constraints == right.generic_constraints
 }
 
 fn normalize_error_unions(errors: &mut [ErrorDef]) -> AnalysisResult<()> {

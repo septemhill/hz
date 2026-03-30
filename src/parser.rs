@@ -3401,12 +3401,49 @@ impl Parser {
         }
 
         let mut methods = Vec::new();
+        let mut composed_interfaces = Vec::new();
         loop {
             self.skip_whitespace();
             if self.match_token(Token::RBrace) {
                 break;
             }
-            methods.push(self.parse_interface_method_signature()?);
+
+            let is_pub_method = self
+                .peek(0)
+                .map(|t| matches!(&t.token, Token::Pub))
+                .unwrap_or(false)
+                && matches!(
+                    self.peek(1).map(|t| &t.token),
+                    Some(Token::Fn) | Some(Token::Ident(_))
+                );
+            let is_fn_method = self
+                .peek(0)
+                .map(|t| matches!(&t.token, Token::Fn))
+                .unwrap_or(false);
+            let is_ident_method = matches!(self.peek(0).map(|t| &t.token), Some(Token::Ident(_)))
+                && matches!(
+                    self.peek(1).map(|t| &t.token),
+                    Some(Token::LParen) | Some(Token::Less)
+                );
+
+            if is_pub_method || is_fn_method || is_ident_method {
+                methods.push(self.parse_interface_method_signature()?);
+            } else if let Token::Ident(name) =
+                self.current().cloned().ok_or_else(|| ParseError {
+                    message: "Expected interface member".to_string(),
+                    location: None,
+                })?
+            {
+                composed_interfaces.push(name);
+                self.advance();
+            } else {
+                return Err(ParseError {
+                    message: "Expected interface member".to_string(),
+                    location: self.current_token().map(|t| t.span.start),
+                });
+            }
+
+            self.match_token(Token::Comma);
         }
 
         self.match_token(Token::Semicolon);
@@ -3414,6 +3451,7 @@ impl Parser {
         Ok(InterfaceDef {
             name,
             methods,
+            composed_interfaces,
             visibility,
             span: Span { start: 0, end: 0 },
         })
@@ -3426,11 +3464,8 @@ impl Parser {
             Visibility::Private
         };
 
-        if !self.match_token(Token::Fn) {
-            return Err(ParseError {
-                message: "Expected 'fn' keyword".to_string(),
-                location: self.current_token().map(|t| t.span.start),
-            });
+        if self.match_token(Token::Fn) {
+            // Legacy interface syntax keeps the optional `fn` keyword.
         }
 
         let name = if let Token::Ident(name) =
@@ -3452,9 +3487,10 @@ impl Parser {
         if !generic_params.is_empty() {
             self.generic_params.push(generic_params.clone());
         }
-        let params = self.parse_function_params()?;
+        let params = self.parse_interface_method_params()?;
         let return_ty = self.parse_return_type()?;
         self.match_token(Token::Semicolon);
+        self.match_token(Token::Comma);
         if !generic_params.is_empty() {
             self.generic_params.pop();
         }
@@ -3469,6 +3505,63 @@ impl Parser {
             generic_constraints,
             span: Span { start: 0, end: 0 },
         })
+    }
+
+    fn parse_interface_method_params(&mut self) -> Result<Vec<FnParam>, ParseError> {
+        if !self.match_token(Token::LParen) {
+            return Err(ParseError {
+                message: "Expected '('".to_string(),
+                location: self.current_token().map(|t| t.span.start),
+            });
+        }
+
+        let mut params = Vec::new();
+        let mut next_index = 0usize;
+
+        if self.match_token(Token::RParen) {
+            return Ok(params);
+        }
+
+        loop {
+            self.skip_whitespace();
+
+            if self.match_token(Token::RParen) {
+                break;
+            }
+
+            let (param_name, param_ty) = if matches!(self.current(), Some(Token::Ident(_)))
+                && matches!(self.peek(1).map(|t| &t.token), Some(Token::Colon))
+            {
+                let param_name = if let Some(Token::Ident(name)) = self.current().cloned() {
+                    self.advance();
+                    name
+                } else {
+                    unreachable!();
+                };
+                self.match_token(Token::Colon);
+                let param_ty = self.parse_type()?;
+                (param_name, param_ty)
+            } else {
+                let param_ty = self.parse_type()?;
+                let param_name = format!("arg{}", next_index);
+                next_index += 1;
+                (param_name, param_ty)
+            };
+
+            params.push(FnParam {
+                name: param_name,
+                ty: param_ty,
+            });
+
+            self.skip_whitespace();
+            if self.match_token(Token::RParen) {
+                break;
+            }
+
+            self.match_token(Token::Comma);
+        }
+
+        Ok(params)
     }
 
     fn parse_interface_impl(&mut self) -> Result<InterfaceImpl, ParseError> {

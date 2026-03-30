@@ -307,6 +307,18 @@ pub struct TypedStructDef {
     pub span: Span,
 }
 
+/// Type-annotated interface definition
+#[derive(Debug, Clone)]
+#[allow(unused)]
+pub struct TypedInterfaceDef {
+    pub name: String,
+    pub methods: Vec<TypedFnDef>,
+    /// Composed interfaces included by name.
+    pub composed_interfaces: Vec<String>,
+    pub visibility: Visibility,
+    pub span: Span,
+}
+
 /// Type-annotated enum definition
 #[derive(Debug, Clone)]
 #[allow(unused)]
@@ -335,6 +347,7 @@ pub struct TypedProgram {
     pub functions: Vec<TypedFnDef>,
     pub external_functions: Vec<TypedFnDef>,
     pub structs: Vec<TypedStructDef>,
+    pub interfaces: Vec<TypedInterfaceDef>,
     pub enums: Vec<TypedEnumDef>,
     pub errors: Vec<TypedErrorDef>,
     pub imports: Vec<(Option<String>, String)>,
@@ -967,6 +980,22 @@ impl TypeInferrer {
         let mut ast_structs: Vec<crate::ast::StructDef> = program.structs.iter().cloned().collect();
         ast_structs.extend(self.new_ast_structs.clone());
 
+        // Build typed interfaces
+        let mut interfaces = Vec::new();
+        for i in &program.interfaces {
+            let mut methods = Vec::new();
+            for m in &i.methods {
+                methods.push(self.infer_fn(m)?);
+            }
+            interfaces.push(TypedInterfaceDef {
+                name: i.name.clone(),
+                methods,
+                composed_interfaces: i.composed_interfaces.clone(),
+                visibility: i.visibility,
+                span: i.span,
+            });
+        }
+
         // Build ast_functions: original non-generic functions + monomorphized ones
         let mut ast_functions: Vec<crate::ast::FnDef> = program
             .functions
@@ -998,6 +1027,7 @@ impl TypeInferrer {
             functions,
             external_functions: Vec::new(),
             structs,
+            interfaces,
             enums,
             errors,
             imports: program.imports.clone(),
@@ -3546,6 +3576,27 @@ impl AstDump for TypedStructDef {
     }
 }
 
+impl AstDump for TypedInterfaceDef {
+    fn dump(&self, indent: usize) {
+        print_indent(indent);
+        let vis = if self.visibility.is_public() {
+            "pub "
+        } else {
+            ""
+        };
+        println!("InterfaceDef: {}{}", vis, self.name);
+
+        for composed in &self.composed_interfaces {
+            print_indent(indent + 1);
+            println!("Compose: {}", composed);
+        }
+
+        for m in &self.methods {
+            m.dump(indent + 1);
+        }
+    }
+}
+
 impl AstDump for TypedEnumDef {
     fn dump(&self, indent: usize) {
         print_indent(indent);
@@ -3621,6 +3672,9 @@ impl AstDump for TypedProgram {
 
         for s in &self.structs {
             s.dump(indent + 1);
+        }
+        for i in &self.interfaces {
+            i.dump(indent + 1);
         }
         for e in &self.enums {
             e.dump(indent + 1);
