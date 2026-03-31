@@ -1,9 +1,9 @@
 use super::*;
-use crate::ast::{BinaryOp, Mutability, Span, Type};
+use crate::ast::{BinaryOp, Mutability, Span, StructField, Type, Visibility};
 use crate::hir::{HirExpr, HirStmt};
 use crate::lower;
 use crate::parser;
-use crate::sema::SemanticAnalyzer;
+use crate::sema::{SemanticAnalyzer, infer::TypedStructDef};
 use inkwell::context::Context;
 use std::collections::HashMap;
 
@@ -322,11 +322,28 @@ fn test_generate_member_assign_stmt() -> Result<(), Box<dyn std::error::Error>> 
     fields.insert("x".to_string(), 0);
     struct_field_indices.insert("Point".to_string(), fields);
 
+    let mut structs = HashMap::new();
+    structs.insert(
+        "Point".to_string(),
+        TypedStructDef {
+            name: "Point".to_string(),
+            fields: vec![StructField {
+                name: "x".to_string(),
+                ty: Type::I64,
+                visibility: Visibility::Private,
+            }],
+            methods: vec![],
+            visibility: Visibility::Private,
+            generic_params: vec![],
+            span: Span::default(),
+        },
+    );
+
     let mut codegen = CodeGenerator::new(
         &context,
         "test_module",
         stdlib,
-        HashMap::new(),
+        structs,
         HashMap::new(),
         HashMap::new(),
     )?;
@@ -645,6 +662,47 @@ fn test_generate_break_stmt() -> Result<(), Box<dyn std::error::Error>> {
 
     let ir = codegen.print_ir();
     assert!(ir.contains("br label %loop_end"));
+
+    Ok(())
+}
+
+#[test]
+fn test_ir_from_source_slice() -> Result<(), Box<dyn std::error::Error>> {
+    let context = Context::create();
+    let source = "
+    fn test() i64 {
+        var a = [5]i64{ 1, 2, 3, 4, 5 };
+        const s = a[1..3];
+        return s[0];
+    }";
+    let ir = get_ir_from_source(&context, source)?;
+
+    // Check that s is a slice type { ptr, i64 }
+    assert!(ir.contains("{ ptr, i64 }"));
+    // Check that a[1..3] generates GEP and insertvalue
+    assert!(ir.contains("getelementptr inbounds [5 x i64]"));
+    assert!(ir.contains("insertvalue { ptr, i64 } undef"));
+    assert!(ir.contains("insertvalue { ptr, i64 }"));
+    // Check that s[0] generates extractvalue, GEP and load
+    assert!(ir.contains("extractvalue { ptr, i64 }"));
+    assert!(ir.contains("getelementptr inbounds i64"));
+
+    Ok(())
+}
+
+#[test]
+fn test_ir_from_source_array_ref_to_slice() -> Result<(), Box<dyn std::error::Error>> {
+    let context = Context::create();
+    let source = "
+    fn test() i64 {
+        var a = [5]i64{ 1, 2, 3, 4, 5 };
+        const s = &a;
+        return s[4];
+    }";
+    let ir = get_ir_from_source(&context, source)?;
+
+    // Check that &a generates slice with len 5
+    assert!(ir.contains("insertvalue { ptr, i64 } %slice_ptr, i64 5, 1"));
 
     Ok(())
 }

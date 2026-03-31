@@ -762,6 +762,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Dereference should be handled in HIR codegen
                 todo!("Codegen for Dereference not implemented in AST codegen")
             }
+            Expr::Index { .. } => {
+                todo!("Codegen for Index not implemented in AST codegen")
+            }
         }
     }
 
@@ -1553,9 +1556,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                 match size {
                     Some(n) => element_llvm.array_type(*n as u32).into(),
                     None => {
-                        // For dynamic arrays, use a pointer for now
+                        // Slice: { *T, i64 }
+                        let ptr_type = self.context.ptr_type(inkwell::AddressSpace::default());
+                        let len_type = self.context.i64_type();
                         self.context
-                            .ptr_type(inkwell::AddressSpace::default())
+                            .struct_type(&[ptr_type.into(), len_type.into()], false)
                             .into()
                     }
                 }

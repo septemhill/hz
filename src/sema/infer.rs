@@ -40,6 +40,11 @@ pub enum TypedExprKind {
     Tuple(Vec<TypedExpr>),
     /// Tuple index access
     TupleIndex { tuple: Box<TypedExpr>, index: usize },
+    /// Array/Slice indexing or range access
+    Index {
+        object: Box<TypedExpr>,
+        index: Box<TypedExpr>,
+    },
     /// Variable identifier
     Ident(String),
     /// Array literal
@@ -2028,6 +2033,7 @@ impl TypeInferrer {
             Expr::Null(span) => *span,
             Expr::Tuple(_, span) => *span,
             Expr::TupleIndex { span, .. } => *span,
+            Expr::Index { span, .. } => *span,
             Expr::Ident(_, span) => *span,
             Expr::Array(_, _, span) => *span,
             Expr::Binary { span, .. } => *span,
@@ -2117,6 +2123,57 @@ impl TypeInferrer {
                         AnalysisError::new_with_span("Tuple index on non-tuple type", span)
                             .with_module("infer"),
                     )
+                }
+            }
+            Expr::Index { object, index, span } => {
+                let typed_object = self.infer_expr(object)?;
+                let typed_index = self.infer_expr(index)?;
+
+                let element_type = match &typed_object.ty {
+                    Type::Array { element_type, .. } => element_type.clone(),
+                    _ => {
+                        return Err(AnalysisError::new_with_span(
+                            &format!("Indexing only supported on array or slice types, found {}", typed_object.ty),
+                            &typed_object.span,
+                        )
+                        .with_module("infer"))
+                    }
+                };
+
+                // Check if it's a range access (slicing)
+                if typed_index.ty.is_integer() {
+                    // Single element access: returns T
+                    Ok(TypedExpr {
+                        expr: TypedExprKind::Index {
+                            object: Box::new(typed_object),
+                            index: Box::new(typed_index),
+                        },
+                        ty: *element_type,
+                        span: *span,
+                    })
+                } else if let TypedExprKind::Binary {
+                    op: BinaryOp::Range,
+                    ..
+                } = &typed_index.expr
+                {
+                    // Slice access: returns []T
+                    Ok(TypedExpr {
+                        expr: TypedExprKind::Index {
+                            object: Box::new(typed_object),
+                            index: Box::new(typed_index),
+                        },
+                        ty: Type::Array {
+                            size: None,
+                            element_type,
+                        },
+                        span: *span,
+                    })
+                } else {
+                    Err(AnalysisError::new_with_span(
+                        "Array index must be an integer or a range",
+                        &typed_index.span,
+                    )
+                    .with_module("infer"))
                 }
             }
             Expr::Ident(name, span) => {
@@ -3257,8 +3314,19 @@ impl TypeInferrer {
             }
             UnaryOp::Ref => {
                 // Reference operator: &expr creates a pointer to expr
-                // For now, we just return a pointer type
-                Ok(Type::Pointer(Box::new(expr_ty.clone())))
+                // For arrays, it creates a slice []T
+                if let Type::Array {
+                    size: Some(_),
+                    element_type,
+                } = &expr_ty
+                {
+                    Ok(Type::Array {
+                        size: None,
+                        element_type: element_type.clone(),
+                    })
+                } else {
+                    Ok(Type::Pointer(Box::new(expr_ty.clone())))
+                }
             }
         }
     }
@@ -4122,6 +4190,11 @@ impl AstDump for TypedExpr {
             TypedExprKind::TupleIndex { tuple, index } => {
                 println!("Expr::TupleIndex: .{} (ty: {})", index, self.ty);
                 tuple.dump(indent + 1);
+            }
+            TypedExprKind::Index { object, index } => {
+                println!("Expr::Index: [] (ty: {})", self.ty);
+                object.dump(indent + 1);
+                index.dump(indent + 1);
             }
             TypedExprKind::Ident(name) => println!("Expr::Ident({}) (ty: {})", name, self.ty),
             TypedExprKind::Array(exprs) => {

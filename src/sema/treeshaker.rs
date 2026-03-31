@@ -342,6 +342,10 @@ impl TreeShaker {
             Expr::Dereference { expr, .. } => {
                 changed = self.traverse_expr(expr);
             }
+            Expr::Index { object, index, .. } => {
+                changed = self.traverse_expr(object);
+                changed |= self.traverse_expr(index);
+            }
             Expr::Try { expr, .. } => {
                 changed = self.traverse_expr(expr);
             }

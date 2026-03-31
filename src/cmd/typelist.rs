@@ -331,6 +331,10 @@ fn collect_typed_expr_types(
         TypedExprKind::Dereference { expr, .. } => {
             collect_typed_expr_types(expr, registry, type_list);
         }
+        TypedExprKind::Index { object, index, .. } => {
+            collect_typed_expr_types(object, registry, type_list);
+            collect_typed_expr_types(index, registry, type_list);
+        }
     }
 }
 
@@ -580,6 +584,10 @@ fn collect_expr_types(
         }
         crate::ast::Expr::Dereference { expr, .. } => {
             collect_expr_types(expr, registry, type_list);
+        }
+        crate::ast::Expr::Index { object, index, .. } => {
+            collect_expr_types(object, registry, type_list);
+            collect_expr_types(index, registry, type_list);
         }
     }
 }

@@ -236,6 +236,7 @@ impl Parser {
             Expr::Catch { span, .. } => *span,
             Expr::Cast { span, .. } => *span,
             Expr::Dereference { span, .. } => *span,
+            Expr::Index { span, .. } => *span,
         }
     }
 }
@@ -2650,6 +2651,25 @@ impl Parser {
                         });
                     }
                 }
+                continue;
+            }
+
+            // Array/Slice indexing: [index]
+            if self.match_token(Token::LBracket) {
+                let index_expr = self.parse_expression()?;
+                self.skip_whitespace();
+                if !self.match_token(Token::RBracket) {
+                    return Err(ParseError {
+                        message: "Expected ']' after index expression".to_string(),
+                        location: self.current_token().map(|t| t.span.start),
+                    });
+                }
+                let span = self.get_expr_span(&expr);
+                expr = Expr::Index {
+                    object: Box::new(expr),
+                    index: Box::new(index_expr),
+                    span,
+                };
                 continue;
             }
 

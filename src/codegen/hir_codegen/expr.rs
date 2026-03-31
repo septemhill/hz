@@ -71,6 +71,53 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Address of a dereference: just evaluate the pointer expression
                 self.generate_hir_expr(expr)
             }
+            hir::HirExpr::Index { object, index, .. } => {
+                let obj_ty = object.ty();
+                let element_type = match obj_ty {
+                    Type::Array { element_type, .. } => element_type.as_ref(),
+                    _ => return Err("Indexing only supported on array or slice types".into()),
+                };
+                let element_llvm = self.llvm_type(element_type);
+
+                let index_val = self.generate_hir_expr(index)?;
+                let index_int = index_val.into_int_value();
+
+                match obj_ty {
+                    Type::Array { size: Some(n), .. } => {
+                        let obj_addr = self.generate_hir_lvalue_address(object)?;
+                        let obj_ptr = obj_addr.into_pointer_value();
+                        let zero = self.context.i64_type().const_zero();
+                        let array_type = element_llvm.array_type(*n as u32);
+                        let ptr = unsafe {
+                            self.builder.build_in_bounds_gep(
+                                array_type,
+                                obj_ptr,
+                                &[zero, index_int],
+                                "index_ptr",
+                            )
+                        }?;
+                        Ok(ptr.into())
+                    }
+                    Type::Array { size: None, .. } => {
+                        let slice_val = self.generate_hir_expr(object)?;
+                        let slice_struct = slice_val.into_struct_value();
+                        let ptr_val = self
+                            .builder
+                            .build_extract_value(slice_struct, 0, "slice_ptr")?;
+                        let ptr = ptr_val.into_pointer_value();
+                        let element_ptr = unsafe {
+                            self.builder.build_in_bounds_gep(
+                                element_llvm,
+                                ptr,
+                                &[index_int],
+                                "index_ptr",
+                            )
+                        }?;
+                        Ok(element_ptr.into())
+                    }
+                    _ => unreachable!(),
+                }
+            }
             _ => Err("Expression is not an l-value (cannot take address)".into()),
         }
     }
@@ -143,6 +190,91 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                     _ => Err("Tuple index access requires a tuple value".into()),
                 }
+            }
+            hir::HirExpr::Index {
+                object,
+                index,
+                ty,
+                ..
+            } => {
+                let obj_ty = object.ty();
+                let element_type = match obj_ty {
+                    Type::Array { element_type, .. } => element_type.as_ref(),
+                    _ => return Err("Indexing only supported on array or slice types".into()),
+                };
+                let element_llvm = self.llvm_type(element_type);
+
+                // Handle slicing (if index is a range)
+                if let hir::HirExpr::Binary {
+                    op: BinaryOp::Range,
+                    left: range_start,
+                    right: range_end,
+                    ..
+                } = index.as_ref()
+                {
+                    let start_val = self.generate_hir_expr(range_start)?.into_int_value();
+                    let end_val = self.generate_hir_expr(range_end)?.into_int_value();
+
+                    let ptr = match obj_ty {
+                        Type::Array { size: Some(n), .. } => {
+                            let obj_addr = self.generate_hir_lvalue_address(object)?;
+                            let obj_ptr = obj_addr.into_pointer_value();
+                            let zero = self.context.i64_type().const_zero();
+                            let array_type = element_llvm.array_type(*n as u32);
+                            unsafe {
+                                self.builder.build_in_bounds_gep(
+                                    array_type,
+                                    obj_ptr,
+                                    &[zero, start_val],
+                                    "slice_ptr",
+                                )
+                            }?
+                        }
+                        Type::Array { size: None, .. } => {
+                            let slice_val = self.generate_hir_expr(object)?;
+                            let slice_struct = slice_val.into_struct_value();
+                            let ptr_val = self
+                                .builder
+                                .build_extract_value(slice_struct, 0, "slice_ptr")?;
+                            let old_ptr = ptr_val.into_pointer_value();
+                            unsafe {
+                                self.builder.build_in_bounds_gep(
+                                    element_llvm,
+                                    old_ptr,
+                                    &[start_val],
+                                    "slice_ptr",
+                                )
+                            }?
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    // len = end - start
+                    let len = self.builder.build_int_sub(end_val, start_val, "slice_len")?;
+
+                    // Create slice struct { *T, i64 }
+                    let slice_type = self.llvm_type(ty).into_struct_type();
+                    let mut slice_val = slice_type.get_undef();
+                    slice_val = self
+                        .builder
+                        .build_insert_value(slice_val, ptr, 0, "slice_ptr")?
+                        .into_struct_value();
+                    slice_val = self
+                        .builder
+                        .build_insert_value(slice_val, len, 1, "slice_len")?
+                        .into_struct_value();
+
+                    return Ok(slice_val.into());
+                }
+
+                // Not a range, so it's a single element access
+                let element_ptr = self.generate_hir_lvalue_address(expr)?;
+                let val = self.builder.build_load(
+                    element_llvm,
+                    element_ptr.into_pointer_value(),
+                    "index_load",
+                )?;
+                Ok(val.into())
             }
             hir::HirExpr::Array { vals, ty, .. } => {
                 // Create an LLVM array from values
@@ -546,6 +678,52 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                     UnaryOp::Ref => {
                         // Reference - return the address of the value
+                        // For arrays, we want to return a slice { ptr, len }
+                        let val_ty = expr.ty();
+                        if let Type::Array {
+                            size: Some(n),
+                            element_type,
+                        } = val_ty
+                        {
+                            let array_ptr = self.generate_hir_lvalue_address(expr)?;
+                            let element_llvm = self.llvm_type(element_type);
+
+                            // ptr = GEP to first element
+                            let zero = self.context.i64_type().const_zero();
+                            let array_type = element_llvm.array_type(*n as u32);
+                            let first_elem_ptr = unsafe {
+                                self.builder.build_in_bounds_gep(
+                                    array_type,
+                                    array_ptr.into_pointer_value(),
+                                    &[zero, zero],
+                                    "first_elem_ptr",
+                                )
+                            }?;
+
+                            // Create slice struct { *T, i64 }
+                            let slice_type = self
+                                .llvm_type(&Type::Array {
+                                    size: None,
+                                    element_type: element_type.clone(),
+                                })
+                                .into_struct_type();
+                            let mut slice_val = slice_type.get_undef();
+                            slice_val = self
+                                .builder
+                                .build_insert_value(slice_val, first_elem_ptr, 0, "slice_ptr")?
+                                .into_struct_value();
+                            slice_val = self
+                                .builder
+                                .build_insert_value(
+                                    slice_val,
+                                    self.context.i64_type().const_int(*n as u64, false),
+                                    1,
+                                    "slice_len",
+                                )?
+                                .into_struct_value();
+
+                            return Ok(slice_val.into());
+                        }
                         return self.generate_hir_lvalue_address(expr);
                     }
                 };

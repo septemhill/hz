@@ -301,6 +301,9 @@ impl TypeAnalyzer {
             }
             crate::ast::Expr::TupleIndex { tuple, .. } => self.expr_find_try(tuple),
             crate::ast::Expr::Dereference { expr, .. } => self.expr_find_try(expr),
+            crate::ast::Expr::Index { object, index, .. } => {
+                self.expr_find_try(object).or_else(|| self.expr_find_try(index))
+            }
             // Base cases - no try expression
             crate::ast::Expr::Int(_, _)
             | crate::ast::Expr::Float(_, _)
@@ -660,6 +663,35 @@ impl TypeAnalyzer {
                     ))
                 }
             }
+            crate::ast::Expr::Index { object, index, span } => {
+                let obj_ty = self.analyze_expression(object)?;
+                let index_ty = self.analyze_expression(index)?;
+
+                match obj_ty {
+                    crate::ast::Type::Array { size, element_type } => {
+                        // Check if it's a range access (slicing)
+                        if matches!(index_ty, crate::ast::Type::I64) {
+                            // Single element access
+                            Ok(*element_type)
+                        } else if let crate::ast::Expr::Binary { op: crate::ast::BinaryOp::Range, .. } = &**index {
+                            // Slice: returns []T
+                            Ok(crate::ast::Type::Array {
+                                size: None,
+                                element_type,
+                            })
+                        } else {
+                            Err(AnalysisError::new_with_span(
+                                "Array index must be numeric or a range",
+                                span,
+                            ))
+                        }
+                    }
+                    _ => Err(AnalysisError::new_with_span(
+                        &format!("Indexing only supported on array or slice types, found {}", obj_ty),
+                        span,
+                    )),
+                }
+            }
             crate::ast::Expr::Ident(name, span) => {
                 if name == "_" {
                     return Ok(crate::ast::Type::I64);
@@ -770,7 +802,10 @@ impl TypeAnalyzer {
                             ))
                         }
                     }
-                    crate::ast::BinaryOp::Range => Ok(crate::ast::Type::I64),
+                    crate::ast::BinaryOp::Range => Ok(crate::ast::Type::Tuple(vec![
+                        crate::ast::Type::I64,
+                        crate::ast::Type::I64,
+                    ])),
                 }
             }
             crate::ast::Expr::Unary { op, expr, span } => {
@@ -797,8 +832,15 @@ impl TypeAnalyzer {
                         }
                     }
                     crate::ast::UnaryOp::Ref => {
-                        // &expr returns a pointer to expr
-                        Ok(crate::ast::Type::Pointer(Box::new(e_ty)))
+                        // &array returns a slice, &expr returns a pointer
+                        if let crate::ast::Type::Array { element_type, .. } = e_ty {
+                            Ok(crate::ast::Type::Array {
+                                size: None,
+                                element_type,
+                            })
+                        } else {
+                            Ok(crate::ast::Type::Pointer(Box::new(e_ty)))
+                        }
                     }
                 }
             }

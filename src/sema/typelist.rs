@@ -323,6 +323,10 @@ fn collect_types_from_expr(expr: &crate::ast::Expr, types: &mut Vec<Type>) {
         crate::ast::Expr::Dereference { expr, .. } => {
             collect_types_from_expr(expr, types);
         }
+        crate::ast::Expr::Index { object, index, .. } => {
+            collect_types_from_expr(object, types);
+            collect_types_from_expr(index, types);
+        }
     }
 }
 

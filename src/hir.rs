@@ -22,6 +22,12 @@ pub enum HirExpr {
         ty: Type,
         span: Span,
     },
+    Index {
+        object: Box<HirExpr>,
+        index: Box<HirExpr>,
+        ty: Type,
+        span: Span,
+    },
     Array {
         vals: Vec<HirExpr>,
         ty: Type,
@@ -116,6 +122,7 @@ impl HirExpr {
             HirExpr::Ident(_, ty, _) => ty,
             HirExpr::Tuple { ty, .. } => ty,
             HirExpr::TupleIndex { ty, .. } => ty,
+            HirExpr::Index { ty, .. } => ty,
             HirExpr::Array { ty, .. } => ty,
             HirExpr::Binary { ty, .. } => ty,
             HirExpr::Unary { ty, .. } => ty,
@@ -432,6 +439,11 @@ impl fmt::Display for HirExpr {
                 tuple, index, ty, ..
             } => {
                 write!(f, "{}.{}: {}", tuple, index, ty)
+            }
+            HirExpr::Index {
+                object, index, ty, ..
+            } => {
+                write!(f, "{}[{}]: {}", object, index, ty)
             }
             HirExpr::Array { vals, ty, .. } => {
                 let vals_str = vals

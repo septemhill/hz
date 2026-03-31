@@ -1062,6 +1062,12 @@ impl LoweringContext {
                 ty: e.ty.clone(),
                 span: e.span,
             },
+            TypedExprKind::Index { object, index } => hir::HirExpr::Index {
+                object: Box::new(self.lower_typed_expr(object)),
+                index: Box::new(self.lower_typed_expr(index)),
+                ty: e.ty.clone(),
+                span: e.span,
+            },
             TypedExprKind::Array(vals) => hir::HirExpr::Array {
                 vals: vals.iter().map(|v| self.lower_typed_expr(v)).collect(),
                 ty: e.ty.clone(),
@@ -1918,6 +1924,17 @@ impl LoweringContext {
                 let ty = ast::Type::Void; // Will be inferred by type checker
                 hir::HirExpr::Dereference {
                     expr: Box::new(lowered),
+                    ty,
+                    span: *span,
+                }
+            }
+            ast::Expr::Index { object, index, span } => {
+                let lowered_object = self.lower_expr(object);
+                let lowered_index = self.lower_expr(index);
+                let ty = ast::Type::Void; // Will be inferred by type checker
+                hir::HirExpr::Index {
+                    object: Box::new(lowered_object),
+                    index: Box::new(lowered_index),
                     ty,
                     span: *span,
                 }

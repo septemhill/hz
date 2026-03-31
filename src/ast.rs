@@ -539,7 +539,15 @@ pub enum Expr {
         index: usize,
         span: Span,
     },
-    /// Variable identifier
+    /// Array/Slice indexing or range access (e.g., a[i], a[i..j])
+    Index {
+        /// The array/slice expression
+        object: Box<Expr>,
+        /// The index expression (can be a range expression for slicing)
+        index: Box<Expr>,
+        span: Span,
+    },
+    /// Identifiers (e.g., variable names)
     Ident(String, Span),
     /// Array literal (e.g., [1, 2, 3]) or typed array (e.g., [3]u8{1, 2, 3})
     /// For typed arrays, `ty` contains the element type (e.g., u8 for [3]u8{...})
@@ -1172,6 +1180,11 @@ impl AstDump for Expr {
             Expr::TupleIndex { tuple, index, .. } => {
                 println!("Expr::TupleIndex: .{}", index);
                 tuple.dump(indent + 1);
+            }
+            Expr::Index { object, index, .. } => {
+                println!("Expr::Index: []");
+                object.dump(indent + 1);
+                index.dump(indent + 1);
             }
             Expr::Ident(name, _) => println!("Expr::Ident({})", name),
             Expr::Array(exprs, _, _) => {
