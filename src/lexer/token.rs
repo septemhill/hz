@@ -83,6 +83,12 @@ pub enum Token {
     MinusAssign,    // -=
     StarAssign,     // *=
     SlashAssign,    // /=
+    PercentAssign,  // %=
+    AndAssign,      // &=
+    OrAssign,       // |=
+    XorAssign,      // ^=
+    ShlAssign,      // <<=
+    ShrAssign,      // >>=
     Ampersand,      // &
     Pipe,           // |
     Underscore,     // _
@@ -171,6 +177,12 @@ impl Token {
             Token::MinusAssign => "-=",
             Token::StarAssign => "*=",
             Token::SlashAssign => "/=",
+            Token::PercentAssign => "%=",
+            Token::AndAssign => "&=",
+            Token::OrAssign => "|=",
+            Token::XorAssign => "^=",
+            Token::ShlAssign => "<<=",
+            Token::ShrAssign => ">>=",
             Token::Ampersand => "&",
             Token::Pipe => "|",
             Token::Caret => "^",

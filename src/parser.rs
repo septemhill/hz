@@ -180,6 +180,12 @@ impl Parser {
             Token::MinusAssign => Some(AssignOp::SubAssign),
             Token::StarAssign => Some(AssignOp::MulAssign),
             Token::SlashAssign => Some(AssignOp::DivAssign),
+            Token::PercentAssign => Some(AssignOp::ModAssign),
+            Token::AndAssign => Some(AssignOp::AndAssign),
+            Token::OrAssign => Some(AssignOp::OrAssign),
+            Token::XorAssign => Some(AssignOp::XorAssign),
+            Token::ShlAssign => Some(AssignOp::ShlAssign),
+            Token::ShrAssign => Some(AssignOp::ShrAssign),
             _ => None,
         };
 
@@ -2031,7 +2037,11 @@ impl Parser {
                     let span_end = self.get_expr_span(&value);
 
                     // Convert to a setter expression - format the target string
-                    let target = format!("{}.{}", self.format_target_for_expr(object.as_ref()), member);
+                    let target = format!(
+                        "{}.{}",
+                        self.format_target_for_expr(object.as_ref()),
+                        member
+                    );
                     return Ok(Stmt::Assign {
                         target,
                         op,

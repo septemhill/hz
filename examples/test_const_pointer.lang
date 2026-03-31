@@ -10,7 +10,7 @@ fn main() i32 {
     const age: i64 = 123;
 
     // 1. const variable cannot be reassigned (Invalid)
-    // height = 20; // 這行如果取消註釋，應該會報錯: Cannot reassign constant variable 'height'
+    // height = 20; // Cannot reassign constant variable 'height'
 
     // 2. const pointer
     const i64_ptr: *i64 = &height;

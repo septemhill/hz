@@ -844,112 +844,78 @@ impl LoweringContext {
             } => {
                 // Handle compound assignment: expand to target = target op value
                 if *op != ast::AssignOp::Assign {
-                    let target_ty = if target.contains('.') {
-                        // For member access targets, we need to resolve the type
-                        // This is a bit of a hack because Assign target is just a string.
-                        // We'll try to resolve it as a member access.
-                        let parts: Vec<&str> = target.split('.').collect();
-                        let mut current_ty = self
-                            .resolve_local(parts[0])
-                            .or_else(|| self.symbol_table.resolve(parts[0]).map(|s| s.ty.clone()))
-                            .unwrap_or(ast::Type::I64);
+                    let parts: Vec<&str> = target.split('.').collect();
+                    let base_name = parts[0];
 
-                        for i in 1..parts.len() {
-                            let mut name_found = None;
-                            let mut current = &current_ty;
-                            while let ast::Type::Pointer(inner)
-                            | ast::Type::Option(inner)
-                            | ast::Type::Result(inner) = current
-                            {
-                                current = inner.as_ref();
-                            }
-                            if let ast::Type::Custom { name, .. } = current {
-                                name_found = Some(name);
-                            }
+                    // Resolve the base type from local scope or symbol table
+                    let mut current_ty = self
+                        .resolve_local(base_name)
+                        .or_else(|| self.symbol_table.resolve(base_name).map(|s| s.ty.clone()))
+                        .unwrap_or(ast::Type::I64);
 
-                            if let Some(name) = name_found {
-                                if let Some(s_def) = self.structs.get(name) {
-                                    if let Some(field) =
-                                        s_def.fields.iter().find(|f| f.name == parts[i])
-                                    {
-                                        current_ty = field.ty.clone();
-                                        continue;
-                                    }
-                                }
-                            }
-                            // Fallback if we can't resolve
-                            current_ty = ast::Type::I64;
-                            break;
-                        }
-                        current_ty
-                    } else {
-                        self.resolve_local(target)
-                            .or_else(|| self.symbol_table.resolve(target).map(|s| s.ty.clone()))
-                            .unwrap_or(ast::Type::I64)
-                    };
+                    // Create the initial read expression (base variable)
+                    let mut read_expr =
+                        hir::HirExpr::Ident(base_name.to_string(), current_ty.clone(), s.span);
 
-                    // Create read expression
-                    let read_expr = if target.contains('.') {
-                        let parts: Vec<&str> = target.split('.').collect();
-                        let mut expr = hir::HirExpr::Ident(
-                            parts[0].to_string(),
-                            self.resolve_local(parts[0])
-                                .or_else(|| {
-                                    self.symbol_table.resolve(parts[0]).map(|s| s.ty.clone())
-                                })
-                                .unwrap_or(ast::Type::I64),
-                            s.span,
-                        );
+                    // Traverse the path to build the full read expression and resolve final type
+                    for i in 1..parts.len() {
+                        let part = parts[i];
+                        if part == "*" {
+                            // Dereference
+                            let inner_ty = match &current_ty {
+                                ast::Type::Pointer(inner) => inner.as_ref().clone(),
+                                _ => ast::Type::I64,
+                            };
+                            read_expr = hir::HirExpr::Dereference {
+                                expr: Box::new(read_expr),
+                                ty: inner_ty.clone(),
+                                span: s.span,
+                            };
+                            current_ty = inner_ty;
+                        } else {
+                            // Member access
+                            let struct_name = match &current_ty {
+                                ast::Type::Custom { name, .. } => Some(name.clone()),
+                                ast::Type::Pointer(inner) => match &**inner {
+                                    ast::Type::Custom { name, .. } => Some(name.clone()),
+                                    _ => None,
+                                },
+                                _ => None,
+                            };
 
-                        let mut current_ty = expr.ty().clone();
-                        for i in 1..parts.len() {
-                            let mut name_found = None;
-                            let mut current = &current_ty;
-                            while let ast::Type::Pointer(inner)
-                            | ast::Type::Option(inner)
-                            | ast::Type::Result(inner) = current
-                            {
-                                current = inner.as_ref();
-                            }
-                            if let ast::Type::Custom { name, .. } = current {
-                                name_found = Some(name);
-                            }
-
-                            let member_ty = if let Some(name) = name_found {
-                                if let Some(s_def) = self.structs.get(name) {
-                                    s_def
-                                        .fields
-                                        .iter()
-                                        .find(|f| f.name == parts[i])
-                                        .map(|f| f.ty.clone())
-                                        .unwrap_or(ast::Type::I64)
-                                } else {
-                                    ast::Type::I64
-                                }
+                            let field_ty = if let Some(s_name) = struct_name {
+                                self.structs
+                                    .get(&s_name)
+                                    .and_then(|s| s.fields.iter().find(|f| f.name == part))
+                                    .map(|f| f.ty.clone())
+                                    .unwrap_or(ast::Type::I64)
                             } else {
                                 ast::Type::I64
                             };
 
-                            expr = hir::HirExpr::MemberAccess {
-                                object: Box::new(expr),
-                                member: parts[i].to_string(),
-                                ty: member_ty.clone(),
+                            read_expr = hir::HirExpr::MemberAccess {
+                                object: Box::new(read_expr),
+                                member: part.to_string(),
+                                ty: field_ty.clone(),
                                 span: s.span,
                             };
-                            current_ty = member_ty;
+                            current_ty = field_ty;
                         }
-                        expr
-                    } else {
-                        hir::HirExpr::Ident(target.clone(), target_ty.clone(), s.span)
-                    };
+                    }
 
-                    // Create binary operation
+                    // Create the binary operation
                     let bin_op = match op {
                         ast::AssignOp::AddAssign => ast::BinaryOp::Add,
                         ast::AssignOp::SubAssign => ast::BinaryOp::Sub,
                         ast::AssignOp::MulAssign => ast::BinaryOp::Mul,
                         ast::AssignOp::DivAssign => ast::BinaryOp::Div,
-                        _ => ast::BinaryOp::Add,
+                        ast::AssignOp::ModAssign => ast::BinaryOp::Mod,
+                        ast::AssignOp::AndAssign => ast::BinaryOp::BitAnd,
+                        ast::AssignOp::OrAssign => ast::BinaryOp::BitOr,
+                        ast::AssignOp::XorAssign => ast::BinaryOp::BitXor,
+                        ast::AssignOp::ShlAssign => ast::BinaryOp::Shl,
+                        ast::AssignOp::ShrAssign => ast::BinaryOp::Shr,
+                        ast::AssignOp::Assign => unreachable!(),
                     };
 
                     let lowered_value = self.lower_typed_expr(value);
@@ -958,12 +924,13 @@ impl LoweringContext {
                         op: bin_op,
                         left: Box::new(read_expr),
                         right: Box::new(lowered_value),
-                        ty: target_ty,
+                        ty: current_ty,
                         span: s.span,
                     };
 
                     return hir::HirStmt::Assign {
                         target: target.clone(),
+                        op: ast::AssignOp::Assign,
                         value: result_expr,
                         span: s.span,
                     };
@@ -971,6 +938,7 @@ impl LoweringContext {
 
                 hir::HirStmt::Assign {
                     target: target.clone(),
+                    op: ast::AssignOp::Assign,
                     value: self.lower_typed_expr(value),
                     span: s.span,
                 }
@@ -1455,46 +1423,68 @@ impl LoweringContext {
                     "DEBUG: Assign op={:?}, target={}, value={:?}",
                     op, target, value
                 );
-                // Handle compound assignment (e.g., c.age += 43)
+                // Handle compound assignment (e.g., c.age += 43, ptr.* += 1)
                 if *op != ast::AssignOp::Assign {
                     // For compound assignment, expand to: target = target op value
-                    // Parse the target to get object and member
-                    let (obj, member) = if target.contains('.') {
-                        let parts: Vec<&str> = target.split('.').collect();
-                        (parts[0].to_string(), Some(parts[1].to_string()))
-                    } else {
-                        (target.clone(), None)
-                    };
+                    let parts: Vec<&str> = target.split('.').collect();
+                    let base_name = parts[0];
 
-                    // Infer the type from the target variable, not from the value expression
-                    // For compound assignment like x += 1, we need the type of x, not 1
-                    let target_ty = if target.contains('.') {
-                        // For member access, we need to get the field type
-                        self.infer_type(value).unwrap_or(ast::Type::I64)
-                    } else {
-                        // For simple variable, resolve from local scope or symbol table
-                        let ty = self
-                            .resolve_local(target)
-                            .or_else(|| self.symbol_table.resolve(target).map(|s| s.ty.clone()))
-                            .unwrap_or_else(|| self.infer_type(value).unwrap_or(ast::Type::I64));
-                        eprintln!(
-                            "DEBUG: compound assign target={}, target_ty={:?}",
-                            target, ty
-                        );
-                        ty
-                    };
+                    // Resolve the base type
+                    let mut current_ty = self
+                        .resolve_local(base_name)
+                        .or_else(|| self.symbol_table.resolve(base_name).map(|s| s.ty.clone()))
+                        .unwrap_or(ast::Type::I64);
 
-                    // Create the read expression (read current value from target)
-                    let read_expr = if let Some(member) = member {
-                        hir::HirExpr::MemberAccess {
-                            object: Box::new(hir::HirExpr::Ident(obj, target_ty.clone(), *span)),
-                            member,
-                            ty: target_ty.clone(),
-                            span: *span,
+                    // Create the initial read expression (base variable)
+                    let mut read_expr =
+                        hir::HirExpr::Ident(base_name.to_string(), current_ty.clone(), *span);
+
+                    // Traverse the path to build the full read expression and resolve final type
+                    for i in 1..parts.len() {
+                        let part = parts[i];
+                        if part == "*" {
+                            // Dereference
+                            let inner_ty = match &current_ty {
+                                ast::Type::Pointer(inner) => inner.as_ref().clone(),
+                                _ => ast::Type::I64, // Fallback for inference
+                            };
+                            read_expr = hir::HirExpr::Dereference {
+                                expr: Box::new(read_expr),
+                                ty: inner_ty.clone(),
+                                span: *span,
+                            };
+                            current_ty = inner_ty;
+                        } else {
+                            // Member access
+                            // Get field type from struct definition
+                            let struct_name = match &current_ty {
+                                ast::Type::Custom { name, .. } => Some(name.clone()),
+                                ast::Type::Pointer(inner) => match &**inner {
+                                    ast::Type::Custom { name, .. } => Some(name.clone()),
+                                    _ => None,
+                                },
+                                _ => None,
+                            };
+
+                            let field_ty = if let Some(s_name) = struct_name {
+                                self.structs
+                                    .get(&s_name)
+                                    .and_then(|s| s.fields.iter().find(|f| f.name == part))
+                                    .map(|f| f.ty.clone())
+                                    .unwrap_or(ast::Type::I64)
+                            } else {
+                                ast::Type::I64
+                            };
+
+                            read_expr = hir::HirExpr::MemberAccess {
+                                object: Box::new(read_expr),
+                                member: part.to_string(),
+                                ty: field_ty.clone(),
+                                span: *span,
+                            };
+                            current_ty = field_ty;
                         }
-                    } else {
-                        hir::HirExpr::Ident(target.clone(), target_ty.clone(), *span)
-                    };
+                    }
 
                     // Create the binary operation
                     let bin_op = match op {
@@ -1502,7 +1492,13 @@ impl LoweringContext {
                         ast::AssignOp::SubAssign => ast::BinaryOp::Sub,
                         ast::AssignOp::MulAssign => ast::BinaryOp::Mul,
                         ast::AssignOp::DivAssign => ast::BinaryOp::Div,
-                        ast::AssignOp::Assign => ast::BinaryOp::Add,
+                        ast::AssignOp::ModAssign => ast::BinaryOp::Mod,
+                        ast::AssignOp::AndAssign => ast::BinaryOp::BitAnd,
+                        ast::AssignOp::OrAssign => ast::BinaryOp::BitOr,
+                        ast::AssignOp::XorAssign => ast::BinaryOp::BitXor,
+                        ast::AssignOp::ShlAssign => ast::BinaryOp::Shl,
+                        ast::AssignOp::ShrAssign => ast::BinaryOp::Shr,
+                        ast::AssignOp::Assign => unreachable!(),
                     };
 
                     // Lower the value expression
@@ -1512,12 +1508,13 @@ impl LoweringContext {
                         op: bin_op,
                         left: Box::new(read_expr),
                         right: Box::new(lowered_value),
-                        ty: target_ty,
+                        ty: current_ty,
                         span: *span,
                     };
 
                     hir::HirStmt::Assign {
                         target: target.clone(),
+                        op: ast::AssignOp::Assign,
                         value: result_expr,
                         span: *span,
                     }
@@ -1531,6 +1528,7 @@ impl LoweringContext {
 
                     hir::HirStmt::Assign {
                         target: target.clone(),
+                        op: ast::AssignOp::Assign,
                         value: self
                             .with_expected_type(target_expected_ty, |ctx| ctx.lower_expr(value)),
                         span: *span,

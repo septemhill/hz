@@ -379,6 +379,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                             )?;
                             self.builder.build_store(field_ptr, result)?;
                         }
+                        _ => todo!("Compound assignment {:?} not implemented in AST codegen", op),
                     }
 
                     return Ok(());
@@ -450,6 +451,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         )?;
                         self.builder.build_store(target_ptr, result)?;
                     }
+                    _ => todo!("Compound assignment {:?} not implemented in AST codegen", op),
                 }
 
                 Ok(())

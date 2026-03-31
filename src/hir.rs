@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Mutability, Span, Type, UnaryOp, Visibility};
+use crate::ast::{AssignOp, BinaryOp, Mutability, Span, Type, UnaryOp, Visibility};
 use std::fmt;
 
 #[derive(Debug, Clone)]
@@ -145,6 +145,7 @@ pub enum HirStmt {
     },
     Assign {
         target: String,
+        op: AssignOp,
         value: HirExpr,
         span: Span,
     },
@@ -274,8 +275,23 @@ impl HirStmt {
                     None => format!("{}{}let {}: {};\n", indent_str, mut_str, name, ty),
                 }
             }
-            HirStmt::Assign { target, value, .. } => {
-                format!("{}{} = {};\n", indent_str, target, value)
+            HirStmt::Assign {
+                target, op, value, ..
+            } => {
+                let op_str = match op {
+                    AssignOp::Assign => "=",
+                    AssignOp::AddAssign => "+=",
+                    AssignOp::SubAssign => "-=",
+                    AssignOp::MulAssign => "*=",
+                    AssignOp::DivAssign => "/=",
+                    AssignOp::ModAssign => "%=",
+                    AssignOp::AndAssign => "&=",
+                    AssignOp::OrAssign => "|=",
+                    AssignOp::XorAssign => "^=",
+                    AssignOp::ShlAssign => "<<=",
+                    AssignOp::ShrAssign => ">>=",
+                };
+                format!("{}{} {} {};\n", indent_str, target, op_str, value)
             }
             HirStmt::Return(expr, _) => match expr {
                 Some(e) => format!("{}return {};\n", indent_str, e),

@@ -8,7 +8,7 @@ struct Point {
 fn test_basic_ref() void {
     var x: i32 = 42;
     const ptr_x: *i32 = &x;
-    io.println("x = 42");
+    io.println("x = {d}", x);
     // We can't easily print the pointer value itself, but we can dereference it
     io.println("ptr_x.* = {d}", ptr_x.*);
     
@@ -20,7 +20,7 @@ fn test_struct_ref() void {
     var p = Point { x: 10, y: 20 };
     const ptr_p: *Point = &p;
     
-    io.println("p.x = 10, p.y = 20");
+    io.println("p.x = {d}, p.y = {d}", p.x, p.y);
     io.println("ptr_p.*.x = {d}", ptr_p.*.x);
     
     ptr_p.*.y = 30;

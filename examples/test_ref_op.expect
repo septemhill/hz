@@ -1,0 +1,7 @@
+x = 42
+ptr_x.* = 42
+After ptr_x.* = 100, x = 100
+p.x = 10, p.y = 20
+ptr_p.*.x = 10
+After ptr_p.*.y = 30, p.y = 30
+After ptr_x.* = 50 (where ptr_x = &p.x), p.x = 50

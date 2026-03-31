@@ -52,7 +52,16 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 Ok(())
             }
-            hir::HirStmt::Assign { target, value, .. } => {
+            hir::HirStmt::Assign {
+                target,
+                op,
+                value,
+                ..
+            } => {
+                if *op != AssignOp::Assign {
+                    return Err(format!("Compound assignment {:?} should have been lowered", op).into());
+                }
+
                 // Skip underscore assignment (used for ignoring values)
                 if target == "_" {
                     let _llvm_val = self.generate_hir_expr(value)?;

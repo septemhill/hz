@@ -381,6 +381,12 @@ pub enum AssignOp {
     SubAssign,
     MulAssign,
     DivAssign,
+    ModAssign,
+    AndAssign,
+    OrAssign,
+    XorAssign,
+    ShlAssign,
+    ShrAssign,
 }
 
 /// Visibility modifier (pub keyword)

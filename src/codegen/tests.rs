@@ -215,6 +215,7 @@ fn test_generate_assign_stmt() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Assign x: x = 20;
     let assign_stmt = HirStmt::Assign {
         target: "x".to_string(),
+        op: AssignOp::Assign,
         value: HirExpr::Int(20, Type::I64, Span::default()),
         span: Span::default(),
     };
@@ -358,6 +359,7 @@ fn test_generate_member_assign_stmt() -> Result<(), Box<dyn std::error::Error>> 
     // p.x = 42
     let assign_stmt = HirStmt::Assign {
         target: "p.x".to_string(),
+        op: AssignOp::Assign,
         value: HirExpr::Int(42, Type::I64, Span::default()),
         span: Span::default(),
     };

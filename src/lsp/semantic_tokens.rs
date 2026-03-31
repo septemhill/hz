@@ -187,6 +187,12 @@ fn get_token_type(token: &Token) -> Option<SemanticTokenType> {
         | Token::MinusAssign
         | Token::StarAssign
         | Token::SlashAssign
+        | Token::PercentAssign
+        | Token::AndAssign
+        | Token::OrAssign
+        | Token::XorAssign
+        | Token::ShlAssign
+        | Token::ShrAssign
         | Token::Ampersand
         | Token::Pipe
         | Token::Underscore
