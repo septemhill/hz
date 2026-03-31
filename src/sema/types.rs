@@ -631,7 +631,7 @@ impl TypeAnalyzer {
             crate::ast::Expr::Bool(_, _) => Ok(crate::ast::Type::Bool),
             crate::ast::Expr::String(_, _) => Ok(crate::ast::Type::Array {
                 size: None,
-                element_type: Box::new(crate::ast::Type::U8),
+                element_type: Box::new(crate::ast::Type::Const(Box::new(crate::ast::Type::U8))),
             }),
             crate::ast::Expr::Char(_, _) => Ok(crate::ast::Type::I8),
             crate::ast::Expr::Null(_) => {
@@ -1073,6 +1073,18 @@ impl TypeAnalyzer {
     fn types_compatible(&self, left: &crate::ast::Type, right: &crate::ast::Type) -> bool {
         if left == right {
             return true;
+        }
+
+        // Handle Const
+        if let crate::ast::Type::Const(inner) = left {
+            if self.types_compatible(inner, right) {
+                return true;
+            }
+        }
+        if let crate::ast::Type::Const(inner) = right {
+            if self.types_compatible(left, inner) {
+                return true;
+            }
         }
 
         // Check if left is an Option and right is compatible with inner type

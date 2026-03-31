@@ -332,8 +332,12 @@ impl SemanticAnalyzer {
         symbol_resolver.analyze(program)?;
 
         // Pass 5: Mutability analysis
-        let symbol_table = symbol_resolver.get_symbol_table().clone();
-        let mut mutability_analyzer = MutabilityAnalyzer::new(symbol_table, typed_prog);
+        // Note: We use the symbol table from Pass 1 (GlobalDefinitionsAnalyzer)
+        // plus Pass 4 (SymbolResolver) which should have everything resolved.
+        let mut mutability_analyzer = MutabilityAnalyzer::new(
+            symbol_resolver.get_symbol_table().clone(),
+            typed_prog
+        );
         mutability_analyzer.analyze(program)?;
 
         // Store final symbol table

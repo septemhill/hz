@@ -495,6 +495,7 @@ impl TypeInferrer {
                 let align = payload_align.max(tag_align);
                 Ok((align_to_u64(total, align)?, align))
             }
+            Type::Const(inner) => self.type_layout_of(inner, visiting),
             Type::Tuple(types) => self.aggregate_layout_of(types, visiting),
             Type::Array { size, element_type } => match size {
                 Some(count) => {
@@ -973,6 +974,19 @@ impl TypeInferrer {
     fn types_compatible(&self, expected: &Type, actual: &Type) -> bool {
         if expected == actual {
             return true;
+        }
+
+        // Handle Const: const T is compatible with T
+        // T is also compatible with const T (we can always promote to const)
+        if let Type::Const(inner) = expected {
+            if self.types_compatible(inner, actual) {
+                return true;
+            }
+        }
+        if let Type::Const(inner) = actual {
+            if self.types_compatible(expected, inner) {
+                return true;
+            }
         }
 
         if let Type::Option(inner) = expected {
@@ -2069,7 +2083,7 @@ impl TypeInferrer {
                 expr: TypedExprKind::String(value.clone()),
                 ty: Type::Array {
                     size: None,
-                    element_type: Box::new(Type::U8),
+                    element_type: Box::new(Type::Const(Box::new(Type::U8))),
                 },
                 span,
             }),

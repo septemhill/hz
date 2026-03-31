@@ -589,7 +589,26 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Create a global string constant (unsafe)
                 let string_const =
                     unsafe { self.builder.build_global_string(value.as_str(), "str") }?;
-                Ok(string_const.as_basic_value_enum())
+                let ptr = string_const.as_basic_value_enum();
+                let len = self.context.i64_type().const_int(value.len() as u64, false);
+
+                let slice_type = self
+                    .llvm_type(&Type::Array {
+                        size: None,
+                        element_type: Box::new(Type::Const(Box::new(Type::U8))),
+                    })
+                    .into_struct_type();
+                let mut slice_val = slice_type.get_undef();
+                slice_val = self
+                    .builder
+                    .build_insert_value(slice_val, ptr, 0, "slice_ptr")?
+                    .into_struct_value();
+                slice_val = self
+                    .builder
+                    .build_insert_value(slice_val, len, 1, "slice_len")?
+                    .into_struct_value();
+
+                Ok(slice_val.into())
             }
             Expr::Null(_) => {
                 let i64_type = self.context.i64_type();
@@ -1528,6 +1547,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .struct_type(&[value_type.into(), bool_type.into()], false)
                     .into()
             }
+            Type::Const(inner) => self.llvm_type(inner),
             Type::Tuple(types) => {
                 // Tuple type: represented as a struct with all elements
                 let mut element_types: Vec<BasicTypeEnum<'ctx>> = Vec::new();

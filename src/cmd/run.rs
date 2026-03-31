@@ -97,8 +97,11 @@ pub fn run_jit(
     // Execute main function if it exists
     if program.functions.iter().any(|f| f.name == "main") {
         println!("\nExecuting main function via JIT...");
-        // Note: For a simple i64 return, we would need more setup
-        // This is a placeholder for JIT execution
+        
+        unsafe {
+            let main_fn = codegen.execution_engine.get_function::<unsafe extern "C" fn() -> i64>("main")?;
+            main_fn.call();
+        }
     }
 
     Ok(())

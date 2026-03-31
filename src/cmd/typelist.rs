@@ -695,6 +695,7 @@ fn format_type(ty: &Type) -> String {
         }
         Type::Error => "error".to_string(),
         Type::Result(inner) => format!("{}!", format_type(inner)),
+        Type::Const(inner) => format!("const {}", format_type(inner)),
         Type::Function {
             params,
             return_type,

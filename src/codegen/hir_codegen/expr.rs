@@ -134,10 +134,24 @@ impl<'ctx> CodeGenerator<'ctx> {
                 .bool_type()
                 .const_int(if *v { 1 } else { 0 }, false)
                 .into()),
-            hir::HirExpr::String(v, _, _) => {
-                // For string literals, create a global string and return its pointer
+            hir::HirExpr::String(v, ty, _) => {
+                // For string literals, create a global string and return its slice {ptr, len}
                 let str_val = unsafe { self.builder.build_global_string(v, "str") }?;
-                Ok(str_val.as_basic_value_enum())
+                let ptr = str_val.as_basic_value_enum();
+                let len = self.context.i64_type().const_int(v.len() as u64, false);
+
+                let slice_type = self.llvm_type(ty).into_struct_type();
+                let mut slice_val = slice_type.get_undef();
+                slice_val = self
+                    .builder
+                    .build_insert_value(slice_val, ptr, 0, "slice_ptr")?
+                    .into_struct_value();
+                slice_val = self
+                    .builder
+                    .build_insert_value(slice_val, len, 1, "slice_len")?
+                    .into_struct_value();
+
+                Ok(slice_val.into())
             }
             hir::HirExpr::Char(v, ty, _) => {
                 // Use the type from the HIR expression if available

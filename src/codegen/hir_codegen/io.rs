@@ -102,6 +102,18 @@ impl<'ctx> CodeGenerator<'ctx> {
                         // String pointers use %s format
                         ("%s\n", raw_arg)
                     }
+                    BasicValueEnum::StructValue(sv) => {
+                        // Check if it's a slice { ptr, len }
+                        if sv.get_type().get_field_types().len() == 2
+                            && sv.get_type().get_field_types()[0].is_pointer_type()
+                            && sv.get_type().get_field_types()[1].is_int_type()
+                        {
+                            let ptr = self.builder.build_extract_value(sv, 0, "slice_ptr")?;
+                            ("%s\n", ptr)
+                        } else {
+                            ("%lld\n", self.promote_printf_arg(raw_arg, PrintfArgKind::Integer)?)
+                        }
+                    }
                     BasicValueEnum::FloatValue(_) => (
                         "%f\n",
                         self.promote_printf_arg(raw_arg, PrintfArgKind::Float)?,

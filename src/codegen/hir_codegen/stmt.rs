@@ -69,8 +69,51 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return Ok(());
                 }
 
-                let parts: Vec<&str> = target.split('.').collect();
-                let base_name = parts[0];
+                // Improved target parsing to handle both . and []
+                // Examples: "a", "a.b", "a[0]", "a.b[0]", "ptr.*"
+                let mut parts = Vec::new();
+                let mut current_part = String::new();
+                let mut chars = target.chars().peekable();
+                
+                while let Some(c) = chars.next() {
+                    match c {
+                        '.' => {
+                            if !current_part.is_empty() {
+                                parts.push(current_part.clone());
+                                current_part.clear();
+                            }
+                            // Check for .*
+                            if chars.peek() == Some(&'*') {
+                                chars.next();
+                                parts.push("*".to_string());
+                            }
+                        }
+                        '[' => {
+                            if !current_part.is_empty() {
+                                parts.push(current_part.clone());
+                                current_part.clear();
+                            }
+                            // Collect everything until ]
+                            let mut index_str = String::new();
+                            while let Some(&nc) = chars.peek() {
+                                if nc == ']' {
+                                    chars.next();
+                                    break;
+                                }
+                                index_str.push(chars.next().unwrap());
+                            }
+                            parts.push(format!("[{}]", index_str));
+                        }
+                        _ => {
+                            current_part.push(c);
+                        }
+                    }
+                }
+                if !current_part.is_empty() {
+                    parts.push(current_part);
+                }
+
+                let base_name = &parts[0];
 
                 let mut current_ptr = self
                     .variables
@@ -89,7 +132,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 // Iterate through the parts (starting from the second one)
                 for i in 1..parts.len() {
-                    let part = parts[i];
+                    let part = &parts[i];
 
                     if part == "*" {
                         // Dereference
@@ -102,6 +145,49 @@ impl<'ctx> CodeGenerator<'ctx> {
                             Type::Pointer(inner) => inner.as_ref().clone(),
                             _ => return Err("Dereference on non-pointer type".into()),
                         };
+                    } else if part.starts_with('[') && part.ends_with(']') {
+                        // Indexing
+                        let index_str = &part[1..part.len() - 1];
+                        let index_val = index_str.parse::<u64>().map_err(|_| "Invalid index in assignment target")?;
+                        let index_llvm = self.context.i64_type().const_int(index_val, false);
+
+                        match &current_ty {
+                            Type::Array { size, element_type } => {
+                                let element_ty = element_type.as_ref().clone();
+                                let element_llvm = self.llvm_type(&element_ty);
+                                
+                                match size {
+                                    Some(n) => {
+                                        // Array: [N]T
+                                        let array_type = element_llvm.array_type(*n as u32);
+                                        let zero = self.context.i64_type().const_zero();
+                                        current_ptr = unsafe {
+                                            self.builder.build_in_bounds_gep(
+                                                array_type,
+                                                current_ptr,
+                                                &[zero, index_llvm],
+                                                "index_ptr",
+                                            )
+                                        }?;
+                                    }
+                                    None => {
+                                        // Slice: []T - load the struct first
+                                        let slice_val = self.builder.build_load(self.llvm_type(&current_ty), current_ptr, "slice_val")?.into_struct_value();
+                                        let ptr_val = self.builder.build_extract_value(slice_val, 0, "slice_ptr")?.into_pointer_value();
+                                        current_ptr = unsafe {
+                                            self.builder.build_in_bounds_gep(
+                                                element_llvm,
+                                                ptr_val,
+                                                &[index_llvm],
+                                                "index_ptr",
+                                            )
+                                        }?;
+                                    }
+                                }
+                                current_ty = element_ty;
+                            }
+                            _ => return Err(format!("Indexing on non-array type: {:?}", current_ty).into()),
+                        }
                     } else {
                         // Member access
                         let struct_name = match &current_ty {
@@ -161,7 +247,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         let field_def = struct_def
                             .fields
                             .iter()
-                            .find(|f| f.name == part)
+                            .find(|f| f.name == *part)
                             .ok_or_else(|| {
                                 format!("Field '{}' not found in struct '{}'", part, struct_name)
                             })?;

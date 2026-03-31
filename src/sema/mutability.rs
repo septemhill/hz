@@ -25,30 +25,38 @@ impl MutabilityAnalyzer {
     pub fn analyze(&mut self, program: &crate::ast::Program) -> AnalysisResult<()> {
         for f in &program.functions {
             if f.generic_params.is_empty() {
-                self.analyze_function(f)?;
+                self.analyze_function(f, program)?;
             }
         }
         Ok(())
     }
 
-    fn analyze_function(&mut self, f: &crate::ast::FnDef) -> AnalysisResult<()> {
+    fn analyze_function(
+        &mut self,
+        f: &crate::ast::FnDef,
+        program: &crate::ast::Program,
+    ) -> AnalysisResult<()> {
         self.symbol_table.enter_scope();
         for param in &f.params {
             self.symbol_table.define(
                 param.name.clone(),
                 param.ty.clone(),
                 Visibility::Private,
-                false,
+                false, // Parameters are mutable by default in this language
             );
         }
         for stmt in &f.body {
-            self.analyze_statement(stmt)?;
+            self.analyze_statement(stmt, program)?;
         }
         self.symbol_table.exit_scope();
         Ok(())
     }
 
-    fn analyze_statement(&mut self, stmt: &crate::ast::Stmt) -> AnalysisResult<()> {
+    fn analyze_statement(
+        &mut self,
+        stmt: &crate::ast::Stmt,
+        program: &crate::ast::Program,
+    ) -> AnalysisResult<()> {
         match stmt {
             crate::ast::Stmt::Assign {
                 target,
@@ -57,62 +65,123 @@ impl MutabilityAnalyzer {
                 span,
             } => {
                 if target != "_" {
-                    // Check if this is a member access (contains a dot)
-                    if target.contains('.') {
-                        // For member access like "self.i", we need to handle it specially
-                        // Split by dot - the first part is the base identifier
-                        let parts: Vec<&str> = target.split('.').collect();
-                        if let Some(base) = parts.first() {
-                            // Check if this is a dereference (contains *)
-                            // For dereferences, we skip the const check for now as we don't have pointers to const
-                            if parts.contains(&"*") {
-                                return Ok(());
-                            }
-
-                            // Check if the base identifier is in the symbol table
-                            // or if it's a special case like 'self' (method receiver)
-                            if *base != "self" {
-                                let is_const = self
-                                    .symbol_table
-                                    .resolve(base)
-                                    .map(|s| s.is_const)
-                                    .ok_or_else(|| {
-                                        AnalysisError::new_with_span(
-                                            &format!("Undefined variable '{}'", base),
-                                            span,
-                                        )
-                                        .with_module("mutability")
-                                    })?;
-                                if is_const {
-                                    return Err(AnalysisError::new_with_span(
-                                        &format!("Cannot reassign constant variable '{}'", base),
-                                        span,
-                                    )
-                                    .with_module("mutability"));
+                    // Improved target parsing to handle both . and []
+                    let mut parts = Vec::new();
+                    let mut current_part = String::new();
+                    let mut chars = target.chars().peekable();
+                    
+                    while let Some(c) = chars.next() {
+                        match c {
+                            '.' => {
+                                if !current_part.is_empty() {
+                                    parts.push(current_part.clone());
+                                    current_part.clear();
+                                }
+                                if chars.peek() == Some(&'*') {
+                                    chars.next();
+                                    parts.push("*".to_string());
                                 }
                             }
-                            // For member assignments, we skip const check for now
-                            // The field mutability would need more complex handling
+                            '[' => {
+                                if !current_part.is_empty() {
+                                    parts.push(current_part.clone());
+                                    current_part.clear();
+                                }
+                                let mut index_str = String::new();
+                                while let Some(&nc) = chars.peek() {
+                                    if nc == ']' {
+                                        chars.next();
+                                        break;
+                                    }
+                                    index_str.push(chars.next().unwrap());
+                                }
+                                parts.push(format!("[{}]", index_str));
+                            }
+                            _ => {
+                                current_part.push(c);
+                            }
                         }
-                    } else {
-                        // Regular variable assignment
-                        let is_const = self
-                            .symbol_table
-                            .resolve(target)
-                            .map(|s| s.is_const)
-                            .ok_or_else(|| {
-                                AnalysisError::new_with_span(
-                                    &format!("Undefined variable '{}'", target),
-                                    span,
-                                )
-                                .with_module("mutability")
-                            })?;
-                        if is_const {
+                    }
+                    if !current_part.is_empty() {
+                        parts.push(current_part);
+                    }
+
+                    let base = &parts[0];
+                    
+                    if let Some(symbol) = self.symbol_table.resolve(base) {
+                        // If base is const, it's an error unless we are just defining it (but this is Assign, not Let)
+                        if symbol.is_const {
                             return Err(AnalysisError::new_with_span(
-                                &format!("Cannot reassign constant variable '{}'", target),
+                                &format!("Cannot reassign constant variable '{}'", base),
                                 span,
                             )
                             .with_module("mutability"));
+                        }
+
+                        // Check nested components
+                        let mut current_ty = &symbol.ty;
+                        for i in 1..parts.len() {
+                            let part = &parts[i];
+                            
+                            if part == "*" {
+                                // For dereference, we'd need to know if the pointer points to const.
+                                // Our Type system doesn't have Pointer(Box<Const(T)>) yet but it could.
+                                match current_ty {
+                                    crate::ast::Type::Pointer(inner) => {
+                                        current_ty = inner.as_ref();
+                                    }
+                                    _ => break,
+                                }
+                            } else if part.starts_with('[') && part.ends_with(']') {
+                                // Indexing - check if element type is Const
+                                if let crate::ast::Type::Array { element_type, .. } = current_ty {
+                                    if let crate::ast::Type::Const(_) = element_type.as_ref() {
+                                        return Err(AnalysisError::new_with_span(
+                                            &format!("Cannot modify constant elements of '{}'", base),
+                                            span,
+                                        )
+                                        .with_module("mutability"));
+                                    }
+                                    current_ty = element_type.as_ref();
+                                } else if let crate::ast::Type::Pointer(inner) = current_ty {
+                                    // Pointer to Const check
+                                    if let crate::ast::Type::Const(_) = inner.as_ref() {
+                                        return Err(AnalysisError::new_with_span(
+                                            &format!("Cannot modify constant value via pointer '{}'", base),
+                                            span,
+                                        )
+                                        .with_module("mutability"));
+                                    }
+                                    current_ty = inner.as_ref();
+                                } else {
+                                    break;
+                                }
+                            } else {
+                                // Member access - check if field is constant
+                                let struct_name = match current_ty {
+                                    crate::ast::Type::Custom { name, .. } => Some(name.clone()),
+                                    crate::ast::Type::Pointer(inner) => match &**inner {
+                                        crate::ast::Type::Custom { name, .. } => Some(name.clone()),
+                                        _ => None,
+                                    },
+                                    _ => None,
+                                };
+
+                                if let Some(s_name) = struct_name {
+                                    // Search for field in AST structs
+                                    let field = program.structs.iter()
+                                        .find(|s| s.name == s_name)
+                                        .and_then(|s| s.fields.iter().find(|f| f.name == *part));
+                                    
+                                    if let Some(f) = field {
+                                        current_ty = &f.ty;
+                                    } else {
+                                        break;
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -121,7 +190,7 @@ impl MutabilityAnalyzer {
             crate::ast::Stmt::Block { stmts, .. } => {
                 self.symbol_table.enter_scope();
                 for s in stmts {
-                    self.analyze_statement(s)?;
+                    self.analyze_statement(s, program)?;
                 }
                 self.symbol_table.exit_scope();
                 Ok(())
@@ -141,13 +210,13 @@ impl MutabilityAnalyzer {
                         Visibility::Private,
                         false,
                     );
-                    self.analyze_statement(then_branch)?;
+                    self.analyze_statement(then_branch, program)?;
                     self.symbol_table.exit_scope();
                 } else {
-                    self.analyze_statement(then_branch)?;
+                    self.analyze_statement(then_branch, program)?;
                 }
                 if let Some(eb) = else_branch {
-                    self.analyze_statement(eb)?;
+                    self.analyze_statement(eb, program)?;
                 }
                 Ok(())
             }
@@ -184,18 +253,18 @@ impl MutabilityAnalyzer {
                         false,
                     );
                 }
-                self.analyze_statement(body)?;
+                self.analyze_statement(body, program)?;
                 self.symbol_table.exit_scope();
                 Ok(())
             }
             crate::ast::Stmt::Switch { cases, .. } => {
                 for case in cases {
-                    self.analyze_statement(&case.body)?;
+                    self.analyze_statement(&case.body, program)?;
                 }
                 Ok(())
             }
             crate::ast::Stmt::Defer { stmt, .. } => {
-                self.analyze_statement(stmt)?;
+                self.analyze_statement(stmt, program)?;
                 Ok(())
             }
             crate::ast::Stmt::Let {
@@ -210,10 +279,8 @@ impl MutabilityAnalyzer {
                 let is_const = *mutability == crate::ast::Mutability::Const;
                 // Use I64 as default type when no type annotation and no value
                 let default_ty = crate::ast::Type::I64;
-                let inferred_ty = value
-                    .as_ref()
-                    .map(|_| default_ty.clone())
-                    .unwrap_or_else(|| ty.clone().unwrap_or(default_ty));
+                let inferred_ty = ty.clone().unwrap_or(default_ty);
+                
                 // Handle tuple destructuring
                 if let Some(var_names) = names {
                     for var_name in var_names {

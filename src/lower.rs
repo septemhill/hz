@@ -51,9 +51,16 @@ mod tests {
         match hir_expr {
             hir::HirExpr::String(val, ty, _) => {
                 assert_eq!(val, "hello");
-                assert!(
-                    matches!(ty, Type::Array { element_type, .. } if matches!(*element_type, Type::U8))
-                );
+                // String type should be Array { element_type: Const(U8) }
+                match &ty {
+                    Type::Array { element_type, .. } => match element_type.as_ref() {
+                        Type::Const(inner) => {
+                            assert_eq!(**inner, Type::U8);
+                        }
+                        _ => panic!("Expected Const type for string element"),
+                    },
+                    _ => panic!("Expected Array type for string"),
+                }
             }
             _ => panic!("Expected String expression"),
         }
@@ -569,6 +576,52 @@ pub struct LoweringContext {
 }
 
 impl LoweringContext {
+    /// Helper to parse target parts (handles . and [])
+    fn parse_target_parts(&self, target: &str) -> Vec<String> {
+        let mut parts = Vec::new();
+        let mut current_part = String::new();
+        let mut chars = target.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            match c {
+                '.' => {
+                    if !current_part.is_empty() {
+                        parts.push(current_part.clone());
+                        current_part.clear();
+                    }
+                    // Check for .*
+                    if chars.peek() == Some(&'*') {
+                        chars.next();
+                        parts.push("*".to_string());
+                    }
+                }
+                '[' => {
+                    if !current_part.is_empty() {
+                        parts.push(current_part.clone());
+                        current_part.clear();
+                    }
+                    // Collect everything until ]
+                    let mut index_str = String::new();
+                    while let Some(&nc) = chars.peek() {
+                        if nc == ']' {
+                            chars.next();
+                            break;
+                        }
+                        index_str.push(chars.next().unwrap());
+                    }
+                    parts.push(format!("[{}]", index_str));
+                }
+                _ => {
+                    current_part.push(c);
+                }
+            }
+        }
+        if !current_part.is_empty() {
+            parts.push(current_part);
+        }
+        parts
+    }
+
     pub fn new() -> Self {
         LoweringContext {
             symbol_table: SymbolTable::new(),
@@ -844,8 +897,8 @@ impl LoweringContext {
             } => {
                 // Handle compound assignment: expand to target = target op value
                 if *op != ast::AssignOp::Assign {
-                    let parts: Vec<&str> = target.split('.').collect();
-                    let base_name = parts[0];
+                    let parts = self.parse_target_parts(target);
+                    let base_name = &parts[0];
 
                     // Resolve the base type from local scope or symbol table
                     let mut current_ty = self
@@ -859,7 +912,7 @@ impl LoweringContext {
 
                     // Traverse the path to build the full read expression and resolve final type
                     for i in 1..parts.len() {
-                        let part = parts[i];
+                        let part = &parts[i];
                         if part == "*" {
                             // Dereference
                             let inner_ty = match &current_ty {
@@ -872,6 +925,27 @@ impl LoweringContext {
                                 span: s.span,
                             };
                             current_ty = inner_ty;
+                        } else if part.starts_with('[') && part.ends_with(']') {
+                            // Indexing
+                            let index_str = &part[1..part.len() - 1];
+                            let index_val = index_str.parse::<i64>().unwrap_or(0);
+                            let element_ty = match &current_ty {
+                                ast::Type::Array { element_type, .. } => {
+                                    element_type.as_ref().clone()
+                                }
+                                _ => ast::Type::I64,
+                            };
+                            read_expr = hir::HirExpr::Index {
+                                object: Box::new(read_expr),
+                                index: Box::new(hir::HirExpr::Int(
+                                    index_val,
+                                    ast::Type::I64,
+                                    s.span,
+                                )),
+                                ty: element_ty.clone(),
+                                span: s.span,
+                            };
+                            current_ty = element_ty;
                         } else {
                             // Member access
                             let struct_name = match &current_ty {
@@ -886,7 +960,7 @@ impl LoweringContext {
                             let field_ty = if let Some(s_name) = struct_name {
                                 self.structs
                                     .get(&s_name)
-                                    .and_then(|s| s.fields.iter().find(|f| f.name == part))
+                                    .and_then(|s| s.fields.iter().find(|f| f.name == *part))
                                     .map(|f| f.ty.clone())
                                     .unwrap_or(ast::Type::I64)
                             } else {
@@ -1432,8 +1506,8 @@ impl LoweringContext {
                 // Handle compound assignment (e.g., c.age += 43, ptr.* += 1)
                 if *op != ast::AssignOp::Assign {
                     // For compound assignment, expand to: target = target op value
-                    let parts: Vec<&str> = target.split('.').collect();
-                    let base_name = parts[0];
+                    let parts = self.parse_target_parts(target);
+                    let base_name = &parts[0];
 
                     // Resolve the base type
                     let mut current_ty = self
@@ -1447,7 +1521,7 @@ impl LoweringContext {
 
                     // Traverse the path to build the full read expression and resolve final type
                     for i in 1..parts.len() {
-                        let part = parts[i];
+                        let part = &parts[i];
                         if part == "*" {
                             // Dereference
                             let inner_ty = match &current_ty {
@@ -1460,6 +1534,27 @@ impl LoweringContext {
                                 span: *span,
                             };
                             current_ty = inner_ty;
+                        } else if part.starts_with('[') && part.ends_with(']') {
+                            // Indexing
+                            let index_str = &part[1..part.len() - 1];
+                            let index_val = index_str.parse::<i64>().unwrap_or(0);
+                            let element_ty = match &current_ty {
+                                ast::Type::Array { element_type, .. } => {
+                                    element_type.as_ref().clone()
+                                }
+                                _ => ast::Type::I64,
+                            };
+                            read_expr = hir::HirExpr::Index {
+                                object: Box::new(read_expr),
+                                index: Box::new(hir::HirExpr::Int(
+                                    index_val,
+                                    ast::Type::I64,
+                                    *span,
+                                )),
+                                ty: element_ty.clone(),
+                                span: *span,
+                            };
+                            current_ty = element_ty;
                         } else {
                             // Member access
                             // Get field type from struct definition
@@ -1475,7 +1570,7 @@ impl LoweringContext {
                             let field_ty = if let Some(s_name) = struct_name {
                                 self.structs
                                     .get(&s_name)
-                                    .and_then(|s| s.fields.iter().find(|f| f.name == part))
+                                    .and_then(|s| s.fields.iter().find(|f| f.name == *part))
                                     .map(|f| f.ty.clone())
                                     .unwrap_or(ast::Type::I64)
                             } else {
@@ -1641,7 +1736,7 @@ impl LoweringContext {
                 v.clone(),
                 ast::Type::Array {
                     size: None,
-                    element_type: Box::new(ast::Type::U8),
+                    element_type: Box::new(ast::Type::Const(Box::new(ast::Type::U8))),
                 },
                 *span,
             ),
@@ -1928,7 +2023,11 @@ impl LoweringContext {
                     span: *span,
                 }
             }
-            ast::Expr::Index { object, index, span } => {
+            ast::Expr::Index {
+                object,
+                index,
+                span,
+            } => {
                 let lowered_object = self.lower_expr(object);
                 let lowered_index = self.lower_expr(index);
                 let ty = ast::Type::Void; // Will be inferred by type checker

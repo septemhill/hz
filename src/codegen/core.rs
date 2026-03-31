@@ -374,7 +374,18 @@ impl<'ctx> CodeGenerator<'ctx> {
         kind: PrintfArgKind,
     ) -> CodegenResult<BasicValueEnum<'ctx>> {
         match kind {
-            PrintfArgKind::String => Ok(value),
+            PrintfArgKind::String => {
+                if value.is_struct_value() {
+                    let sv = value.into_struct_value();
+                    if sv.get_type().get_field_types().len() == 2
+                        && sv.get_type().get_field_types()[0].is_pointer_type()
+                        && sv.get_type().get_field_types()[1].is_int_type()
+                    {
+                        return Ok(self.builder.build_extract_value(sv, 0, "slice_ptr")?);
+                    }
+                }
+                Ok(value)
+            }
             PrintfArgKind::Integer => {
                 if value.is_int_value() {
                     let int_val = value.into_int_value();

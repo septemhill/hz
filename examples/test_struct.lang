@@ -12,7 +12,10 @@ struct Base {
 
 fn main() void {
     {
-        const a: Base = Base.new("Septem", 123, true);
+        var a: Base = Base.new("Septem", 123, true);
+
+        //a.name[0] = 'c'; // Invalid
+        a.age = 999;
 
         io.println(a.name);
         io.println(a.age);
@@ -20,7 +23,9 @@ fn main() void {
     }
 
     {
-        const b: Base = Base{ name: "Septem", age: 123, married: true };
+        var b: Base = Base{ name: "Septem", age: 123, married: true };
+
+        b.name = "Hazel"; // Valid
         io.println(b.name);
         io.println(b.age);
         io.println(b.married);

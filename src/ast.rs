@@ -56,6 +56,8 @@ pub enum Type {
     Error,
     /// Result type with error (e.g., i32! means i32 or error)
     Result(Box<Type>),
+    /// Constant type (e.g., const u8)
+    Const(Box<Type>),
     /// Function type (e.g., fn(i64, i64) i64)
     Function {
         /// Parameter types
@@ -103,7 +105,9 @@ impl Type {
     pub fn is_generic(&self) -> bool {
         match self {
             Type::GenericParam(_) => true,
-            Type::Pointer(inner) | Type::Option(inner) | Type::Result(inner) => inner.is_generic(),
+            Type::Pointer(inner) | Type::Option(inner) | Type::Result(inner) | Type::Const(inner) => {
+                inner.is_generic()
+            }
             Type::Array { element_type, .. } => element_type.is_generic(),
             Type::Tuple(types) => types.iter().any(|t| t.is_generic()),
             Type::Custom { generic_args, .. } => generic_args.iter().any(|t| t.is_generic()),
@@ -162,7 +166,7 @@ impl Type {
                 *name = struct_name.to_string();
                 *args = generic_args.to_vec();
             }
-            Type::Pointer(inner) | Type::Option(inner) | Type::Result(inner) => {
+            Type::Pointer(inner) | Type::Option(inner) | Type::Result(inner) | Type::Const(inner) => {
                 inner.replace_self_with_args(struct_name, generic_args);
             }
             Type::Tuple(types) => {
@@ -269,6 +273,7 @@ impl fmt::Display for Type {
             },
             Type::Error => write!(f, "error"),
             Type::Result(inner) => write!(f, "{}!", inner),
+            Type::Const(inner) => write!(f, "const {}", inner),
             Type::Function {
                 params,
                 return_type,

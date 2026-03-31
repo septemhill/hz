@@ -2054,6 +2054,33 @@ impl Parser {
                     });
                 }
             }
+            Expr::Index { object, index, span } => {
+                // Handle array indexing assignment like a[i] = value
+                if let Some(op) = self.match_assign_op() {
+                    let value = self.parse_expression()?;
+                    self.skip_whitespace();
+                    self.match_token(Token::Semicolon);
+
+                    // Get the end span from the value expression
+                    let span_end = self.get_expr_span(&value);
+
+                    // Format the target string
+                    let target = format!(
+                        "{}[{}]",
+                        self.format_target_for_expr(object.as_ref()),
+                        self.format_target_for_expr(index.as_ref())
+                    );
+                    return Ok(Stmt::Assign {
+                        target,
+                        op,
+                        value,
+                        span: Span {
+                            start: span.start,
+                            end: span_end.end,
+                        },
+                    });
+                }
+            }
             Expr::Dereference { expr, span } => {
                 // Handle pointer dereference assignment like ptr.* = value
                 if let Some(op) = self.match_assign_op() {
@@ -2099,6 +2126,14 @@ impl Parser {
                     member
                 )
             }
+            Expr::Index { object, index, .. } => {
+                format!(
+                    "{}[{}]",
+                    self.format_target_for_expr(object.as_ref()),
+                    self.format_target_for_expr(index.as_ref())
+                )
+            }
+            Expr::Int(n, _) => n.to_string(),
             Expr::Dereference { expr, .. } => {
                 format!("{}.*", self.format_target_for_expr(expr.as_ref()))
             }
@@ -3005,9 +3040,10 @@ impl Parser {
             return Ok(Type::Option(Box::new(inner)));
         }
 
-        // Check for const keyword (skip it as Lang doesn't have a Const variant in Type yet)
+        // Check for const keyword
         if self.match_token(Token::Const) {
-            return self.parse_type();
+            let inner = self.parse_type()?;
+            return Ok(Type::Const(Box::new(inner)));
         }
 
         // Check for error type suffix: Type! (e.g., i32! or void!)
