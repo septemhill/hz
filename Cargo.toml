@@ -11,14 +11,10 @@ lsp = ["lsp-server", "tokio"]
 # LLVM binding for code generation
 inkwell = { version = "0.8.0", features = ["llvm21-1"] }
 
-# Parser generator (使用 pest)
-pest = "2.7"
-pest_derive = "2.7"
-
-clap = { version = "4.5", features = ["derive"] }
-thiserror = "1.0"
+clap = { version = "4.6.0", features = ["derive"] }
+thiserror = "2.0.18"
 log = "0.4"
-env_logger = "0.11"
+env_logger = "0.11.10"
 
 # LSP support
 serde = { version = "1.0", features = ["derive"] }
