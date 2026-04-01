@@ -602,11 +602,21 @@ impl SymbolResolver {
                         ))),
                     });
                 }
+                if name == "@size_of" || name == "@align_of" {
+                    if args.len() != 1 {
+                        return Err(AnalysisError::new(&format!("{} requires exactly one argument", name))
+                            .with_module("resolver"));
+                    }
+                    // Analyze the argument
+                    self.analyze_expression(&args[0])?;
+                    return Ok(crate::ast::Type::U64);
+                }
                 Err(
                     AnalysisError::new(&format!("Unknown intrinsic function '{}'", name))
                         .with_module("resolver"),
                 )
             }
+            crate::ast::Expr::TypeLiteral(_, _) => Ok(crate::ast::Type::Void),
             _ => Ok(crate::ast::Type::I64),
         }
     }

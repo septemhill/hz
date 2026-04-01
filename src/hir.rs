@@ -115,6 +115,8 @@ pub enum HirExpr {
         ty: Type,
         span: Span,
     },
+    /// Type literal used as an argument to intrinsic functions
+    TypeLiteral(Type, Type, Span),
 }
 
 impl HirExpr {
@@ -143,9 +145,11 @@ impl HirExpr {
             HirExpr::Catch { ty, .. } => ty,
             HirExpr::Cast { ty, .. } => ty,
             HirExpr::Dereference { ty, .. } => ty,
+            HirExpr::TypeLiteral(_, ty, _) => ty,
         }
     }
 }
+
 
 #[derive(Debug, Clone)]
 #[allow(unused)]
@@ -582,6 +586,9 @@ impl fmt::Display for HirExpr {
                     .collect::<Vec<_>>()
                     .join(", ");
                 write!(f, "{}({}): {}", name, args_str, ty)
+            }
+            HirExpr::TypeLiteral(ty, _, _) => {
+                write!(f, "type<{}>", ty)
             }
         }
     }

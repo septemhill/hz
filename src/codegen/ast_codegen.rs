@@ -787,6 +787,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expr::Intrinsic { name, .. } => {
                 Err(format!("Intrinsic function '{}' is not supported in legacy ast_codegen. Use hir_codegen instead.", name).into())
             }
+            Expr::TypeLiteral(ty, _) => {
+                Err(format!("Type literal '{}' is not supported in legacy ast_codegen. Use hir_codegen instead.", ty).into())
+            }
         }
     }
 
@@ -1509,7 +1512,7 @@ impl<'ctx> CodeGenerator<'ctx> {
     }
 
     /// Convert our Type to LLVM type
-    pub(super) fn llvm_type(&self, ty: &Type) -> BasicTypeEnum<'ctx> {
+    pub fn llvm_type(&self, ty: &Type) -> BasicTypeEnum<'ctx> {
         match ty {
             Type::I8 => self.context.i8_type().into(),
             Type::I16 => self.context.i16_type().into(),

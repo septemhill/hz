@@ -285,6 +285,7 @@ impl TypeAnalyzer {
                 }
                 None
             }
+            crate::ast::Expr::TypeLiteral(_, _) => None,
             crate::ast::Expr::Call { args, .. } => {
                 for arg in args {
                     if let Some(s) = self.expr_find_try(arg) {
@@ -1177,11 +1178,23 @@ impl TypeAnalyzer {
                         ))),
                     });
                 }
+                if name == "@size_of" || name == "@align_of" {
+                    if args.len() != 1 {
+                        return Err(AnalysisError::new_with_span(
+                            &format!("{} requires exactly one argument", name),
+                            span,
+                        ));
+                    }
+                    // Analyze the argument
+                    self.analyze_expression(&args[0])?;
+                    return Ok(crate::ast::Type::U64);
+                }
                 Err(
                     AnalysisError::new(&format!("Unknown intrinsic function '{}'", name))
                         .with_module("types"),
                 )
             }
+            crate::ast::Expr::TypeLiteral(_, _) => Ok(crate::ast::Type::Void),
         }
     }
 

@@ -4,7 +4,13 @@ use crate::sema::symbol::SymbolTable;
 use std::collections::HashMap;
 
 // List of builtin functions that cannot be overridden
-const BUILTIN_FUNCTIONS: &[&str] = &["@is_null", "@is_not_null", "@type_of"];
+const BUILTIN_FUNCTIONS: &[&str] = &[
+    "@is_null",
+    "@is_not_null",
+    "@size_of",
+    "@align_of",
+    "@type_of",
+];
 
 // ============================================================================
 // Analysis Pass 1: Global Definitions Analyzer

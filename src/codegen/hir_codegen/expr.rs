@@ -1297,6 +1297,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let loaded = self.builder.build_load(llvm_type, ptr, "deref_load")?;
                 Ok(loaded.into())
             }
+            hir::HirExpr::Intrinsic { name, args, .. } => {
+                self.generate_intrinsic(name, args)
+            }
+            hir::HirExpr::TypeLiteral(_, _, _) => {
+                Err("Type literal should only be used as an argument to an intrinsic".into())
+            }
         }
     }
 }

@@ -105,9 +105,10 @@ impl Type {
     pub fn is_generic(&self) -> bool {
         match self {
             Type::GenericParam(_) => true,
-            Type::Pointer(inner) | Type::Option(inner) | Type::Result(inner) | Type::Const(inner) => {
-                inner.is_generic()
-            }
+            Type::Pointer(inner)
+            | Type::Option(inner)
+            | Type::Result(inner)
+            | Type::Const(inner) => inner.is_generic(),
             Type::Array { element_type, .. } => element_type.is_generic(),
             Type::Tuple(types) => types.iter().any(|t| t.is_generic()),
             Type::Custom { generic_args, .. } => generic_args.iter().any(|t| t.is_generic()),
@@ -166,7 +167,10 @@ impl Type {
                 *name = struct_name.to_string();
                 *args = generic_args.to_vec();
             }
-            Type::Pointer(inner) | Type::Option(inner) | Type::Result(inner) | Type::Const(inner) => {
+            Type::Pointer(inner)
+            | Type::Option(inner)
+            | Type::Result(inner)
+            | Type::Const(inner) => {
                 inner.replace_self_with_args(struct_name, generic_args);
             }
             Type::Tuple(types) => {
@@ -636,6 +640,8 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// Type literal used as an argument to intrinsic functions (e.g., u64 in @size_of(u64))
+    TypeLiteral(Type, Span),
 }
 
 /// Statement AST node
@@ -1336,9 +1342,12 @@ impl AstDump for Expr {
             }
             Expr::Intrinsic { name, args, .. } => {
                 println!("Expr::Intrinsic: {}", name);
-                for a in args {
-                    a.dump(indent + 1);
+                for arg in args {
+                    arg.dump(indent + 1);
                 }
+            }
+            Expr::TypeLiteral(ty, _) => {
+                println!("Expr::TypeLiteral: {}", ty);
             }
         }
     }

@@ -358,6 +358,9 @@ impl TreeShaker {
                     changed |= self.traverse_expr(arg);
                 }
             }
+            Expr::TypeLiteral(ty, _) => {
+                changed |= self.traverse_type(ty);
+            }
             Expr::If {
                 condition,
                 then_branch,

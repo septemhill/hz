@@ -362,7 +362,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::Cast { ty, .. } => ty,
             hir::HirExpr::Dereference { ty, .. }
             | hir::HirExpr::Index { ty, .. }
-            | hir::HirExpr::Intrinsic { ty, .. } => ty,
+            | hir::HirExpr::Intrinsic { ty, .. }
+            | hir::HirExpr::TypeLiteral(_, ty, _) => ty,
         }
     }
 

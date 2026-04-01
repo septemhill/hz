@@ -1199,6 +1199,11 @@ impl LoweringContext {
                 ty: e.ty.clone(),
                 span: e.span,
             },
+            TypedExprKind::TypeLiteral(ty) => hir::HirExpr::TypeLiteral(
+                ty.clone(),
+                e.ty.clone(),
+                e.span,
+            ),
         }
     }
 
@@ -2061,6 +2066,9 @@ impl LoweringContext {
                     ty,
                     span: *span,
                 }
+            }
+            ast::Expr::TypeLiteral(ty, span) => {
+                hir::HirExpr::TypeLiteral(ty.clone(), ast::Type::Void, *span)
             }
         }
     }

@@ -1,0 +1,43 @@
+import "io"
+
+struct Point {
+    x: i64,
+    y: i64,
+    z: i64,
+}
+
+struct Empty {}
+
+fn main() void {
+    // Basic types
+    const s_u8 = @size_of(u8);
+    const s_u64 = @size_of(u64);
+    const s_f64 = @size_of(f64);
+    
+    io.println("size_of(u8) = {d}", s_u8);
+    io.println("size_of(u64) = {d}", s_u64);
+    io.println("size_of(f64) = {d}", s_f64);
+
+    // Compound types
+    const s_ptr = @size_of(*u8);
+    const s_slice = @size_of([]u8);
+    
+    io.println("size_of(*u8) = {d}", s_ptr);
+    // Slice is {ptr, len} -> 2 * 8 = 16
+    io.println("size_of([]u8) = {d}", s_slice);
+
+    // Custom types
+    const s_point = @size_of(Point);
+    const s_empty = @size_of(Empty);
+    
+    io.println("size_of(Point) = {d}", s_point);
+    // Depending on backend, empty struct should be 0
+    io.println("size_of(Empty) = {d}", s_empty);
+
+    // Alignment
+    const a_u64 = @align_of(u64);
+    const a_point = @align_of(Point);
+    
+    io.println("align_of(u64) = {d}", a_u64);
+    io.println("align_of(Point) = {d}", a_point);
+}

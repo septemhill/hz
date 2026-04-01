@@ -340,6 +340,9 @@ fn collect_typed_expr_types(
                 collect_typed_expr_types(arg, registry, type_list);
             }
         }
+        TypedExprKind::TypeLiteral(ty) => {
+            collect_type(ty, registry, type_list);
+        }
     }
 }
 
@@ -598,6 +601,9 @@ fn collect_expr_types(
             for arg in args {
                 collect_expr_types(arg, registry, type_list);
             }
+        }
+        crate::ast::Expr::TypeLiteral(ty, _) => {
+            collect_type(ty, registry, type_list);
         }
     }
 }

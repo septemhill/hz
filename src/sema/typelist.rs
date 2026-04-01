@@ -332,11 +332,14 @@ fn collect_types_from_expr(expr: &crate::ast::Expr, types: &mut Vec<Type>) {
                 collect_types_from_expr(arg, types);
             }
         }
+        crate::ast::Expr::TypeLiteral(ty, _) => {
+            collect_types_from_type(ty, types);
+        }
     }
 }
 
 /// Collect types from a type annotation
-fn collect_types_from_type(ty: &Type, types: &mut Vec<Type>) {
+pub fn collect_types_from_type(ty: &Type, types: &mut Vec<Type>) {
     // Avoid duplicates
     if !types.contains(ty) {
         types.push(ty.clone());

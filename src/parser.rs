@@ -238,6 +238,7 @@ impl Parser {
             Expr::Dereference { span, .. } => *span,
             Expr::Intrinsic { span, .. } => *span,
             Expr::Index { span, .. } => *span,
+            Expr::TypeLiteral(_, span) => *span,
         }
     }
 }
@@ -2539,24 +2540,7 @@ impl Parser {
 
             // Function call: (arg1, arg2, ...)
             if self.match_token(Token::LParen) {
-                let mut args = Vec::new();
-                if !self.match_token(Token::RParen) {
-                    loop {
-                        args.push(self.parse_expression()?);
-                        self.skip_whitespace();
-                        if self.match_token(Token::RParen) {
-                            break;
-                        }
-                        if !self.match_token(Token::Comma) {
-                            // If no comma and no RParen, it's an error, but we'll let it fail at RParen match
-                            break;
-                        }
-                    }
-                }
-
-                let call_span = self.get_expr_span(&expr);
-                
-                // Try to extract name/namespace for intrinsic check
+                // Try to extract name/namespace for intrinsic check BEFORE parsing arguments
                 let mut is_intrinsic = false;
                 let mut name_to_use = String::new();
                 let mut ns_to_use = None;
@@ -2577,6 +2561,32 @@ impl Parser {
                     _ => {}
                 }
 
+                let mut args = Vec::new();
+                if !self.match_token(Token::RParen) {
+                    loop {
+                        // Special case for @size_of and @align_of which take a type argument
+                        if is_intrinsic && (name_to_use == "@size_of" || name_to_use == "@align_of") {
+                            let start_pos = self.current_token().map(|t| t.span.start).unwrap_or(0);
+                            let ty_arg = self.parse_type()?;
+                            let end_pos = self.current_token().map(|t| t.span.start).unwrap_or(start_pos);
+                            args.push(Expr::TypeLiteral(ty_arg, Span { start: start_pos, end: end_pos }));
+                        } else {
+                            args.push(self.parse_expression()?);
+                        }
+                        
+                        self.skip_whitespace();
+                        if self.match_token(Token::RParen) {
+                            break;
+                        }
+                        if !self.match_token(Token::Comma) {
+                            // If no comma and no RParen, it's an error, but we'll let it fail at RParen match
+                            break;
+                        }
+                    }
+                }
+
+                let call_span = self.get_expr_span(&expr);
+                
                 if is_intrinsic && ns_to_use.is_none() {
                     expr = Expr::Intrinsic {
                         name: name_to_use,

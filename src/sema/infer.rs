@@ -104,6 +104,8 @@ pub enum TypedExprKind {
     Dereference { expr: Box<TypedExpr> },
     /// Intrinsic function call
     Intrinsic { name: String, args: Vec<TypedExpr> },
+    /// Type literal used as an argument to intrinsic functions
+    TypeLiteral(Type),
 }
 
 #[allow(unused)]
@@ -2068,6 +2070,7 @@ impl TypeInferrer {
             Expr::Cast { span, .. } => *span,
             Expr::Dereference { span, .. } => *span,
             Expr::Intrinsic { span, .. } => *span,
+            Expr::TypeLiteral(_, span) => *span,
         };
 
         match expr {
@@ -2825,6 +2828,30 @@ impl TypeInferrer {
                             span: *span,
                         })
                     }
+                    "@size_of" | "@align_of" => {
+                        if typed_args.len() != 1 {
+                            return Err(AnalysisError::new_with_span(
+                                &format!("{} requires exactly one argument", name),
+                                span,
+                            )
+                            .with_module("infer"));
+                        }
+                        if !matches!(typed_args[0].expr, TypedExprKind::TypeLiteral(_)) {
+                            return Err(AnalysisError::new_with_span(
+                                &format!("{} requires a type argument", name),
+                                span,
+                            )
+                            .with_module("infer"));
+                        }
+                        Ok(TypedExpr {
+                            expr: TypedExprKind::Intrinsic {
+                                name: name.clone(),
+                                args: typed_args,
+                            },
+                            ty: Type::U64,
+                            span: *span,
+                        })
+                    }
                     _ => Err(AnalysisError::new_with_span(
                         &format!("Unknown intrinsic function '{}'", name),
                         span,
@@ -2832,6 +2859,11 @@ impl TypeInferrer {
                     .with_module("infer")),
                 }
             }
+            Expr::TypeLiteral(ty, _) => Ok(TypedExpr {
+                expr: TypedExprKind::TypeLiteral(ty.clone()),
+                ty: Type::Void, // Type literals don't have a value type in the language
+                span,
+            }),
             Expr::Struct {
                 name,
                 fields,
@@ -4422,6 +4454,9 @@ impl AstDump for TypedExpr {
                 for arg in args {
                     arg.dump(indent + 1);
                 }
+            }
+            TypedExprKind::TypeLiteral(ty) => {
+                println!("Expr::TypeLiteral: {} (ty: {})", ty, self.ty);
             }
         }
     }
