@@ -2119,10 +2119,37 @@ impl TypeInferrer {
                 })
             }
             Expr::Tuple(elements, _) => {
+                // Get expected tuple type from context if provided
+                let expected_tuple_type =
+                    self.get_expected_type()
+                        .and_then(|expected_ty| match expected_ty {
+                            Type::Tuple(types) => {
+                                eprintln!(
+                                    "DEBUG Tuple: expected_type is Some(Tuple), types={:?}",
+                                    types
+                                );
+                                Some(types.clone())
+                            }
+                            _ => {
+                                eprintln!("DEBUG Tuple: expected_type is Some({:?})", expected_ty);
+                                None
+                            }
+                        });
+
                 let mut typed_elements = Vec::new();
-                for elem in elements {
+                let previous_expected_type = self.get_expected_type().cloned();
+
+                for (index, elem) in elements.iter().enumerate() {
+                    // Set expected type for each element if we have an expected tuple type
+                    if let Some(ref expected_types) = expected_tuple_type {
+                        if index < expected_types.len() {
+                            self.set_expected_type(Some(expected_types[index].clone()));
+                        }
+                    }
                     typed_elements.push(self.infer_expr(elem)?);
+                    self.set_expected_type(previous_expected_type.clone());
                 }
+
                 let ty = Type::Tuple(typed_elements.iter().map(|e| e.ty.clone()).collect());
                 Ok(TypedExpr {
                     expr: TypedExprKind::Tuple(typed_elements),
@@ -2156,7 +2183,11 @@ impl TypeInferrer {
                     )
                 }
             }
-            Expr::Index { object, index, span } => {
+            Expr::Index {
+                object,
+                index,
+                span,
+            } => {
                 let typed_object = self.infer_expr(object)?;
                 let typed_index = self.infer_expr(index)?;
 
@@ -2164,10 +2195,13 @@ impl TypeInferrer {
                     Type::Array { element_type, .. } => element_type.clone(),
                     _ => {
                         return Err(AnalysisError::new_with_span(
-                            &format!("Indexing only supported on array or slice types, found {}", typed_object.ty),
+                            &format!(
+                                "Indexing only supported on array or slice types, found {}",
+                                typed_object.ty
+                            ),
                             &typed_object.span,
                         )
-                        .with_module("infer"))
+                        .with_module("infer"));
                     }
                 };
 
@@ -2766,6 +2800,28 @@ impl TypeInferrer {
                                 args: typed_args,
                             },
                             ty: Type::Bool,
+                            span: *span,
+                        })
+                    }
+                    "@type_of" => {
+                        // @type_of takes one argument and returns []const u8
+                        if typed_args.len() != 1 {
+                            return Err(AnalysisError::new_with_span(
+                                "@type_of requires exactly one argument",
+                                span,
+                            )
+                            .with_module("infer"));
+                        }
+                        // Return type is []const u8
+                        Ok(TypedExpr {
+                            expr: TypedExprKind::Intrinsic {
+                                name: name.clone(),
+                                args: typed_args,
+                            },
+                            ty: Type::Array {
+                                size: None,
+                                element_type: Box::new(Type::Const(Box::new(Type::U8))),
+                            },
                             span: *span,
                         })
                     }

@@ -586,8 +586,26 @@ impl SymbolResolver {
                     // These functions take a rawptr or pointer and return bool
                     return Ok(crate::ast::Type::Bool);
                 }
-                Err(AnalysisError::new(&format!("Unknown intrinsic function '{}'", name))
-                    .with_module("resolver"))
+                if name == "@type_of" {
+                    // @type_of takes any variable and returns []const u8
+                    if args.len() != 1 {
+                        return Err(AnalysisError::new("@type_of requires exactly one argument")
+                            .with_module("resolver"));
+                    }
+                    // Analyze the argument to get its type (for type checking purposes)
+                    self.analyze_expression(&args[0])?;
+                    // Return []const u8 (a slice of const u8)
+                    return Ok(crate::ast::Type::Array {
+                        size: None,
+                        element_type: Box::new(crate::ast::Type::Const(Box::new(
+                            crate::ast::Type::U8,
+                        ))),
+                    });
+                }
+                Err(
+                    AnalysisError::new(&format!("Unknown intrinsic function '{}'", name))
+                        .with_module("resolver"),
+                )
             }
             _ => Ok(crate::ast::Type::I64),
         }

@@ -196,6 +196,26 @@ impl TypeAnalyzer {
                     .with_module("types"))
                 }
             }
+            crate::ast::Expr::Tuple(elements, span) => {
+                if let crate::ast::Type::Tuple(expected_types) = expected {
+                    if elements.len() != expected_types.len() {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "Tuple literal expected {} elements, found {}",
+                                expected_types.len(),
+                                elements.len()
+                            ),
+                            span,
+                        )
+                        .with_module("types"));
+                    }
+
+                    for (elem, elem_ty) in elements.iter().zip(expected_types.iter()) {
+                        self.validate_expr_against_type(elem, elem_ty)?;
+                    }
+                }
+                Ok(())
+            }
             crate::ast::Expr::Array(elements, explicit_ty, span) => {
                 let expected_element_type = match expected {
                     crate::ast::Type::Array { element_type, .. } => {
@@ -232,30 +252,12 @@ impl TypeAnalyzer {
 
                 Ok(())
             }
-            crate::ast::Expr::Tuple(elements, span) => {
-                if let crate::ast::Type::Tuple(expected_types) = expected {
-                    if elements.len() != expected_types.len() {
-                        return Err(AnalysisError::new_with_span(
-                            &format!(
-                                "Tuple literal expected {} elements, found {}",
-                                expected_types.len(),
-                                elements.len()
-                            ),
-                            span,
-                        )
-                        .with_module("types"));
-                    }
-
-                    for (elem, elem_ty) in elements.iter().zip(expected_types.iter()) {
-                        self.validate_expr_against_type(elem, elem_ty)?;
-                    }
-                }
-                Ok(())
-            }
             crate::ast::Expr::Null(span) => {
                 if !matches!(
                     expected,
-                    crate::ast::Type::Option(_) | crate::ast::Type::Pointer(_) | crate::ast::Type::RawPtr
+                    crate::ast::Type::Option(_)
+                        | crate::ast::Type::Pointer(_)
+                        | crate::ast::Type::RawPtr
                 ) {
                     return Err(AnalysisError::new_with_span(
                         &format!("Type mismatch: cannot assign null to {}", expected),
@@ -268,7 +270,6 @@ impl TypeAnalyzer {
             _ => Ok(()),
         }
     }
-
 
     /// Find the span of a try expression in an expression, if it exists
     fn expr_find_try(&self, expr: &crate::ast::Expr) -> Option<Span> {
@@ -342,9 +343,9 @@ impl TypeAnalyzer {
                 None
             }
             crate::ast::Expr::TupleIndex { tuple, .. } => self.expr_find_try(tuple),
-            crate::ast::Expr::Index { object, index, .. } => {
-                self.expr_find_try(object).or_else(|| self.expr_find_try(index))
-            }
+            crate::ast::Expr::Index { object, index, .. } => self
+                .expr_find_try(object)
+                .or_else(|| self.expr_find_try(index)),
             // Base cases - no try expression
             crate::ast::Expr::Int(_, _)
             | crate::ast::Expr::Float(_, _)
@@ -672,8 +673,22 @@ impl TypeAnalyzer {
 
     fn analyze_expression(&mut self, expr: &crate::ast::Expr) -> AnalysisResult<crate::ast::Type> {
         match expr {
-            crate::ast::Expr::Int(_, _) => Ok(crate::ast::Type::I64),
-            crate::ast::Expr::Float(_, _) => Ok(crate::ast::Type::F64),
+            crate::ast::Expr::Int(value, _) => {
+                if let Some(expected_ty) = self.get_expected_type() {
+                    if expected_ty.is_integer() && expected_ty.can_represent_int_literal(*value) {
+                        return Ok(expected_ty.clone());
+                    }
+                }
+                Ok(crate::ast::Type::I64)
+            }
+            crate::ast::Expr::Float(_, _) => {
+                if let Some(expected_ty) = self.get_expected_type() {
+                    if expected_ty.is_float() {
+                        return Ok(expected_ty.clone());
+                    }
+                }
+                Ok(crate::ast::Type::F64)
+            }
             crate::ast::Expr::Bool(_, _) => Ok(crate::ast::Type::Bool),
             crate::ast::Expr::String(_, _) => Ok(crate::ast::Type::Array {
                 size: None,
@@ -685,16 +700,41 @@ impl TypeAnalyzer {
                 // otherwise default to Option<i64>
                 let ty = match self.get_expected_type() {
                     Some(crate::ast::Type::RawPtr) => crate::ast::Type::RawPtr,
-                    Some(crate::ast::Type::Pointer(inner)) => crate::ast::Type::Pointer(inner.clone()),
-                    Some(crate::ast::Type::Option(inner)) => crate::ast::Type::Option(inner.clone()),
+                    Some(crate::ast::Type::Pointer(inner)) => {
+                        crate::ast::Type::Pointer(inner.clone())
+                    }
+                    Some(crate::ast::Type::Option(inner)) => {
+                        crate::ast::Type::Option(inner.clone())
+                    }
                     _ => crate::ast::Type::Option(Box::new(crate::ast::Type::I64)),
                 };
                 Ok(ty)
             }
             crate::ast::Expr::Tuple(elements, _) => {
+                // Get expected tuple type from context if provided
+                let expected_tuple_type = self.get_expected_type().and_then(|expected_ty| {
+                    match expected_ty {
+                        crate::ast::Type::Tuple(types) => {
+                            Some(types.clone())
+                        }
+                        _ => {
+                            None
+                        }
+                    }
+                });
+
                 let mut types = vec![];
-                for elem in elements {
+                let previous_expected = self.get_expected_type().cloned();
+
+                for (index, elem) in elements.iter().enumerate() {
+                    // Set expected type for each element if we have an expected tuple type
+                    if let Some(ref expected_types) = expected_tuple_type {
+                        if index < expected_types.len() {
+                            self.set_expected_type(Some(expected_types[index].clone()));
+                        }
+                    }
                     let ty = self.analyze_expression(elem)?;
+                    self.set_expected_type(previous_expected.clone());
                     types.push(ty);
                 }
                 Ok(crate::ast::Type::Tuple(types))
@@ -717,7 +757,11 @@ impl TypeAnalyzer {
                     ))
                 }
             }
-            crate::ast::Expr::Index { object, index, span } => {
+            crate::ast::Expr::Index {
+                object,
+                index,
+                span,
+            } => {
                 let obj_ty = self.analyze_expression(object)?;
                 let index_ty = self.analyze_expression(index)?;
 
@@ -727,7 +771,11 @@ impl TypeAnalyzer {
                         if matches!(index_ty, crate::ast::Type::I64) {
                             // Single element access
                             Ok(*element_type)
-                        } else if let crate::ast::Expr::Binary { op: crate::ast::BinaryOp::Range, .. } = &**index {
+                        } else if let crate::ast::Expr::Binary {
+                            op: crate::ast::BinaryOp::Range,
+                            ..
+                        } = &**index
+                        {
                             // Slice: returns []T
                             Ok(crate::ast::Type::Array {
                                 size: None,
@@ -741,7 +789,10 @@ impl TypeAnalyzer {
                         }
                     }
                     _ => Err(AnalysisError::new_with_span(
-                        &format!("Indexing only supported on array or slice types, found {}", obj_ty),
+                        &format!(
+                            "Indexing only supported on array or slice types, found {}",
+                            obj_ty
+                        ),
                         span,
                     )),
                 }
@@ -1099,7 +1150,7 @@ impl TypeAnalyzer {
                     ))
                 }
             }
-            crate::ast::Expr::Intrinsic { name, args, .. } => {
+            crate::ast::Expr::Intrinsic { name, args, span } => {
                 // Check if it's a known intrinsic
                 if name == "@is_null" || name == "@is_not_null" {
                     // These functions take a rawptr or pointer and return bool
@@ -1108,8 +1159,28 @@ impl TypeAnalyzer {
                     }
                     return Ok(crate::ast::Type::Bool);
                 }
-                Err(AnalysisError::new(&format!("Unknown intrinsic function '{}'", name))
-                    .with_module("types"))
+                if name == "@type_of" {
+                    // @type_of takes any variable and returns []const u8
+                    if args.len() != 1 {
+                        return Err(AnalysisError::new_with_span(
+                            "@type_of requires exactly one argument",
+                            span,
+                        ));
+                    }
+                    // Analyze the argument (for type checking purposes)
+                    self.analyze_expression(&args[0])?;
+                    // Return []const u8 (a slice of const u8)
+                    return Ok(crate::ast::Type::Array {
+                        size: None,
+                        element_type: Box::new(crate::ast::Type::Const(Box::new(
+                            crate::ast::Type::U8,
+                        ))),
+                    });
+                }
+                Err(
+                    AnalysisError::new(&format!("Unknown intrinsic function '{}'", name))
+                        .with_module("types"),
+                )
             }
         }
     }

@@ -1,0 +1,39 @@
+// Test @type_of intrinsic
+
+import "io"
+
+external cdecl malloc(size: u64) rawptr;
+external cdecl free(ptr: rawptr) void;
+
+fn main() void {
+    // Test with i64
+    const x: i64 = 42;
+    io.println(@type_of(x));
+
+    // Test with i32
+    const y: i32 = 10;
+    io.println(@type_of(y));
+
+    // Test with i16
+    const z: i16 = 5;
+    io.println(@type_of(z));
+
+    const w: ?i64 = null;
+    io.println(@type_of(w));
+
+    const t: (i64, i32, u8) = (42, 10, 5);
+    io.println(@type_of(t))
+
+    const m = malloc(8);
+    io.println(@type_of(m));
+    free(m);
+
+    const f = add;
+    io.println(@type_of(f));
+
+    io.println("done");
+}
+
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
