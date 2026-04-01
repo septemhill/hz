@@ -630,6 +630,12 @@ pub enum Expr {
         expr: Box<Expr>,
         span: Span,
     },
+    /// Intrinsic function call (e.g., @is_null(ptr))
+    Intrinsic {
+        name: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
 }
 
 /// Statement AST node
@@ -1325,8 +1331,14 @@ impl AstDump for Expr {
                 expr.dump(indent + 1);
             }
             Expr::Dereference { expr, .. } => {
-                println!("Expr::Dereference");
+                println!("Expr::Dereference: .*");
                 expr.dump(indent + 1);
+            }
+            Expr::Intrinsic { name, args, .. } => {
+                println!("Expr::Intrinsic: {}", name);
+                for a in args {
+                    a.dump(indent + 1);
+                }
             }
         }
     }

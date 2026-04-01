@@ -13,7 +13,7 @@ fn main() i32 {
     io.println("  Got pointer");
     
     // Check if allocation succeeded
-    if (is_not_null(ptr)) {
+    if (@is_not_null(ptr)) {
         io.println("  Allocation: SUCCESS");
         free(ptr);
         io.println("  Freed");

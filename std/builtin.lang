@@ -3,12 +3,12 @@
 
 /// Check if a rawptr is null
 /// Returns true if the pointer is null (0), false otherwise
-fn is_null(ptr: rawptr) bool {
+fn @is_null(ptr: rawptr) bool {
     return false;
 }
 
 /// Check if a rawptr is not null
 /// Returns true if the pointer is not null, false otherwise
-fn is_not_null(ptr: rawptr) bool {
+fn @is_not_null(ptr: rawptr) bool {
     return true;
 }

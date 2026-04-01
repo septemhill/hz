@@ -108,6 +108,13 @@ pub enum HirExpr {
         ty: Type,
         span: Span,
     },
+    /// Intrinsic function operator (e.g., @is_null)
+    Intrinsic {
+        name: String,
+        args: Vec<HirExpr>,
+        ty: Type,
+        span: Span,
+    },
 }
 
 impl HirExpr {
@@ -127,6 +134,7 @@ impl HirExpr {
             HirExpr::Binary { ty, .. } => ty,
             HirExpr::Unary { ty, .. } => ty,
             HirExpr::Call { return_ty, .. } => return_ty,
+            HirExpr::Intrinsic { ty, .. } => ty,
             HirExpr::If { ty, .. } => ty,
             HirExpr::Block { ty, .. } => ty,
             HirExpr::MemberAccess { ty, .. } => ty,
@@ -566,6 +574,14 @@ impl fmt::Display for HirExpr {
             }
             HirExpr::Dereference { expr, ty, .. } => {
                 write!(f, "(*{}): {}", expr, ty)
+            }
+            HirExpr::Intrinsic { name, args, ty, .. } => {
+                let args_str = args
+                    .iter()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "{}({}): {}", name, args_str, ty)
             }
         }
     }

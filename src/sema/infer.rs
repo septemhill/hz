@@ -102,6 +102,8 @@ pub enum TypedExprKind {
     },
     /// Pointer dereference
     Dereference { expr: Box<TypedExpr> },
+    /// Intrinsic function call
+    Intrinsic { name: String, args: Vec<TypedExpr> },
 }
 
 #[allow(unused)]
@@ -878,7 +880,11 @@ impl TypeInferrer {
     fn is_u8_array_or_slice(&self, ty: &Type) -> bool {
         match ty {
             Type::Array { element_type, .. } => {
-                matches!(**element_type, Type::U8)
+                let inner = match element_type.as_ref() {
+                    Type::Const(c) => c.as_ref(),
+                    other => other,
+                };
+                matches!(inner, Type::U8)
             }
             _ => false,
         }
@@ -2061,6 +2067,7 @@ impl TypeInferrer {
             Expr::Catch { span, .. } => *span,
             Expr::Cast { span, .. } => *span,
             Expr::Dereference { span, .. } => *span,
+            Expr::Intrinsic { span, .. } => *span,
         };
 
         match expr {
@@ -2096,11 +2103,21 @@ impl TypeInferrer {
                     span,
                 })
             }
-            Expr::Null(_) => Ok(TypedExpr {
-                expr: TypedExprKind::Null,
-                ty: Type::Option(Box::new(Type::I64)),
-                span,
-            }),
+            Expr::Null(_) => {
+                // Use expected type if available (to support rawptr, optional, etc.),
+                // otherwise default to Option<i64>
+                let ty = match self.get_expected_type() {
+                    Some(Type::RawPtr) => Type::RawPtr,
+                    Some(Type::Pointer(inner)) => Type::Pointer(inner.clone()),
+                    Some(Type::Option(inner)) => Type::Option(inner.clone()),
+                    _ => Type::Option(Box::new(Type::I64)),
+                };
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Null,
+                    ty,
+                    span,
+                })
+            }
             Expr::Tuple(elements, _) => {
                 let mut typed_elements = Vec::new();
                 for elem in elements {
@@ -2370,32 +2387,6 @@ impl TypeInferrer {
                         "println" => {
                             // Validation (Special handling for io prefix might be needed if moved from io::println)
                             // But usually it's io::println. Let's keep existing io::println check below.
-                        }
-                        "is_null" | "is_not_null" => {
-                            if typed_args.len() != 1 {
-                                return Err(AnalysisError::new_with_span(
-                                    &format!("{} requires exactly one argument", name),
-                                    span,
-                                )
-                                .with_module("infer"));
-                            }
-                            if !matches!(typed_args[0].ty, Type::RawPtr | Type::Pointer(_)) {
-                                return Err(AnalysisError::new_with_span(
-                                    &format!("{} requires a pointer argument", name),
-                                    span,
-                                )
-                                .with_module("infer"));
-                            }
-                            return Ok(TypedExpr {
-                                expr: TypedExprKind::Call {
-                                    name: name.clone(),
-                                    namespace: None,
-                                    args: typed_args,
-                                    target_ty: None,
-                                },
-                                ty: Type::Bool,
-                                span: *span,
-                            });
                         }
                         _ => {}
                     }
@@ -2744,6 +2735,46 @@ impl TypeInferrer {
                     span,
                 )
                 .with_module("infer"))
+            }
+            Expr::Intrinsic { name, args, span } => {
+                // Pre-infer argument types
+                let mut typed_args = Vec::new();
+                for arg in args {
+                    typed_args.push(self.infer_expr(arg)?);
+                }
+
+                // Handle specific intrinsics
+                match name.as_str() {
+                    "@is_null" | "@is_not_null" => {
+                        if typed_args.len() != 1 {
+                            return Err(AnalysisError::new_with_span(
+                                &format!("{} requires exactly one argument", name),
+                                span,
+                            )
+                            .with_module("infer"));
+                        }
+                        if !matches!(typed_args[0].ty, Type::RawPtr | Type::Pointer(_)) {
+                            return Err(AnalysisError::new_with_span(
+                                &format!("{} requires a pointer argument", name),
+                                span,
+                            )
+                            .with_module("infer"));
+                        }
+                        Ok(TypedExpr {
+                            expr: TypedExprKind::Intrinsic {
+                                name: name.clone(),
+                                args: typed_args,
+                            },
+                            ty: Type::Bool,
+                            span: *span,
+                        })
+                    }
+                    _ => Err(AnalysisError::new_with_span(
+                        &format!("Unknown intrinsic function '{}'", name),
+                        span,
+                    )
+                    .with_module("infer")),
+                }
             }
             Expr::Struct {
                 name,
@@ -4329,6 +4360,12 @@ impl AstDump for TypedExpr {
             TypedExprKind::Dereference { expr } => {
                 println!("Expr::Dereference (ty: {})", self.ty);
                 expr.dump(indent + 1);
+            }
+            TypedExprKind::Intrinsic { name, args } => {
+                println!("Expr::Intrinsic: {} (ty: {})", name, self.ty);
+                for arg in args {
+                    arg.dump(indent + 1);
+                }
             }
         }
     }

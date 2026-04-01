@@ -61,7 +61,7 @@ fn main() i32 {
             io.println("  Length: {ptr.length()}");
             
             var raw = ptr.raw();
-            if raw != 0 {
+            if @is_not_null(raw) {
                 io.println("  Raw pointer: OK");
             }
             

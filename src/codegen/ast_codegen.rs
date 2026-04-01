@@ -784,6 +784,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             Expr::Index { .. } => {
                 todo!("Codegen for Index not implemented in AST codegen")
             }
+            Expr::Intrinsic { name, .. } => {
+                Err(format!("Intrinsic function '{}' is not supported in legacy ast_codegen. Use hir_codegen instead.", name).into())
+            }
         }
     }
 

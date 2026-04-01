@@ -353,6 +353,11 @@ impl TreeShaker {
                 changed = self.traverse_expr(expr);
                 changed |= self.traverse_expr(body);
             }
+            Expr::Intrinsic { args, .. } => {
+                for arg in args {
+                    changed |= self.traverse_expr(arg);
+                }
+            }
             Expr::If {
                 condition,
                 then_branch,

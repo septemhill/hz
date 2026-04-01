@@ -331,13 +331,14 @@ fn test_example_void_no_arrow() {
     );
 }
 
-// Test error handling
+// Test that @ is now a valid identifier character (used for intrinsics like @is_null)
 #[test]
 fn test_unexpected_character() {
     let result = tokenize("@");
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    assert!(err.message.contains("Unexpected character"));
+    assert!(result.is_ok());
+    let tokens = result.unwrap();
+    assert_eq!(tokens.len(), 2); // @ + EOF
+    assert_eq!(tokens[0].token, Token::Ident("@".to_string()));
 }
 
 #[test]
@@ -650,7 +651,7 @@ fn test_lexer_iterator_next_skips_whitespace() {
     assert!(tokens.contains(&Token::Var));
 }
 
-// Test Iterator::next() handles errors correctly
+// Test Iterator::next() handles @ as valid identifier (for intrinsics like @is_null)
 #[test]
 fn test_lexer_iterator_next_error() {
     let mut iter = LexerIterator::new("@");
@@ -658,7 +659,8 @@ fn test_lexer_iterator_next_error() {
     let result = iter.next();
     assert!(result.is_some());
     let token_result = result.unwrap();
-    assert!(token_result.is_err());
+    // @ is now a valid identifier, not an error
+    assert!(token_result.is_ok());
 }
 
 // Test LexerIterator produces correct span information
@@ -831,14 +833,15 @@ fn test_peekable_lexer_iterator_full_workflow() {
     assert_eq!(iter.peek(0).unwrap().token, Token::Ident("x".to_string()));
 }
 
-// Test PeekableLexerIterator handles errors through next()
+// Test PeekableLexerIterator handles @ as valid identifier (for intrinsics like @is_null)
 #[test]
 fn test_peekable_lexer_iterator_error_handling() {
     let mut iter = PeekableLexerIterator::new("@");
 
     let result = iter.next();
     assert!(result.is_some());
-    assert!(result.unwrap().is_err());
+    // @ is now a valid identifier, not an error
+    assert!(result.unwrap().is_ok());
 }
 
 // Test peek(1) returns the next token correctly

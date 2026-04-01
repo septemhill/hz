@@ -236,6 +236,7 @@ impl Parser {
             Expr::Catch { span, .. } => *span,
             Expr::Cast { span, .. } => *span,
             Expr::Dereference { span, .. } => *span,
+            Expr::Intrinsic { span, .. } => *span,
             Expr::Index { span, .. } => *span,
         }
     }
@@ -2554,25 +2555,43 @@ impl Parser {
                 }
 
                 let call_span = self.get_expr_span(&expr);
-                let (name, namespace) = match &expr {
-                    Expr::Ident(n, _) => (n.clone(), None),
-                    Expr::MemberAccess { object, member, .. } => {
-                        if let Expr::Ident(ns, _) = &**object {
-                            (member.clone(), Some(ns.clone()))
-                        } else {
-                            (member.clone(), None)
+                
+                // Try to extract name/namespace for intrinsic check
+                let mut is_intrinsic = false;
+                let mut name_to_use = String::new();
+                let mut ns_to_use = None;
+
+                match &expr {
+                    Expr::Ident(n, _) => {
+                        name_to_use = n.clone();
+                        if n.starts_with('@') {
+                            is_intrinsic = true;
                         }
                     }
-                    _ => (String::new(), None),
-                };
+                    Expr::MemberAccess { object, member, .. } => {
+                        name_to_use = member.clone();
+                        if let Expr::Ident(ns, _) = &**object {
+                            ns_to_use = Some(ns.clone());
+                        }
+                    }
+                    _ => {}
+                }
 
-                expr = Expr::Call {
-                    name,
-                    namespace,
-                    args,
-                    generic_args: generic_args.clone(),
-                    span: call_span,
-                };
+                if is_intrinsic && ns_to_use.is_none() {
+                    expr = Expr::Intrinsic {
+                        name: name_to_use,
+                        args,
+                        span: call_span,
+                    };
+                } else {
+                    expr = Expr::Call {
+                        name: name_to_use,
+                        namespace: ns_to_use,
+                        args,
+                        generic_args: generic_args.clone(),
+                        span: call_span,
+                    };
+                }
                 generic_args = Vec::new();
                 continue;
             }

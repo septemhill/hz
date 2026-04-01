@@ -13,6 +13,7 @@ pub struct TypeAnalyzer {
     structs: HashMap<String, crate::ast::StructDef>,
     enums: HashMap<String, crate::ast::EnumDef>,
     errors: HashMap<String, crate::ast::ErrorDef>,
+    expected_type: Option<crate::ast::Type>,
 }
 
 fn destructured_binding_type(aggregate_ty: &crate::ast::Type, index: usize) -> crate::ast::Type {
@@ -36,7 +37,27 @@ impl TypeAnalyzer {
             structs,
             enums,
             errors,
+            expected_type: None,
         }
+    }
+
+    fn set_expected_type(&mut self, ty: Option<crate::ast::Type>) {
+        self.expected_type = ty;
+    }
+
+    fn get_expected_type(&self) -> Option<&crate::ast::Type> {
+        self.expected_type.as_ref()
+    }
+
+    fn with_expected_type<F, R>(&mut self, ty: Option<crate::ast::Type>, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        let old = self.expected_type.take();
+        self.expected_type = ty;
+        let res = f(self);
+        self.expected_type = old;
+        res
     }
 
     pub fn analyze(&mut self, program: &crate::ast::Program) -> AnalysisResult<()> {
@@ -229,12 +250,25 @@ impl TypeAnalyzer {
                         self.validate_expr_against_type(elem, elem_ty)?;
                     }
                 }
-
+                Ok(())
+            }
+            crate::ast::Expr::Null(span) => {
+                if !matches!(
+                    expected,
+                    crate::ast::Type::Option(_) | crate::ast::Type::Pointer(_) | crate::ast::Type::RawPtr
+                ) {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Type mismatch: cannot assign null to {}", expected),
+                        span,
+                    )
+                    .with_module("types"));
+                }
                 Ok(())
             }
             _ => Ok(()),
         }
     }
+
 
     /// Find the span of a try expression in an expression, if it exists
     fn expr_find_try(&self, expr: &crate::ast::Expr) -> Option<Span> {
@@ -242,6 +276,14 @@ impl TypeAnalyzer {
             crate::ast::Expr::Try { span, .. } => Some(*span),
             crate::ast::Expr::Cast { expr, .. } => self.expr_find_try(expr),
             crate::ast::Expr::Dereference { expr, .. } => self.expr_find_try(expr),
+            crate::ast::Expr::Intrinsic { args, .. } => {
+                for arg in args {
+                    if let Some(s) = self.expr_find_try(arg) {
+                        return Some(s);
+                    }
+                }
+                None
+            }
             crate::ast::Expr::Call { args, .. } => {
                 for arg in args {
                     if let Some(s) = self.expr_find_try(arg) {
@@ -300,7 +342,6 @@ impl TypeAnalyzer {
                 None
             }
             crate::ast::Expr::TupleIndex { tuple, .. } => self.expr_find_try(tuple),
-            crate::ast::Expr::Dereference { expr, .. } => self.expr_find_try(expr),
             crate::ast::Expr::Index { object, index, .. } => {
                 self.expr_find_try(object).or_else(|| self.expr_find_try(index))
             }
@@ -387,7 +428,10 @@ impl TypeAnalyzer {
                     let explicit_ty = ty.clone().unwrap();
                     let value_ty = if let Some(val_expr) = value {
                         self.validate_expr_against_type(val_expr, &explicit_ty)?;
-                        Some(self.analyze_expression(val_expr)?)
+                        let res = self.with_expected_type(Some(explicit_ty.clone()), |this| {
+                            this.analyze_expression(val_expr)
+                        })?;
+                        Some(res)
                     } else {
                         None
                     };
@@ -486,7 +530,9 @@ impl TypeAnalyzer {
                                 .with_module("types")
                             })?;
                         self.validate_expr_against_type(value, &symbol_ty)?;
-                        let expr_ty = self.analyze_expression(value)?;
+                        let expr_ty = self.with_expected_type(Some(symbol_ty.clone()), |this| {
+                            this.analyze_expression(value)
+                        })?;
                         if !self.types_compatible(&symbol_ty, &expr_ty) {
                             return Err(AnalysisError::new_with_span(
                                 &format!(
@@ -635,7 +681,15 @@ impl TypeAnalyzer {
             }),
             crate::ast::Expr::Char(_, _) => Ok(crate::ast::Type::I8),
             crate::ast::Expr::Null(_) => {
-                Ok(crate::ast::Type::Option(Box::new(crate::ast::Type::I64)))
+                // Use expected type if available (to support rawptr, optional, etc.),
+                // otherwise default to Option<i64>
+                let ty = match self.get_expected_type() {
+                    Some(crate::ast::Type::RawPtr) => crate::ast::Type::RawPtr,
+                    Some(crate::ast::Type::Pointer(inner)) => crate::ast::Type::Pointer(inner.clone()),
+                    Some(crate::ast::Type::Option(inner)) => crate::ast::Type::Option(inner.clone()),
+                    _ => crate::ast::Type::Option(Box::new(crate::ast::Type::I64)),
+                };
+                Ok(ty)
             }
             crate::ast::Expr::Tuple(elements, _) => {
                 let mut types = vec![];
@@ -857,14 +911,6 @@ impl TypeAnalyzer {
                     }
                     return Ok(crate::ast::Type::Void);
                 }
-                // Check if it's is_null or is_not_null (built-in functions)
-                if namespace.is_none() && (name == "is_null" || name == "is_not_null") {
-                    // These functions take a rawptr or pointer and return bool
-                    for arg in args {
-                        self.analyze_expression(arg)?;
-                    }
-                    return Ok(crate::ast::Type::Bool);
-                }
                 let symbol_ty = if let Some(ns) = namespace {
                     // Try to resolve as a struct/enum method: StructName_methodname
                     let fn_name = format!("{}_{}", ns, name);
@@ -1052,6 +1098,18 @@ impl TypeAnalyzer {
                         span,
                     ))
                 }
+            }
+            crate::ast::Expr::Intrinsic { name, args, .. } => {
+                // Check if it's a known intrinsic
+                if name == "@is_null" || name == "@is_not_null" {
+                    // These functions take a rawptr or pointer and return bool
+                    for arg in args {
+                        self.analyze_expression(arg)?;
+                    }
+                    return Ok(crate::ast::Type::Bool);
+                }
+                Err(AnalysisError::new(&format!("Unknown intrinsic function '{}'", name))
+                    .with_module("types"))
             }
         }
     }

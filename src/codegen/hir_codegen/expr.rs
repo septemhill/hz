@@ -122,6 +122,22 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    pub(crate) fn generate_intrinsic(
+        &mut self,
+        name: &str,
+        args: &[hir::HirExpr],
+    ) -> CodegenResult<BasicValueEnum<'ctx>> {
+        // Find the intrinsic in the registry
+        let intrinsic = self
+            .intrinsics
+            .get(name)
+            .cloned() // Clone the Rc to avoid borrowing self.intrinsics while calling &mut self methods
+            .ok_or_else(|| format!("Intrinsic function '{}' not found", name))?;
+
+        // Call the intrinsic's generator
+        intrinsic.generate(self, args)
+    }
+
     pub(crate) fn generate_hir_expr(
         &mut self,
         expr: &hir::HirExpr,
@@ -743,6 +759,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 };
                 Ok(val)
             }
+            hir::HirExpr::Intrinsic { name, args, .. } => {
+                self.generate_intrinsic(name, args)
+            }
             hir::HirExpr::Call {
                 name,
                 namespace,
@@ -867,9 +886,6 @@ impl<'ctx> CodeGenerator<'ctx> {
                 } else {
                     if name == "main" {
                         ("main".to_string(), false, false, false)
-                    } else if name == "is_null" || name == "is_not_null" {
-                        // Built-in null checking functions - handled inline
-                        return self.generate_null_check_builtin(name, args);
                     } else {
                         (
                             format!("{}_{}", self.module_name, name),

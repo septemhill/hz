@@ -4,6 +4,7 @@
 
 mod ast;
 mod build;
+mod builtin;
 mod codegen;
 mod hir;
 mod lexer;

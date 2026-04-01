@@ -19,7 +19,7 @@ pub fn run_jit(
     let mut stdlib = stdlib::StdLib::new();
     let stdlib_path = crate::cmd::resolve_std_path(cli_std_path);
     stdlib.set_std_path(stdlib_path.to_str().unwrap());
-    // Preload builtin package (contains is_null, is_not_null, etc.)
+    // Preload builtin package (contains @is_null, @is_not_null, etc.)
     let _ = stdlib.preload_builtins();
     // Don't preload packages - require explicit imports
     // let _ = stdlib.preload_common();

@@ -12,8 +12,8 @@ fn main() i32 {
     io.println("Test 1: Allocating 8 bytes...");
     const ptr: rawptr = malloc(8);
     
-    // Check if allocation succeeded using is_not_null
-    if (is_not_null(ptr)) {
+    // Check if allocation succeeded using @is_not_null
+    if (@is_not_null(ptr)) {
         io.println("  Allocation: SUCCESS");
         free(ptr);
         io.println("  Freed");
@@ -22,22 +22,22 @@ fn main() i32 {
         return 1;
     }
     
-    // Test 2: Test is_null with null
-    io.println("Test 2: Testing is_null with null...");
+    // Test 2: Test @is_null with null
+    io.println("Test 2: Testing @is_null with null...");
     const null_ptr: rawptr = null;
-    if (is_null(null_ptr)) {
-        io.println("  is_null(null): true (correct)");
+    if (@is_null(null_ptr)) {
+        io.println("  @is_null(null): true (correct)");
     } else {
-        io.println("  is_null(null): false (ERROR!)");
+        io.println("  @is_null(null): false (ERROR!)");
         return 1;
     }
     
-    // Test 3: Test is_not_null with valid pointer
-    io.println("Test 3: Testing is_not_null with valid pointer...");
-    if (is_not_null(ptr)) {
-        io.println("  is_not_null(valid): true (correct)");
+    // Test 3: Test @is_not_null with valid pointer
+    io.println("Test 3: Testing @is_not_null with valid pointer...");
+    if (@is_not_null(ptr)) {
+        io.println("  @is_not_null(valid): true (correct)");
     } else {
-        io.println("  is_not_null(valid): false (ERROR!)");
+        io.println("  @is_not_null(valid): false (ERROR!)");
         return 1;
     }
     

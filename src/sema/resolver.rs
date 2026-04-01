@@ -431,12 +431,6 @@ impl SymbolResolver {
                     return Ok(crate::ast::Type::Void);
                 }
 
-                // Check if it's is_null or is_not_null (built-in functions)
-                if namespace.is_none() && (name == "is_null" || name == "is_not_null") {
-                    // These functions take a rawptr or pointer and return bool
-                    return Ok(crate::ast::Type::Bool);
-                }
-
                 // Check if namespace is an imported package
                 if let Some(ns) = namespace {
                     if ns == "std" || ns == "io" || ns == "os" {
@@ -582,6 +576,18 @@ impl SymbolResolver {
             crate::ast::Expr::Try { expr, .. } => {
                 self.analyze_expression(expr)?;
                 Ok(crate::ast::Type::I64)
+            }
+            crate::ast::Expr::Intrinsic { name, args, .. } => {
+                // Check if it's a known intrinsic
+                if name == "@is_null" || name == "@is_not_null" {
+                    for arg in args {
+                        self.analyze_expression(arg)?;
+                    }
+                    // These functions take a rawptr or pointer and return bool
+                    return Ok(crate::ast::Type::Bool);
+                }
+                Err(AnalysisError::new(&format!("Unknown intrinsic function '{}'", name))
+                    .with_module("resolver"))
             }
             _ => Ok(crate::ast::Type::I64),
         }

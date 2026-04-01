@@ -327,6 +327,11 @@ fn collect_types_from_expr(expr: &crate::ast::Expr, types: &mut Vec<Type>) {
             collect_types_from_expr(object, types);
             collect_types_from_expr(index, types);
         }
+        crate::ast::Expr::Intrinsic { args, .. } => {
+            for arg in args {
+                collect_types_from_expr(arg, types);
+            }
+        }
     }
 }
 

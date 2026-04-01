@@ -14,6 +14,11 @@ impl<'ctx> CodeGenerator<'ctx> {
         let execution_engine =
             module.create_jit_execution_engine(inkwell::OptimizationLevel::None)?;
 
+        let mut intrinsics = HashMap::new();
+        for intrinsic in crate::builtin::get_intrinsics() {
+            intrinsics.insert(intrinsic.name().to_string(), intrinsic);
+        }
+
         Ok(CodeGenerator {
             context,
             module,
@@ -37,6 +42,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             structs,
             enums,
             errors,
+            intrinsics,
         })
     }
 
@@ -355,7 +361,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             hir::HirExpr::Catch { ty, .. } => ty,
             hir::HirExpr::Cast { ty, .. } => ty,
             hir::HirExpr::Dereference { ty, .. }
-            | hir::HirExpr::Index { ty, .. } => ty,
+            | hir::HirExpr::Index { ty, .. }
+            | hir::HirExpr::Intrinsic { ty, .. } => ty,
         }
     }
 

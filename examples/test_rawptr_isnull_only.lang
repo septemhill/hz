@@ -1,9 +1,9 @@
-// Test that is_null/is_not_null only accept rawptr
+// Test that @is_null/@is_not_null only accept rawptr
 import "io"
 
 fn test_with_integer() i32 {
-    // This should fail - is_null requires rawptr, not i64
-    const result = is_null(0);
+    // This should fail - @is_null requires rawptr, not i64
+    const result = @is_null(0);
     return 0;
 }
 

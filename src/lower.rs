@@ -1193,6 +1193,12 @@ impl LoweringContext {
                 ty: e.ty.clone(),
                 span: e.span,
             },
+            TypedExprKind::Intrinsic { name, args } => hir::HirExpr::Intrinsic {
+                name: name.clone(),
+                args: args.iter().map(|a| self.lower_typed_expr(a)).collect(),
+                ty: e.ty.clone(),
+                span: e.span,
+            },
         }
     }
 
@@ -1876,14 +1882,32 @@ impl LoweringContext {
                 args,
                 generic_args: _,
                 span,
-            } => hir::HirExpr::Call {
-                name: name.clone(),
-                namespace: namespace.clone(),
-                args: args.iter().map(|a| self.lower_expr(a)).collect(),
-                return_ty: self.infer_type(e).unwrap_or(ast::Type::Void),
-                target_ty: None,
-                span: *span,
-            },
+            } => {
+                let lowered_args: Vec<hir::HirExpr> =
+                    args.iter().map(|a| self.lower_expr(a)).collect();
+                let ty = self.infer_type(e).unwrap_or(ast::Type::Void);
+
+                hir::HirExpr::Call {
+                    name: name.clone(),
+                    namespace: namespace.clone(),
+                    args: lowered_args,
+                    return_ty: ty,
+                    target_ty: None,
+                    span: *span,
+                }
+            }
+            ast::Expr::Intrinsic { name, args, span } => {
+                let lowered_args: Vec<hir::HirExpr> =
+                    args.iter().map(|a| self.lower_expr(a)).collect();
+                let ty = self.infer_type(e).unwrap_or(ast::Type::Void);
+
+                hir::HirExpr::Intrinsic {
+                    name: name.clone(),
+                    args: lowered_args,
+                    ty,
+                    span: *span,
+                }
+            }
             ast::Expr::If {
                 condition,
                 capture,

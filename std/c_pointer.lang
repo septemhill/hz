@@ -31,8 +31,8 @@ enum COwnership {
 // 
 // Provides safe access to C memory allocated for i32 values.
 struct CPointer32 {
-    // Raw pointer as i64 (pointer-sized integer)
-    ptr: i64,
+    // Raw pointer
+    ptr: rawptr,
     // Number of elements
     length: usize,
     // Whether we own the memory
@@ -43,20 +43,10 @@ impl CPointer32 {
     // Create a new CPointer32 from raw pointer
     //
     // # Parameters
-    // - raw: Raw pointer as i64
+    // - raw: Raw pointer
     // - length: Number of i32 elements
     // - owned: true if we own the memory
-    //
-    // # Example
-    // ```lang
-    // external cdecl malloc(size: u64) i64
-    //
-    // fn main() void {
-    //     var raw = malloc(400);  // 100 * 4 bytes
-    //     var cptr = CPointer32.new(raw, 100, true);
-    // }
-    // ```
-    fn new(raw: i64, length: usize, owned: bool) CPointer32 {
+    fn new(raw: rawptr, length: usize, owned: bool) CPointer32 {
         return CPointer32 {
             ptr: raw,
             length: length,
@@ -65,39 +55,15 @@ impl CPointer32 {
     }
 
     // Create a null pointer
-    //
-    // # Example
-    // ```lang
-    // fn main() void {
-    //     var ptr = CPointer32.null();
-    // }
-    // ```
     fn null() CPointer32 {
         return CPointer32 {
-            ptr: 0,
+            ptr: null,
             length: 0,
             owned: false,
         };
     }
 
     // Allocate memory and create owned pointer
-    //
-    // # Parameters
-    // - length: Number of i32 elements to allocate
-    //
-    // # Returns
-    // CPointer32 with ownership
-    //
-    // # Example
-    // ```lang
-    // fn main() void {
-    //     var ptr = CPointer32.create(100);
-    //     if ptr.is_null() {
-    //         io.println("Failed!");
-    //         return;
-    //     }
-    // }
-    // ```
     fn create(length: usize) CPointer32 {
         // Size = number of elements * size of i32 (4 bytes)
         var size = length * 4;
@@ -111,84 +77,26 @@ impl CPointer32 {
     }
 
     // Check if pointer is null
-    //
-    // # Returns
-    // true if null, false otherwise
-    //
-    // # Example
-    // ```lang
-    // fn main() void {
-    //     var ptr = CPointer32.null();
-    //     if ptr.is_null() {
-    //         io.println("Null!");
-    //     }
-    // }
-    // ```
     fn is_null(self) bool {
-        return self.ptr == 0;
+        return @is_null(self.ptr);
     }
 
     // Check if we own the memory
-    //
-    // # Returns
-    // true if owned
-    //
-    // # Example
-    // ```lang
-    // fn main() void {
-    //     var ptr = CPointer32.create(10);
-    //     io.println("{ptr.is_owned()}");  // true
-    // }
-    // ```
     fn is_owned(self) bool {
         return self.owned;
     }
 
     // Get length
-    //
-    // # Returns
-    // Number of elements
-    //
-    // # Example
-    // ```lang
-    // fn main() void {
-    //     var ptr = CPointer32.create(100);
-    //     io.println("{ptr.length()}");  // 100
-    // }
-    // ```
     fn length(self) usize {
         return self.length;
     }
 
-    // Get raw pointer as i64
-    //
-    // # Returns
-    // Raw pointer value as i64
-    //
-    // # Example
-    // ```lang
-    // external cdecl free(ptr: i64) void
-    //
-    // fn main() void {
-    //     var ptr = CPointer32.create(10);
-    //     free(ptr.raw());
-    // }
-    // ```
-    fn raw(self) i64 {
+    // Get raw pointer
+    fn raw(self) rawptr {
         return self.ptr;
     }
 
     // Free the memory
-    //
-    // Only frees if owned. After freeing, pointer becomes null.
-    //
-    // # Example
-    // ```lang
-    // fn main() void {
-    //     var ptr = CPointer32.create(10);
-    //     ptr.free();
-    // }
-    // ```
     fn free(self) void {
         if self.owned && !self.is_null() {
             __free(self.ptr);
@@ -198,13 +106,13 @@ impl CPointer32 {
 
 // CPointer64 - Safe wrapper for C pointer to i64
 struct CPointer64 {
-    ptr: i64,
+    ptr: rawptr,
     length: usize,
     owned: bool,
 }
 
 impl CPointer64 {
-    fn new(raw: i64, length: usize, owned: bool) CPointer64 {
+    fn new(raw: rawptr, length: usize, owned: bool) CPointer64 {
         return CPointer64 {
             ptr: raw,
             length: length,
@@ -214,7 +122,7 @@ impl CPointer64 {
 
     fn null() CPointer64 {
         return CPointer64 {
-            ptr: 0,
+            ptr: null,
             length: 0,
             owned: false,
         };
@@ -232,7 +140,7 @@ impl CPointer64 {
     }
 
     fn is_null(self) bool {
-        return self.ptr == 0;
+        return @is_null(self.ptr);
     }
 
     fn is_owned(self) bool {
@@ -243,7 +151,7 @@ impl CPointer64 {
         return self.length;
     }
 
-    fn raw(self) i64 {
+    fn raw(self) rawptr {
         return self.ptr;
     }
 
@@ -256,13 +164,13 @@ impl CPointer64 {
 
 // CPointerU8 - Safe wrapper for C pointer to u8 (byte array)
 struct CPointerU8 {
-    ptr: i64,
+    ptr: rawptr,
     length: usize,
     owned: bool,
 }
 
 impl CPointerU8 {
-    fn new(raw: i64, length: usize, owned: bool) CPointerU8 {
+    fn new(raw: rawptr, length: usize, owned: bool) CPointerU8 {
         return CPointerU8 {
             ptr: raw,
             length: length,
@@ -272,7 +180,7 @@ impl CPointerU8 {
 
     fn null() CPointerU8 {
         return CPointerU8 {
-            ptr: 0,
+            ptr: null,
             length: 0,
             owned: false,
         };
@@ -289,7 +197,7 @@ impl CPointerU8 {
     }
 
     fn is_null(self) bool {
-        return self.ptr == 0;
+        return @is_null(self.ptr);
     }
 
     fn is_owned(self) bool {
@@ -300,7 +208,7 @@ impl CPointerU8 {
         return self.length;
     }
 
-    fn raw(self) i64 {
+    fn raw(self) rawptr {
         return self.ptr;
     }
 
@@ -313,5 +221,5 @@ impl CPointerU8 {
 
 // Built-in memory functions (intrinsics)
 // These are provided by the runtime/compiler
-fn __malloc(size: u64) i64;
-fn __free(ptr: i64) void;
+fn __malloc(size: u64) rawptr;
+fn __free(ptr: rawptr) void;

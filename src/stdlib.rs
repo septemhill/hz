@@ -138,7 +138,7 @@ impl StdLib {
         Ok(())
     }
 
-    /// Preload builtin package (contains built-in functions like is_null, is_not_null)
+    /// Preload builtin package (contains built-in functions like @is_null, @is_not_null)
     #[allow(unused)]
     pub fn preload_builtins(&mut self) -> Result<(), String> {
         // Try to load builtin package if std path is set

@@ -335,6 +335,11 @@ fn collect_typed_expr_types(
             collect_typed_expr_types(object, registry, type_list);
             collect_typed_expr_types(index, registry, type_list);
         }
+        TypedExprKind::Intrinsic { args, .. } => {
+            for arg in args {
+                collect_typed_expr_types(arg, registry, type_list);
+            }
+        }
     }
 }
 
@@ -588,6 +593,11 @@ fn collect_expr_types(
         crate::ast::Expr::Index { object, index, .. } => {
             collect_expr_types(object, registry, type_list);
             collect_expr_types(index, registry, type_list);
+        }
+        crate::ast::Expr::Intrinsic { args, .. } => {
+            for arg in args {
+                collect_expr_types(arg, registry, type_list);
+            }
         }
     }
 }

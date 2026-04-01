@@ -36,7 +36,7 @@ TBD
 - **Visibility**: `pub` keyword for public functions, fields, and types
 - **Defer**: Deferred function calls with `defer` and `defer!` (with error propagation)
 - **FFI**: External C function calls with `external cdecl`
-- **Built-in Functions**: `is_null()` and `is_not_null()` for rawptr checks
+- **Built-in Functions**: `@is_null()` and `@is_not_null()` for rawptr checks
 - **Operators**: Arithmetic (+, -, *, /, %), bitwise (<<, >>, &, |, ^), comparison, logical (&&, ||, !)
 - **Testing**: Built-in testing assertions
 
@@ -321,7 +321,7 @@ external cdecl {
 
 fn main() void {
     const ptr = malloc(16);
-    if (is_not_null(ptr)) {
+    if (@is_not_null(ptr)) {
         io.println("allocated memory");
     }
     free(ptr);

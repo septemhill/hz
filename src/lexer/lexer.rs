@@ -106,7 +106,7 @@ impl Lexer {
         let c = self.source[self.pos];
 
         // Handle identifiers and keywords
-        if c.is_alphabetic() || c == '_' {
+        if c.is_alphabetic() || c == '_' || c == '@' {
             return Ok(self.read_identifier_or_keyword());
         }
 
@@ -242,7 +242,7 @@ impl Lexer {
 
         while self.pos < self.source.len() {
             let c = &self.source[self.pos];
-            if c.is_alphanumeric() || *c == '_' {
+            if c.is_alphanumeric() || *c == '_' || *c == '@' {
                 self.pos += 1;
             } else {
                 break;

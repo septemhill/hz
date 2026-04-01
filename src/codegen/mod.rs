@@ -88,6 +88,9 @@ pub struct CodeGenerator<'ctx> {
     pub structs: HashMap<String, TypedStructDef>,
     pub enums: HashMap<String, EnumDef>,
     pub errors: HashMap<String, ErrorDef>,
+
+    // Intrinsics
+    pub intrinsics: std::collections::HashMap<String, std::rc::Rc<dyn crate::builtin::Intrinsic>>,
 }
 
 /// Result of code generation
