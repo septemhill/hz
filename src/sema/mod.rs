@@ -87,7 +87,17 @@ impl SemanticAnalyzer {
             // Collect all functions from imported packages
             for (alias, package_name) in &program.imports {
                 // Resolve alias to actual package name
-                let ns = alias.as_deref().unwrap_or(package_name);
+                let ns = if let Some(a) = alias {
+                    a.clone()
+                } else {
+                    // Extract the last part of the package name for the namespace
+                    // e.g., "utils/sub" -> "sub"
+                    package_name
+                        .split('/')
+                        .last()
+                        .unwrap_or(package_name.as_str())
+                        .to_string()
+                };
 
                 // Try to get the package from stdlib
                 if let Some(pkg) = stdlib.packages().get(package_name) {

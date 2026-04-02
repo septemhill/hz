@@ -843,6 +843,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                             // Check if this is a known method - try to find it
                             let method_name = format!("{}_{}", mono_type_name, name);
+                            // NOTE: method names are already mangled as "Struct_method", 
+                            // but we might need to mangle further if struct is in a package.
+                            // For now, assume global or already handled.
                             let mangled = self.mangle_name(&method_name, false);
 
                             // Check if the method actually exists in the module
@@ -867,21 +870,23 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 return self.generate_hir_io_println(args);
                             }
 
-                            (format!("{}_{}", actual_package, name), true, false, false)
+                            // Use the mangled name directly without calling self.mangle_name
+                            (format!("{}_{}", ns, name), true, false, false)
                         }
                     } else if let Some(actual_package) = self.imported_packages.get(ns) {
                         // Namespace is an imported package
                         if actual_package == "io" && name == "println" {
                             return self.generate_hir_io_println(args);
                         }
-                        (format!("{}_{}", actual_package, name), true, false, false)
+                        // Use the mangled name directly (namespace_name)
+                        (format!("{}_{}", ns, name), true, false, false)
                     } else {
                         // Namespace is not a known variable or package - likely a local struct/enum or implicit built-in
                         if ns == "io" && name == "println" {
                             return self.generate_hir_io_println(args);
                         }
-                        let combined_name = format!("{}_{}", ns, name);
-                        (self.mangle_name(&combined_name, false), false, false, false)
+                        // If it has a namespace, it should be treated as already having module context
+                        (format!("{}_{}", ns, name), false, false, false)
                     }
                 } else {
                     if name == "main" {

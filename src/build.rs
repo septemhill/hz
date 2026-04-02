@@ -19,6 +19,7 @@ use crate::stdlib;
 pub struct CompilationUnit {
     pub path: PathBuf,
     pub name: String,
+    pub package_name: Option<String>,
     #[allow(unused)]
     pub imports: Vec<String>,
 }
@@ -52,36 +53,56 @@ impl BuildSystem {
     pub fn discover_dependencies(&mut self, entry_path: &Path) -> Result<(), Box<dyn Error>> {
         let mut queue = VecDeque::new();
         let mut visited = HashSet::new();
+        let mut file_to_package = std::collections::HashMap::new();
 
         // First pass: collect all files using BFS
         let entry_abs = fs::canonicalize(entry_path)?;
-        queue.push_back(entry_abs.clone());
+        queue.push_back((entry_abs.clone(), None));
 
-        while let Some(current_path) = queue.pop_front() {
+        while let Some((current_path, pkg_name)) = queue.pop_front() {
             if visited.contains(&current_path) {
                 continue;
             }
+            
+            if current_path.is_dir() {
+                // If it's a directory, add all .lang files in it to the queue
+                // The pkg_name here is the name used in the import statement
+                for entry in fs::read_dir(&current_path)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("lang") {
+                        let abs_path = fs::canonicalize(path)?;
+                        if !visited.contains(&abs_path) {
+                            queue.push_back((abs_path, pkg_name.clone()));
+                        }
+                    }
+                }
+                visited.insert(current_path);
+                continue;
+            }
+
             visited.insert(current_path.clone());
+            if let Some(name) = pkg_name {
+                file_to_package.insert(current_path.clone(), name);
+            }
 
             let source = fs::read_to_string(&current_path)?;
             let program = parser::parse(&source)?;
 
             // Add all dependencies to queue
             for (_, package_name) in &program.imports {
-                // Try to find if this is a local file
+                // Try to find if this is a local file or directory
                 if let Some(local_path) = self.resolve_local_import(&current_path, package_name) {
                     if !visited.contains(&local_path) {
-                        queue.push_back(local_path);
+                        queue.push_back((local_path, Some(package_name.clone())));
                     }
                 }
             }
         }
 
         // Second pass: build ordered list (dependencies first)
-        // Reverse the visited set to get correct order
-        let mut ordered: Vec<PathBuf> = visited.into_iter().collect();
-        // We want dependencies first, but BFS visited gives us entry point first
-        // So reverse to get dependencies processed first
+        let mut ordered: Vec<PathBuf> = visited.into_iter().filter(|p| p.is_file()).collect();
+        ordered.sort();
         ordered.reverse();
 
         // Now create CompilationUnits in the correct order
@@ -90,6 +111,7 @@ impl BuildSystem {
             let program = parser::parse(&source)?;
 
             let unit_name = path.file_stem().unwrap().to_string_lossy().to_string();
+            let package_name = file_to_package.get(&path).cloned();
             let imports: Vec<String> = program
                 .imports
                 .iter()
@@ -99,6 +121,7 @@ impl BuildSystem {
             self.units.push(CompilationUnit {
                 path,
                 name: unit_name,
+                package_name,
                 imports,
             });
         }
@@ -109,6 +132,14 @@ impl BuildSystem {
     /// Resolve a local import relative to another file
     fn resolve_local_import(&self, from_file: &Path, package_name: &str) -> Option<PathBuf> {
         let parent = from_file.parent().unwrap();
+        
+        // 1. Check for a directory (new package system)
+        let package_dir = parent.join(package_name);
+        if package_dir.is_dir() {
+            return Some(fs::canonicalize(package_dir).unwrap());
+        }
+
+        // 2. Fallback: Check for a .lang file
         let local_path = parent.join(format!("{}.lang", package_name));
         if local_path.exists() {
             return Some(fs::canonicalize(local_path).unwrap());
@@ -116,10 +147,16 @@ impl BuildSystem {
 
         // Also check search paths
         for path in &self.search_paths {
-            let p: PathBuf = path.join(format!("{}.lang", package_name));
-            if p.exists() {
-                let abs_p: PathBuf = fs::canonicalize(p).unwrap();
-                return Some(abs_p);
+            // Check for directory in search path
+            let p_dir = path.join(package_name);
+            if p_dir.is_dir() {
+                return Some(fs::canonicalize(p_dir).unwrap());
+            }
+
+            // Check for file in search path
+            let p_file = path.join(format!("{}.lang", package_name));
+            if p_file.exists() {
+                return Some(fs::canonicalize(p_file).unwrap());
             }
         }
 
@@ -211,9 +248,20 @@ impl BuildSystem {
             monomorphized_structs.insert(s.name.clone(), s.clone());
         }
 
+        let codegen_module_name = if let Some(pkg) = &unit.package_name {
+            // Use the last component of the package name as the module name (namespace)
+            // e.g., "utils/sub" -> "sub"
+            pkg.split('/')
+                .last()
+                .unwrap_or(pkg.as_str())
+                .to_string()
+        } else {
+            unit.name.clone()
+        };
+
         let mut codegen = codegen::CodeGenerator::new(
             &context,
-            &unit.name,
+            &codegen_module_name,
             stdlib,
             monomorphized_structs,
             analyzer.enums.clone(),
@@ -273,12 +321,14 @@ impl BuildSystem {
         let mut args = Vec::new();
         args.push("-o".to_string());
         args.push(output_path.to_string());
-        for obj in object_files {
+        for obj in &object_files {
             args.push(obj.to_str().unwrap().to_string());
         }
 
         // Link with libc (required for FFI external functions)
         args.push("-lc".to_string());
+
+        println!("Link command: clang {}", args.join(" "));
 
         let result = std::process::Command::new("clang").args(&args).output()?;
 

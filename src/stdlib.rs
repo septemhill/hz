@@ -61,45 +61,91 @@ impl StdLib {
 
         // Search through all search paths
         for path in &self.search_paths {
-            let package_path = if path.ends_with(".lang") {
-                // If the path itself is a file, check if its name matches
-                let path_obj = Path::new(path);
-                if path_obj.file_stem().and_then(|s| s.to_str()) == Some(name) {
-                    path.to_string()
-                } else {
-                    continue;
-                }
-            } else {
-                format!("{}/{}.lang", path, name)
-            };
+            let base_path = Path::new(path);
+            let package_dir = base_path.join(name);
 
-            if Path::new(&package_path).exists() {
-                let source = fs::read_to_string(&package_path).map_err(|e| {
-                    format!(
-                        "Failed to read package '{}' at {}: {}",
-                        name, package_path, e
-                    )
-                })?;
-
-                // Parse the package
-                let program = parser::parse(&source).map_err(|e| {
-                    format!(
-                        "Failed to parse package '{}' at {}: {}",
-                        name, package_path, e
-                    )
-                })?;
-
-                let package = Package {
+            if package_dir.is_dir() {
+                // It's a directory package - load all .lang files in this directory (but not subdirectories)
+                let mut combined_package = Package {
                     name: name.to_string(),
-                    functions: program.functions,
-                    external_functions: program.external_functions,
-                    structs: program.structs,
-                    enums: program.enums,
+                    functions: Vec::new(),
+                    external_functions: Vec::new(),
+                    structs: Vec::new(),
+                    enums: Vec::new(),
                 };
 
-                // Cache the package
-                self.packages.insert(name.to_string(), package.clone());
-                return Ok(package);
+                let entries = fs::read_dir(&package_dir).map_err(|e| {
+                    format!("Failed to read package directory '{}': {}", package_dir.display(), e)
+                })?;
+
+                for entry in entries {
+                    let entry = entry.map_err(|e| e.to_string())?;
+                    let file_path = entry.path();
+                    
+                    // Only include .lang files, ignore directories and other file types
+                    if file_path.is_file() && file_path.extension().and_then(|s| s.to_str()) == Some("lang") {
+                        let source = fs::read_to_string(&file_path).map_err(|e| {
+                            format!("Failed to read file '{}' in package: {}", file_path.display(), e)
+                        })?;
+
+                        // Parse the file
+                        let program = parser::parse(&source).map_err(|e| {
+                            format!("Failed to parse file '{}' in package: {}", file_path.display(), e)
+                        })?;
+
+                        // Merge into combined package
+                        combined_package.functions.extend(program.functions);
+                        combined_package.external_functions.extend(program.external_functions);
+                        combined_package.structs.extend(program.structs);
+                        combined_package.enums.extend(program.enums);
+                    }
+                }
+
+                // Cache and return the combined package
+                self.packages.insert(name.to_string(), combined_package.clone());
+                return Ok(combined_package);
+            } else {
+                // Fallback: check for a single file package (name.lang)
+                let package_path = if path.ends_with(".lang") {
+                    // If the path itself is a file, check if its name matches
+                    let path_obj = Path::new(path);
+                    if path_obj.file_stem().and_then(|s| s.to_str()) == Some(name) {
+                        path.to_string()
+                    } else {
+                        continue;
+                    }
+                } else {
+                    format!("{}/{}.lang", path, name)
+                };
+
+                if Path::new(&package_path).exists() {
+                    let source = fs::read_to_string(&package_path).map_err(|e| {
+                        format!(
+                            "Failed to read package '{}' at {}: {}",
+                            name, package_path, e
+                        )
+                    })?;
+
+                    // Parse the package
+                    let program = parser::parse(&source).map_err(|e| {
+                        format!(
+                            "Failed to parse package '{}' at {}: {}",
+                            name, package_path, e
+                        )
+                    })?;
+
+                    let package = Package {
+                        name: name.to_string(),
+                        functions: program.functions,
+                        external_functions: program.external_functions,
+                        structs: program.structs,
+                        enums: program.enums,
+                    };
+
+                    // Cache the package
+                    self.packages.insert(name.to_string(), package.clone());
+                    return Ok(package);
+                }
             }
         }
 

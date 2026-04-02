@@ -69,7 +69,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             Stmt::Import { packages, span: _ } => {
                 // Import statements: handle duplicates and aliases
                 for (alias, package_name) in packages {
-                    let namespace = alias.as_deref().unwrap_or(package_name.as_str());
+                    let namespace = if let Some(a) = alias {
+                        a.clone()
+                    } else {
+                        // Extract the last part of the package name for the namespace
+                        // e.g., "utils/sub" -> "sub"
+                        package_name
+                            .split('/')
+                            .last()
+                            .unwrap_or(package_name.as_str())
+                            .to_string()
+                    };
 
                     // eprintln!(
                     //     "DEBUG: Processing import: namespace={}, package={}",
@@ -81,7 +91,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     // );
 
                     // Check for duplicate import
-                    if self.imported_packages.contains_key(namespace) {
+                    if self.imported_packages.contains_key(&namespace) {
                         return Err(format!(
                             "Duplicate import: '{}' is already imported",
                             namespace
@@ -115,7 +125,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                     if let Some(pkg) = self.stdlib.packages().get(package_name) {
                         let fn_defs: Vec<FnDef> = pkg.functions.clone();
                         for fn_def in fn_defs {
-                            if let Err(e) = self.declare_stdlib_function(&fn_def) {
+                            // Create mangled name using the namespace derived above
+                            let mangled_name = format!("{}_{}", namespace, fn_def.name);
+                            let mut mangled_fn = fn_def.clone();
+                            mangled_fn.name = mangled_name;
+                            if let Err(e) = self.declare_stdlib_function(&mangled_fn) {
                                 return Err(format!(
                                     "Failed to declare function from package '{}': {}",
                                     package_name, e

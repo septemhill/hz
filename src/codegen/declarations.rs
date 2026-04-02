@@ -170,7 +170,18 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Process imports and declare imported functions
     pub fn process_imports(&mut self, imports: &[(Option<String>, String)]) -> CodegenResult<()> {
         for (alias, package_name) in imports {
-            let namespace = alias.as_deref().unwrap_or(package_name.as_str());
+            let namespace = if let Some(a) = alias {
+                a.clone()
+            } else {
+                // Extract the last part of the package name for the namespace
+                // e.g., "utils/sub" -> "sub"
+                package_name
+                    .split('/')
+                    .last()
+                    .unwrap_or(package_name.as_str())
+                    .to_string()
+            };
+
             self.imported_packages
                 .insert(namespace.to_string(), package_name.clone());
 
@@ -184,7 +195,9 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 // Declare regular functions
                 for f in fn_defs {
-                    self.declare_external_function(&f, package_name)?;
+                    if f.visibility == Visibility::Public {
+                        self.declare_external_function(&f, &namespace)?;
+                    }
                 }
                 // Declare external C functions (FFI)
                 for ext_fn in ext_fns {
