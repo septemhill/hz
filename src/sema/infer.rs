@@ -1188,9 +1188,29 @@ impl TypeInferrer {
             .collect();
         ast_functions.extend(new_ast_functions);
 
+        let mut external_functions = Vec::new();
+        for ext_fn in &program.external_functions {
+            external_functions.push(TypedFnDef {
+                name: ext_fn.name.clone(),
+                original_name: Some(ext_fn.name.clone()),
+                visibility: ext_fn.visibility,
+                params: ext_fn
+                    .params
+                    .iter()
+                    .map(|p| TypedFnParam {
+                        name: p.name.clone(),
+                        ty: p.ty.clone(),
+                    })
+                    .collect(),
+                return_ty: ext_fn.return_ty.clone(),
+                body: Vec::new(),
+                span: ext_fn.span,
+            });
+        }
+
         Ok(TypedProgram {
             functions,
-            external_functions: Vec::new(),
+            external_functions,
             structs,
             interfaces,
             enums,
@@ -2849,6 +2869,34 @@ impl TypeInferrer {
                                 args: typed_args,
                             },
                             ty: Type::U64,
+                            span: *span,
+                        })
+                    }
+                    "@bit_cast" => {
+                        if typed_args.len() != 2 {
+                            return Err(AnalysisError::new_with_span(
+                                "@bit_cast requires exactly two arguments",
+                                span,
+                            )
+                            .with_module("infer"));
+                        }
+                        
+                        let target_ty = if let TypedExprKind::TypeLiteral(ty) = &typed_args[1].expr {
+                            ty.clone()
+                        } else {
+                            return Err(AnalysisError::new_with_span(
+                                "@bit_cast requires a type literal as its second argument",
+                                &typed_args[1].span,
+                            )
+                            .with_module("infer"));
+                        };
+
+                        Ok(TypedExpr {
+                            expr: TypedExprKind::Intrinsic {
+                                name: name.clone(),
+                                args: typed_args,
+                            },
+                            ty: target_ty,
                             span: *span,
                         })
                     }

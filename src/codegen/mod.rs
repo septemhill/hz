@@ -89,6 +89,9 @@ pub struct CodeGenerator<'ctx> {
     pub enums: HashMap<String, EnumDef>,
     pub errors: HashMap<String, ErrorDef>,
 
+    // External function names (to skip mangling)
+    pub external_function_names: std::collections::HashSet<String>,
+
     // Intrinsics
     pub intrinsics: std::collections::HashMap<String, std::rc::Rc<dyn crate::builtin::Intrinsic>>,
 }

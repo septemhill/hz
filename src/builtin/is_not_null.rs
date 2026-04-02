@@ -33,14 +33,18 @@ impl Intrinsic for IsNotNullIntrinsic {
         };
 
         // Compare with null (zero pointer)
-        let null_ptr = codegen
-            .context
-            .ptr_type(inkwell::AddressSpace::default())
-            .const_null();
+        let ptr_as_int = codegen.builder.build_ptr_to_int(
+            ptr_value,
+            codegen.context.i64_type(),
+            "ptr_to_int",
+        )?;
+        
+        let zero = codegen.context.i64_type().const_int(0, false);
+        
         let is_not_null = codegen.builder.build_int_compare(
             inkwell::IntPredicate::NE,
-            ptr_value,
-            null_ptr,
+            ptr_as_int,
+            zero,
             "ptr_is_not_null",
         )?;
 

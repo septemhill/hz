@@ -235,6 +235,7 @@ pub struct HirFn {
 #[derive(Debug, Clone)]
 pub struct HirProgram {
     pub functions: Vec<HirFn>,
+    pub external_functions: Vec<HirFn>,
     // Add structs, enums, etc.
 }
 

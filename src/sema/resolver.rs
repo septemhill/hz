@@ -611,6 +611,20 @@ impl SymbolResolver {
                     self.analyze_expression(&args[0])?;
                     return Ok(crate::ast::Type::U64);
                 }
+                if name == "@bit_cast" {
+                    if args.len() != 2 {
+                        return Err(AnalysisError::new("@bit_cast requires exactly two arguments")
+                            .with_module("resolver"));
+                    }
+                    self.analyze_expression(&args[0])?;
+                    // The second argument is a type literal
+                    if let crate::ast::Expr::TypeLiteral(ty, _) = &args[1] {
+                        return Ok(ty.clone());
+                    } else {
+                        return Err(AnalysisError::new("@bit_cast requires a type as its second argument")
+                            .with_module("resolver"));
+                    }
+                }
                 Err(
                     AnalysisError::new(&format!("Unknown intrinsic function '{}'", name))
                         .with_module("resolver"),

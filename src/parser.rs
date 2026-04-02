@@ -2564,8 +2564,14 @@ impl Parser {
                 let mut args = Vec::new();
                 if !self.match_token(Token::RParen) {
                     loop {
-                        // Special case for @size_of and @align_of which take a type argument
-                        if is_intrinsic && (name_to_use == "@size_of" || name_to_use == "@align_of") {
+                        // Special case for intrinsics that take type arguments
+                        let is_type_arg = is_intrinsic && (
+                            name_to_use == "@size_of" || 
+                            name_to_use == "@align_of" ||
+                            (name_to_use == "@bit_cast" && args.len() == 1)
+                        );
+
+                        if is_type_arg {
                             let start_pos = self.current_token().map(|t| t.span.start).unwrap_or(0);
                             let ty_arg = self.parse_type()?;
                             let end_pos = self.current_token().map(|t| t.span.start).unwrap_or(start_pos);

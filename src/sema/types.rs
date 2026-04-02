@@ -1189,6 +1189,23 @@ impl TypeAnalyzer {
                     self.analyze_expression(&args[0])?;
                     return Ok(crate::ast::Type::U64);
                 }
+                if name == "@bit_cast" {
+                    if args.len() != 2 {
+                        return Err(AnalysisError::new_with_span(
+                            "@bit_cast requires exactly two arguments",
+                            span,
+                        ));
+                    }
+                    self.analyze_expression(&args[0])?;
+                    if let crate::ast::Expr::TypeLiteral(ty, _) = &args[1] {
+                        return Ok(ty.clone());
+                    } else {
+                        return Err(AnalysisError::new_with_span(
+                            "@bit_cast requires a type as its second argument",
+                            span,
+                        ));
+                    }
+                }
                 Err(
                     AnalysisError::new(&format!("Unknown intrinsic function '{}'", name))
                         .with_module("types"),

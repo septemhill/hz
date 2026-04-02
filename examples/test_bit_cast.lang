@@ -1,0 +1,26 @@
+import "io";
+
+fn main() i64 {
+    var x: i64 = 42;
+    var ptr_to_x: *i64 = &x;
+    
+    // Attempt implicit conversion from *i64 to rawptr - SHOULD FAIL
+    // var raw: rawptr = ptr_to_x;
+
+    // Convert *i64 to rawptr - this MUST use @bit_cast according to user
+    var raw: rawptr = @bit_cast(ptr_to_x, rawptr);
+    
+    // Convert rawptr back to *i64 using @bit_cast
+    var typed_ptr: *i64 = @bit_cast(raw, *i64);
+    
+    io.println("x = {d}", x);
+    io.println("*typed_ptr = {d}", typed_ptr.*);
+    
+    if (typed_ptr.* == 42) {
+        io.println("SUCCESS: @bit_cast worked!");
+        return 0;
+    } else {
+        io.println("FAILURE: @bit_cast failed!");
+        return 1;
+    }
+}

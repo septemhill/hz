@@ -7,6 +7,7 @@ pub mod is_null;
 pub mod type_of;
 pub mod size_of;
 pub mod align_of;
+pub mod bit_cast;
 
 use std::rc::Rc;
 
@@ -26,5 +27,6 @@ pub fn get_intrinsics() -> Vec<Rc<dyn Intrinsic>> {
         Rc::new(type_of::TypeOfIntrinsic),
         Rc::new(size_of::SizeOfIntrinsic),
         Rc::new(align_of::AlignOfIntrinsic),
+        Rc::new(bit_cast::BitCastIntrinsic),
     ]
 }

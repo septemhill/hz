@@ -42,6 +42,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             structs,
             enums,
             errors,
+            external_function_names: std::collections::HashSet::new(),
             intrinsics,
         })
     }
@@ -109,6 +110,15 @@ impl<'ctx> CodeGenerator<'ctx> {
 
     /// Generate code for an HIR program
     pub fn generate_hir(&mut self, program: &hir::HirProgram) -> CodegenResult<()> {
+        // First, declare all external functions
+        for ext_fn in &program.external_functions {
+            self.external_function_names.insert(ext_fn.name.clone());
+            let param_types: Vec<Type> = ext_fn.params.iter().map(|(_, ty)| ty.clone()).collect();
+            let fn_type = self.build_function_type(&ext_fn.return_ty, &param_types, false);
+            // Use the original name for external functions
+            self.module.add_function(&ext_fn.name, fn_type, None);
+        }
+
         // Generate code for each function in HIR
         for hir_fn in &program.functions {
             self.generate_hir_function(hir_fn)?;
@@ -149,10 +159,15 @@ impl<'ctx> CodeGenerator<'ctx> {
     /// Mangle a function name based on module context
     pub(super) fn mangle_name(&self, name: &str, is_main: bool) -> String {
         if is_main || name == "main" {
-            "main".to_string()
-        } else {
-            format!("{}_{}", self.module_name, name)
+            return "main".to_string();
         }
+
+        // Check if the function is external in the symbol table
+        if self.external_function_names.contains(name) {
+            return name.to_string();
+        }
+        
+        format!("{}_{}", self.module_name, name)
     }
 
     /// Get the monomorphized struct name from a generic struct type.

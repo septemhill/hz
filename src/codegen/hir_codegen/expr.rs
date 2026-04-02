@@ -1056,44 +1056,27 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // For member access, we need to get the struct and extract the field
                 // First check if object is a simple identifier - we can handle it specially
 
-                // Get struct name and field index from the object if it's an identifier
-                let (struct_name, field_idx) = if let hir::HirExpr::Ident(obj_name, _obj_ty, _) =
-                    object.as_ref()
-                {
-                    let var_ty = match self.variable_types.get(obj_name) {
-                        Some(ty) => ty.clone(),
-                        None => return Err(format!("Variable type not found: {}", obj_name).into()),
-                    };
-
-                    let struct_name = match &var_ty {
-                        Type::Pointer(inner) => {
-                            if let Type::Custom { name, .. } = &**inner {
-                                name.clone()
-                            } else {
-                                return Err("Member access on non-custom pointer type".into());
-                            }
+                // Get struct name and field index from the object's type
+                let struct_name = match object.ty() {
+                    Type::Pointer(inner) => {
+                        if let Type::Custom { name, .. } = &**inner {
+                            Some(name.clone())
+                        } else {
+                            None
                         }
-                        Type::Custom { name, .. } => name.clone(),
-                        _ => return Err("Member access on non-struct type".into()),
-                    };
+                    }
+                    Type::Custom { name, .. } => Some(name.clone()),
+                    _ => None,
+                };
 
-                    let field_idx = self
-                        .struct_field_indices
-                        .get(&struct_name)
+                let field_idx = if let Some(ref s_name) = struct_name {
+                    self.struct_field_indices
+                        .get(s_name)
                         .and_then(|fields| fields.get(member))
                         .copied()
-                        .ok_or_else(|| {
-                            eprintln!(
-                                "DEBUG MemberAccess error: field {} not found in struct {}",
-                                member, struct_name
-                            );
-                            format!("Field '{}' not found in struct '{}'", member, struct_name)
-                        })?;
-
-                    (Some(struct_name), field_idx)
+                        .unwrap_or_else(|| member.parse().unwrap_or(0))
                 } else {
-                    // For non-identifier objects, fall back to numeric index (legacy behavior)
-                    (None, member.parse().unwrap_or(0))
+                    member.parse().unwrap_or(0)
                 };
 
                 let extracted = if let hir::HirExpr::Ident(obj_name, _obj_ty, _) = object.as_ref() {
@@ -1104,7 +1087,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .or_else(|| self.const_variables.get(obj_name))
                         .copied()
                         .ok_or_else(|| format!("Variable not found: {}", obj_name))?;
-                    let var_ty = self.variable_types.get(obj_name).unwrap();
+                    
+                    let var_ty = object.ty();
 
                     match var_ty {
                         Type::Pointer(inner) => {

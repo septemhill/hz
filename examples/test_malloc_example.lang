@@ -5,16 +5,38 @@
 import "io"
 
 // Declare external C functions for memory allocation
-external cdecl malloc(size: u64) *void;
-external cdecl free(ptr: *void) void;
+external cdecl malloc(size: u64) rawptr;
+external cdecl free(ptr: rawptr) rawptr;
 
 // memset to write to memory
-external cdecl memset(ptr: *void, value: i32, size: u64) *void;
+external cdecl memset(ptr: rawptr, value: i32, size: u64) rawptr;
 
 // memcpy to copy memory  
-external cdecl memcpy(dest: *void, src: *void, size: u64) *void;
+external cdecl memcpy(dest: rawptr, src: rawptr, size: u64) rawptr;
+
+fn safe_free(ptr: *rawptr) rawptr {
+    free(ptr.*);
+    ptr.* = @bit_cast(0, rawptr);
+}
+
+struct Point {
+    x: i32,
+    y: i64,
+}
+
+fn alloc(size: u64) *Point {
+    const p = malloc(size);
+    return @bit_cast(p, *Point);
+}
 
 fn main() i32 {
+    io.println("Point allocation")
+    var p = alloc(@size_of(Point));
+    p.*.x = 123;
+    p.*.y = 444;
+    io.println("p.x: {d}, p.y: {d}", p.*.x, p.*.y);
+    io.println("");
+    
     io.println("=== Malloc Error Handling Test ===");
     io.println("With NULL pointer checking");
     io.println("");
@@ -23,23 +45,26 @@ fn main() i32 {
     
     // Test 1: Allocate memory with error handling
     io.println("Test 1: Allocating 8 bytes...");
-    const ptr1: *void = malloc(8);
+    var ptr1: rawptr = malloc(8);
     
     // Check if allocation succeeded
     if (@is_not_null(ptr1)) {
         io.println("  Allocation: SUCCESS");
-        memset(ptr1, 42, 8);
+        memset(ptr1, 97, 8);
         io.println("  Write: OK");
-        free(ptr1);
+        safe_free(&ptr1);
         io.println("  Freed");
     } else {
         io.println("  Allocation: FAILED!");
         all_ok = false;
     }
+
+    io.println("ptr1 is null: {b}", @is_null(ptr1));
+    io.println("ptr1 is not null: {b}", @is_not_null(ptr1));
     
     // Test 2: Allocate for string storage
     io.println("Test 2: Allocating 256 bytes...");
-    const ptr2: *void = malloc(256);
+    var ptr2: rawptr = malloc(256);
     
     if (@is_not_null(ptr2)) {
         io.println("  Allocation: SUCCESS");
@@ -52,13 +77,13 @@ fn main() i32 {
     
     // Test 3: Allocate large memory
     io.println("Test 3: Allocating 1MB...");
-    const large_ptr: *void = malloc(1048576);
+    var large_ptr: rawptr = malloc(1048576);
     
     if (@is_not_null(large_ptr)) {
         io.println("  Allocation: SUCCESS");
         memset(large_ptr, 66, 1024);
         io.println("  Write: OK");
-        free(large_ptr);
+        safe_free(&large_ptr);
         io.println("  Memory freed");
     } else {
         io.println("  Allocation: FAILED!");
@@ -67,8 +92,8 @@ fn main() i32 {
     
     // Test 4: Multiple allocations
     io.println("Test 4: Multiple allocations...");
-    const src: rawptr = malloc(64);
-    const dest: rawptr = malloc(64);
+    var src: rawptr = malloc(64);
+    var dest: rawptr = malloc(64);
     
     if (@is_not_null(src) && @is_not_null(dest)) {
         io.println("  Both allocations: SUCCESS");
@@ -85,22 +110,23 @@ fn main() i32 {
     io.println("Cleanup phase:");
     
     if (@is_not_null(ptr1)) {
-        free(ptr1);
+        io.println("1");
+        safe_free(&ptr1);
         io.println("  Freed ptr1");
     }
     
     if (@is_not_null(ptr2)) {
-        free(ptr2);
+        safe_free(&ptr2);
         io.println("  Freed ptr2");
     }
     
     if (@is_not_null(src)) {
-        free(src);
+        safe_free(&src);
         io.println("  Freed src");
     }
     
     if (@is_not_null(dest)) {
-        free(dest);
+        safe_free(&dest)
         io.println("  Freed dest");
     }
     

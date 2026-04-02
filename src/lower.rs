@@ -764,7 +764,15 @@ impl LoweringContext {
             }
         }
 
-        hir::HirProgram { functions }
+        let mut external_functions = Vec::new();
+        for f in &typed_program.external_functions {
+            external_functions.push(self.lower_typed_fn(f));
+        }
+
+        hir::HirProgram {
+            functions,
+            external_functions,
+        }
     }
 
     fn lower_typed_fn(&mut self, f: &crate::sema::infer::TypedFnDef) -> hir::HirFn {
