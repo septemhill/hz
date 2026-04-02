@@ -185,6 +185,12 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.imported_packages
                 .insert(namespace.to_string(), package_name.clone());
 
+            // Get the last component of the package name as the module name for mangling
+            let pkg_ns = package_name
+                .split('/')
+                .last()
+                .unwrap_or(package_name.as_str());
+
             // If it's loaded in stdlib, declare its functions, structs, and enums
             if let Some(pkg) = self.stdlib.packages().get(package_name) {
                 // Clone to avoid borrow issues
@@ -196,7 +202,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 // Declare regular functions
                 for f in fn_defs {
                     if f.visibility == Visibility::Public {
-                        self.declare_external_function(&f, &namespace)?;
+                        self.declare_external_function(&f, pkg_ns)?;
                     }
                 }
                 // Declare external C functions (FFI)
@@ -207,7 +213,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 for s in struct_defs {
                     if s.visibility == Visibility::Public {
                         let mut mangled_s = s.clone();
-                        mangled_s.name = format!("{}_{}", namespace, s.name);
+                        mangled_s.name = format!("{}_{}", pkg_ns, s.name);
                         self.declare_stdlib_struct(&mangled_s)?;
                     }
                 }
@@ -215,7 +221,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 for e in enum_defs {
                     if e.visibility == Visibility::Public {
                         let mut mangled_e = e.clone();
-                        mangled_e.name = format!("{}_{}", namespace, e.name);
+                        mangled_e.name = format!("{}_{}", pkg_ns, e.name);
                         self.declare_enum(&mangled_e)?;
                     }
                 }

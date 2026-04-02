@@ -877,15 +877,25 @@ impl<'ctx> CodeGenerator<'ctx> {
                         if actual_package == "io" && name == "println" {
                             return self.generate_hir_io_println(args);
                         }
-                        // Use the mangled name directly (namespace_name)
-                        (format!("{}_{}", ns, name), true, false, false)
+                        // Use the mangled name directly (actual_package_name)
+                        // Get the last component of the package name as the module name
+                        let pkg_ns = actual_package
+                            .split('/')
+                            .last()
+                            .unwrap_or(actual_package.as_str());
+                        (format!("{}_{}", pkg_ns, name), true, false, false)
                     } else {
                         // Namespace is not a known variable or package - likely a local struct/enum or implicit built-in
                         if ns == "io" && name == "println" {
                             return self.generate_hir_io_println(args);
                         }
-                        // If it has a namespace, it should be treated as already having module context
-                        (format!("{}_{}", ns, name), false, false, false)
+                        // If it has a namespace, mangle it with the module name
+                        (
+                            self.mangle_name(&format!("{}_{}", ns, name), false),
+                            false,
+                            false,
+                            false,
+                        )
                     }
                 } else {
                     if name == "main" {

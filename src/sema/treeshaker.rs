@@ -250,12 +250,17 @@ impl TreeShaker {
             }
             Expr::Call {
                 name,
+                namespace,
                 args,
                 generic_args,
                 ..
             } => {
                 // Handle generic function calls like add<T>(a, b)
-                let fn_name = name.clone();
+                let fn_name = if let Some(ns) = namespace {
+                    format!("{}_{}", ns, name)
+                } else {
+                    name.clone()
+                };
 
                 // Mark the function as reachable
                 if !self.reachable_functions.contains(&fn_name) {

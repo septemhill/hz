@@ -2,3 +2,4 @@
 2. Interface Generic Support 
 3. Generic Constraint (Method for now)
 4. Type define
+5. `enum` Recursive Definition

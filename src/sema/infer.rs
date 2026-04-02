@@ -1063,6 +1063,7 @@ impl TypeInferrer {
 
                 let mut method_with_params = m.clone();
                 method_with_params.generic_params = combined_params;
+                method_with_params.name = full_name.clone();
                 self.functions.insert(full_name, method_with_params);
             }
         }
@@ -1231,7 +1232,10 @@ impl TypeInferrer {
     fn infer_struct(&mut self, s: &crate::ast::StructDef) -> AnalysisResult<TypedStructDef> {
         let mut methods = Vec::new();
         for m in &s.methods {
-            methods.push(self.infer_fn(m)?);
+            let mut tm = self.infer_fn(m)?;
+            // Mangle name to include struct prefix
+            tm.name = format!("{}_{}", s.name, m.name);
+            methods.push(tm);
         }
 
         Ok(TypedStructDef {
@@ -1248,7 +1252,10 @@ impl TypeInferrer {
     fn infer_enum(&mut self, e: &crate::ast::EnumDef) -> AnalysisResult<TypedEnumDef> {
         let mut methods = Vec::new();
         for m in &e.methods {
-            methods.push(self.infer_fn(m)?);
+            let mut tm = self.infer_fn(m)?;
+            // Mangle name to include enum prefix
+            tm.name = format!("{}_{}", e.name, m.name);
+            methods.push(tm);
         }
 
         Ok(TypedEnumDef {
@@ -3014,6 +3021,7 @@ impl TypeInferrer {
                 span,
             } => {
                 let typed_condition = self.infer_expr(condition)?;
+                let original_expected = self.get_expected_type().cloned();
 
                 // Handle capture variable
                 if let Some(cap) = capture {
@@ -3035,17 +3043,64 @@ impl TypeInferrer {
                     self.symbol_table.exit_scope();
                 }
 
+                // If no outer expected type, try to use then branch type for else branch
+                if original_expected.is_none() {
+                    self.set_expected_type(Some(typed_then.ty.clone()));
+                }
+
                 let typed_else = self.infer_expr(else_branch)?;
 
-                // The type of an if expression is the type of the then branch
-                // (or the else branch if they differ, but for now we use then_branch type)
-                let ty = typed_then.ty.clone();
+                // Restore original expected type
+                self.set_expected_type(original_expected.clone());
+
+                let mut final_typed_then = typed_then;
+
+                // Handle bidirectional inference: if then was a default type but else is concrete
+                if original_expected.is_none()
+                    && final_typed_then.ty != typed_else.ty
+                    && (final_typed_then.ty == Type::I64 || final_typed_then.ty == Type::F64)
+                {
+                    // Re-infer then branch with else branch's type
+                    self.set_expected_type(Some(typed_else.ty.clone()));
+                    if let Some(cap) = capture {
+                        self.symbol_table.enter_scope();
+                        if let Type::Option(inner_ty) = typed_condition.ty.clone() {
+                            self.symbol_table.define(
+                                cap.clone(),
+                                *inner_ty,
+                                Visibility::Private,
+                                false,
+                            );
+                        }
+                    }
+                    if let Ok(new_then) = self.infer_expr(then_branch) {
+                        final_typed_then = new_then;
+                    }
+                    if capture.is_some() {
+                        self.symbol_table.exit_scope();
+                    }
+                    self.set_expected_type(original_expected);
+                }
+
+                // The type of an if expression must be consistent across both branches
+                if final_typed_then.ty != typed_else.ty {
+                    return Err(AnalysisError::new_with_span(
+                        &format!(
+                            "If expression branches have incompatible types: '{}' and '{}'",
+                            final_typed_then.ty, typed_else.ty
+                        ),
+                        span,
+                    )
+                    .with_module("infer"));
+                }
+
+                let ty = final_typed_then.ty.clone();
 
                 Ok(TypedExpr {
                     expr: TypedExprKind::If {
                         condition: Box::new(typed_condition),
                         capture: capture.clone(),
-                        then_branch: Box::new(typed_then),
+                        then_branch: Box::new(final_typed_then),
                         else_branch: Box::new(typed_else),
                     },
                     ty,

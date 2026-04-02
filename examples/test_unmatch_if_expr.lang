@@ -1,7 +1,7 @@
 fn main() i64 {
     const c: ?i32 = 123;
 
-    const z = if (c) |v| v else 123.345;
+    const z = if (c) |v| v else (123.456);
 
     return 0;
 }

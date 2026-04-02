@@ -2904,19 +2904,28 @@ impl Parser {
                 let first = self.parse_expression()?;
                 self.skip_whitespace();
 
-                // Check if this is a single-element tuple (i.e., followed by RParen)
+                // Check if this is just grouping (expr)
                 if self.match_token(Token::RParen) {
-                    return Ok(Expr::Tuple(vec![first], Span { start: 0, end: 0 }));
+                    return Ok(first);
                 }
 
-                // Multi-element tuple
-                let mut elements = vec![first];
+                // If not followed by RParen, it must be a tuple, and we expect a comma next
+                if !self.match_token(Token::Comma) {
+                    return Err(ParseError {
+                        message: "Expected ',' or ')' after expression".to_string(),
+                        location: self.peek(0).map(|t| t.span.start),
+                    });
+                }
 
-                // Consume comma after first element
-                self.match_token(Token::Comma);
+                let mut elements = vec![first];
 
                 loop {
                     self.skip_whitespace();
+                    // Handle trailing comma: (1, 2, )
+                    if self.match_token(Token::RParen) {
+                        break;
+                    }
+
                     elements.push(self.parse_expression()?);
                     self.skip_whitespace();
 
@@ -2925,7 +2934,10 @@ impl Parser {
                     }
 
                     if !self.match_token(Token::Comma) {
-                        break;
+                        return Err(ParseError {
+                            message: "Expected ',' or ')'".to_string(),
+                            location: self.peek(0).map(|t| t.span.start),
+                        });
                     }
                 }
 

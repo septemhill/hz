@@ -264,7 +264,9 @@ impl SemanticAnalyzer {
                 }
                 m.return_ty.replace_self_with_args(&s.name, &generic_args);
 
-                self.functions.insert(format!("{}_{}", s.name, m.name), m);
+                let mangled_name = format!("{}_{}", s.name, m.name);
+                m.name = mangled_name.clone();
+                self.functions.insert(mangled_name, m);
             }
         }
         for i in &program.interfaces {
@@ -290,7 +292,9 @@ impl SemanticAnalyzer {
                 }
                 m.return_ty.replace_self_with_args(&e.name, &generic_args);
 
-                self.functions.insert(format!("{}_{}", e.name, m.name), m);
+                let mangled_name = format!("{}_{}", e.name, m.name);
+                m.name = mangled_name.clone();
+                self.functions.insert(mangled_name, m);
             }
         }
         for err in &program.errors {
