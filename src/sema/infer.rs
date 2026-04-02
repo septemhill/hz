@@ -420,6 +420,10 @@ pub struct TypeInferrer {
     imports: Vec<(Option<String>, String)>,
     /// Active interface constraints for the function currently being inferred
     current_generic_constraints: HashMap<String, Vec<String>>,
+    /// Track if current function body contains a try expression
+    has_try_expression: bool,
+    /// Span of the first try expression in the function body
+    try_expression_span: Option<Span>,
 }
 
 impl TypeInferrer {
@@ -451,6 +455,8 @@ impl TypeInferrer {
             new_ast_structs: Vec::new(),
             imports,
             current_generic_constraints: HashMap::new(),
+            has_try_expression: false,
+            try_expression_span: None,
         }
     }
 
@@ -1659,12 +1665,36 @@ impl TypeInferrer {
         let substituted_return_ty = self.substitute_type(&f.return_ty, &mappings);
         self.expected_return_type = Some(substituted_return_ty.clone());
 
+        // Save and reset try expression tracking
+        let previous_has_try = self.has_try_expression;
+        let previous_try_span = self.try_expression_span;
+        self.has_try_expression = false;
+        self.try_expression_span = None;
+
         // Infer types for the function body
         let mut body = Vec::new();
         for stmt in &f.body {
             let typed_stmt = self.infer_stmt(stmt)?;
             body.push(typed_stmt);
         }
+
+        // Check: if function body contains try expression, return type must be Result
+        if self.has_try_expression {
+            if !substituted_return_ty.is_result() {
+                let span = self.try_expression_span.unwrap_or(f.span);
+                return Err(AnalysisError::new_with_span(
+                    &format!(
+                        "Function '{}' contains try expression but does not return a Result type. Try expressions require the function to return a Result type to propagate errors.",
+                        f.name
+                    ),
+                    &span,
+                ).with_module("infer"));
+            }
+        }
+
+        // Restore try expression tracking
+        self.has_try_expression = previous_has_try;
+        self.try_expression_span = previous_try_span;
 
         // Restore previous return type
         self.expected_return_type = previous_return_type;
@@ -2126,19 +2156,26 @@ impl TypeInferrer {
                     span,
                 })
             }
-            Expr::Null(_) => {
+            Expr::Null(span) => {
                 // Use expected type if available (to support rawptr, optional, etc.),
                 // otherwise default to Option<i64>
-                let ty = match self.get_expected_type() {
+                let ty = match self.get_effective_expected_type() {
                     Some(Type::RawPtr) => Type::RawPtr,
                     Some(Type::Pointer(inner)) => Type::Pointer(inner.clone()),
                     Some(Type::Option(inner)) => Type::Option(inner.clone()),
-                    _ => Type::Option(Box::new(Type::I64)),
+                    Some(expected) => {
+                        return Err(AnalysisError::new_with_span(
+                            &format!("Type mismatch: cannot assign null to {}", expected),
+                            span,
+                        )
+                        .with_module("infer"));
+                    }
+                    None => Type::Option(Box::new(Type::I64)),
                 };
                 Ok(TypedExpr {
                     expr: TypedExprKind::Null,
                     ty,
-                    span,
+                    span: *span,
                 })
             }
             Expr::Tuple(elements, _) => {
@@ -2161,6 +2198,21 @@ impl TypeInferrer {
 
                 let mut typed_elements = Vec::new();
                 let previous_expected_type = self.get_expected_type().cloned();
+
+                // Validation: if we have expected tuple types, check length
+                if let Some(ref expected_types) = expected_tuple_type {
+                    if elements.len() != expected_types.len() {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "Tuple literal expected {} elements, found {}",
+                                expected_types.len(),
+                                elements.len()
+                            ),
+                            &span,
+                        )
+                        .with_module("infer"));
+                    }
+                }
 
                 for (index, elem) in elements.iter().enumerate() {
                     // Set expected type for each element if we have an expected tuple type
@@ -2297,6 +2349,20 @@ impl TypeInferrer {
 
                 // Get expected element type from expected_type (context) if provided
                 let context_element_type = if let Some(expected_ty) = self.get_expected_type() {
+                    // Check array size if expected_ty is fixed-size array
+                    if let Type::Array { size: Some(expected_size), .. } = expected_ty {
+                        if *expected_size != elements.len() {
+                            return Err(AnalysisError::new_with_span(
+                                &format!(
+                                    "Array literal expected {} elements, found {}",
+                                    expected_size, elements.len()
+                                ),
+                                &span,
+                            )
+                            .with_module("infer"));
+                        }
+                    }
+
                     if let Type::Array { element_type, .. } = expected_ty {
                         Some(*element_type.clone())
                     } else {
@@ -3194,6 +3260,11 @@ impl TypeInferrer {
                 })
             }
             Expr::Try { expr, span } => {
+                // Track try expression for function return type validation
+                if !self.has_try_expression {
+                    self.has_try_expression = true;
+                    self.try_expression_span = Some(*span);
+                }
                 let typed_expr = self.infer_expr(expr)?;
 
                 // Try unwraps the Result type to get the inner type

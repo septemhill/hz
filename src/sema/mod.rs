@@ -10,7 +10,6 @@ pub mod resolver;
 pub mod symbol;
 pub mod treeshaker;
 pub mod typelist;
-pub mod types;
 
 use crate::ast::{ErrorDef, ErrorVariant, FnDef, InterfaceDef, Type};
 use std::collections::{HashMap, HashSet};
@@ -29,7 +28,6 @@ pub use resolver::SymbolResolver;
 pub use symbol::{Scope, Symbol, SymbolTable};
 #[allow(unused)]
 pub use treeshaker::{TreeShaker, TreeShakerStats, treeshake};
-pub use types::TypeAnalyzer;
 
 // ============================================================================
 // Main Semantic Analyzer
@@ -325,20 +323,10 @@ impl SemanticAnalyzer {
         )?;
         self.typed_program = Some(typed_prog.clone());
 
-        // Pass 4: Type analysis - use the symbol table from Pass 3
-        let mut type_analyzer = TypeAnalyzer::new(
-            symbol_table_after_resolver,
-            self.structs.clone(),
-            self.enums.clone(),
-            self.errors.clone(),
-        );
-        type_analyzer.analyze(program)?;
-
-        // Pass 5: Mutability analysis
-        // Use the final symbol table from type_analyzer
-        let final_symbol_table_for_mutability = type_analyzer.get_symbol_table().clone();
+        // Pass 4: Mutability analysis
+        // Use the final symbol table from typed_program
         let mut mutability_analyzer = MutabilityAnalyzer::new(
-            final_symbol_table_for_mutability,
+            symbol_table_after_resolver,
             typed_prog
         );
         mutability_analyzer.analyze(program)?;
