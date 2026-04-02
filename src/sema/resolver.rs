@@ -577,58 +577,23 @@ impl SymbolResolver {
                 self.analyze_expression(expr)?;
                 Ok(crate::ast::Type::I64)
             }
-            crate::ast::Expr::Intrinsic { name, args, .. } => {
-                // Check if it's a known intrinsic
-                if name == "@is_null" || name == "@is_not_null" {
-                    for arg in args {
-                        self.analyze_expression(arg)?;
-                    }
-                    // These functions take a rawptr or pointer and return bool
-                    return Ok(crate::ast::Type::Bool);
+            crate::ast::Expr::Intrinsic { name, args, span } => {
+                let intrinsic =
+                    crate::sema::intrinsics::Intrinsic::from_name(name).ok_or_else(|| {
+                        AnalysisError::new_with_span(
+                            &format!("Unknown intrinsic function '{}'", name),
+                            span,
+                        )
+                        .with_module("resolver")
+                    })?;
+
+                intrinsic.validate_args(args, *span)?;
+
+                for arg in args {
+                    self.analyze_expression(arg)?;
                 }
-                if name == "@type_of" {
-                    // @type_of takes any variable and returns []const u8
-                    if args.len() != 1 {
-                        return Err(AnalysisError::new("@type_of requires exactly one argument")
-                            .with_module("resolver"));
-                    }
-                    // Analyze the argument to get its type (for type checking purposes)
-                    self.analyze_expression(&args[0])?;
-                    // Return []const u8 (a slice of const u8)
-                    return Ok(crate::ast::Type::Array {
-                        size: None,
-                        element_type: Box::new(crate::ast::Type::Const(Box::new(
-                            crate::ast::Type::U8,
-                        ))),
-                    });
-                }
-                if name == "@size_of" || name == "@align_of" {
-                    if args.len() != 1 {
-                        return Err(AnalysisError::new(&format!("{} requires exactly one argument", name))
-                            .with_module("resolver"));
-                    }
-                    // Analyze the argument
-                    self.analyze_expression(&args[0])?;
-                    return Ok(crate::ast::Type::U64);
-                }
-                if name == "@bit_cast" {
-                    if args.len() != 2 {
-                        return Err(AnalysisError::new("@bit_cast requires exactly two arguments")
-                            .with_module("resolver"));
-                    }
-                    self.analyze_expression(&args[0])?;
-                    // The second argument is a type literal
-                    if let crate::ast::Expr::TypeLiteral(ty, _) = &args[1] {
-                        return Ok(ty.clone());
-                    } else {
-                        return Err(AnalysisError::new("@bit_cast requires a type as its second argument")
-                            .with_module("resolver"));
-                    }
-                }
-                Err(
-                    AnalysisError::new(&format!("Unknown intrinsic function '{}'", name))
-                        .with_module("resolver"),
-                )
+
+                Ok(intrinsic.return_type(args))
             }
             crate::ast::Expr::TypeLiteral(_, _) => Ok(crate::ast::Type::Void),
             _ => Ok(crate::ast::Type::I64),

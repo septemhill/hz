@@ -2794,118 +2794,47 @@ impl TypeInferrer {
                 .with_module("infer"))
             }
             Expr::Intrinsic { name, args, span } => {
+                let intrinsic = crate::sema::intrinsics::Intrinsic::from_name(name)
+                    .ok_or_else(|| {
+                        AnalysisError::new_with_span(
+                            &format!("Unknown intrinsic function '{}'", name),
+                            span,
+                        )
+                        .with_module("infer")
+                    })?;
+
                 // Pre-infer argument types
                 let mut typed_args = Vec::new();
                 for arg in args {
                     typed_args.push(self.infer_expr(arg)?);
                 }
 
-                // Handle specific intrinsics
-                match name.as_str() {
-                    "@is_null" | "@is_not_null" => {
-                        if typed_args.len() != 1 {
-                            return Err(AnalysisError::new_with_span(
-                                &format!("{} requires exactly one argument", name),
-                                span,
-                            )
-                            .with_module("infer"));
-                        }
-                        if !matches!(typed_args[0].ty, Type::RawPtr | Type::Pointer(_)) {
-                            return Err(AnalysisError::new_with_span(
-                                &format!("{} requires a pointer argument", name),
-                                span,
-                            )
-                            .with_module("infer"));
-                        }
-                        Ok(TypedExpr {
-                            expr: TypedExprKind::Intrinsic {
-                                name: name.clone(),
-                                args: typed_args,
-                            },
-                            ty: Type::Bool,
-                            span: *span,
-                        })
-                    }
-                    "@type_of" => {
-                        // @type_of takes one argument and returns []const u8
-                        if typed_args.len() != 1 {
-                            return Err(AnalysisError::new_with_span(
-                                "@type_of requires exactly one argument",
-                                span,
-                            )
-                            .with_module("infer"));
-                        }
-                        // Return type is []const u8
-                        Ok(TypedExpr {
-                            expr: TypedExprKind::Intrinsic {
-                                name: name.clone(),
-                                args: typed_args,
-                            },
-                            ty: Type::Array {
-                                size: None,
-                                element_type: Box::new(Type::Const(Box::new(Type::U8))),
-                            },
-                            span: *span,
-                        })
-                    }
-                    "@size_of" | "@align_of" => {
-                        if typed_args.len() != 1 {
-                            return Err(AnalysisError::new_with_span(
-                                &format!("{} requires exactly one argument", name),
-                                span,
-                            )
-                            .with_module("infer"));
-                        }
-                        if !matches!(typed_args[0].expr, TypedExprKind::TypeLiteral(_)) {
-                            return Err(AnalysisError::new_with_span(
-                                &format!("{} requires a type argument", name),
-                                span,
-                            )
-                            .with_module("infer"));
-                        }
-                        Ok(TypedExpr {
-                            expr: TypedExprKind::Intrinsic {
-                                name: name.clone(),
-                                args: typed_args,
-                            },
-                            ty: Type::U64,
-                            span: *span,
-                        })
-                    }
-                    "@bit_cast" => {
-                        if typed_args.len() != 2 {
-                            return Err(AnalysisError::new_with_span(
-                                "@bit_cast requires exactly two arguments",
-                                span,
-                            )
-                            .with_module("infer"));
-                        }
-                        
-                        let target_ty = if let TypedExprKind::TypeLiteral(ty) = &typed_args[1].expr {
-                            ty.clone()
-                        } else {
-                            return Err(AnalysisError::new_with_span(
-                                "@bit_cast requires a type literal as its second argument",
-                                &typed_args[1].span,
-                            )
-                            .with_module("infer"));
-                        };
+                // Initial validation of arguments count
+                intrinsic.validate_args(args, *span)?;
 
-                        Ok(TypedExpr {
-                            expr: TypedExprKind::Intrinsic {
-                                name: name.clone(),
-                                args: typed_args,
-                            },
-                            ty: target_ty,
-                            span: *span,
-                        })
+                // Further validation based on inferred types
+                let arg_types: Vec<Type> = typed_args.iter().map(|a| a.ty.clone()).collect();
+                intrinsic.validate_types(&arg_types, *span)?;
+
+                // For SizeOf/AlignOf, current inferrer expects first arg to be TypeLiteral
+                if matches!(intrinsic, crate::sema::intrinsics::Intrinsic::SizeOf | crate::sema::intrinsics::Intrinsic::AlignOf) {
+                     if !matches!(typed_args[0].expr, TypedExprKind::TypeLiteral(_)) {
+                        return Err(AnalysisError::new_with_span(
+                            &format!("{} requires a type argument", name),
+                            span,
+                        )
+                        .with_module("infer"));
                     }
-                    _ => Err(AnalysisError::new_with_span(
-                        &format!("Unknown intrinsic function '{}'", name),
-                        span,
-                    )
-                    .with_module("infer")),
                 }
+
+                Ok(TypedExpr {
+                    expr: TypedExprKind::Intrinsic {
+                        name: name.clone(),
+                        args: typed_args,
+                    },
+                    ty: intrinsic.return_type(args),
+                    span: *span,
+                })
             }
             Expr::TypeLiteral(ty, _) => Ok(TypedExpr {
                 expr: TypedExprKind::TypeLiteral(ty.clone()),

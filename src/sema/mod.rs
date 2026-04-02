@@ -4,6 +4,7 @@
 pub mod error;
 pub mod global;
 pub mod infer;
+pub mod intrinsics;
 pub mod mutability;
 pub mod resolver;
 pub mod symbol;
@@ -299,11 +300,23 @@ impl SemanticAnalyzer {
         self.symbol_table
             .merge(global_analyzer.get_symbol_table().clone());
 
-        // Pass 2: Type inference - produce type-annotated AST (must run early for function types)
-        let symbol_table = self.symbol_table.clone();
+        // Pass 2: Symbol resolution - Move this BEFORE type inference
+        // Resolves variable/function references and checks scope correctness
+        let symbol_table_for_resolver = self.symbol_table.clone();
+        let mut symbol_resolver = SymbolResolver::new(
+            symbol_table_for_resolver,
+            self.structs.clone(),
+            self.enums.clone(),
+            program.imports.clone(),
+        );
+        symbol_resolver.analyze(program)?;
+
+        // Pass 3: Type inference - produce type-annotated AST
+        // Use the symbol table from symbol_resolver which contains resolved local variables
+        let symbol_table_after_resolver = symbol_resolver.get_symbol_table().clone();
         let typed_prog = infer_types(
             program,
-            symbol_table.clone(),
+            symbol_table_after_resolver.clone(),
             self.structs.clone(),
             self.interfaces.clone(),
             self.enums.clone(),
@@ -312,30 +325,20 @@ impl SemanticAnalyzer {
         )?;
         self.typed_program = Some(typed_prog.clone());
 
-        // Pass 3: Type analysis - use the SAME symbol table that was passed to infer_types
+        // Pass 4: Type analysis - use the symbol table from Pass 3
         let mut type_analyzer = TypeAnalyzer::new(
-            symbol_table,
+            symbol_table_after_resolver,
             self.structs.clone(),
             self.enums.clone(),
             self.errors.clone(),
         );
         type_analyzer.analyze(program)?;
 
-        // Pass 4: Symbol resolution
-        let symbol_table = type_analyzer.get_symbol_table().clone();
-        let mut symbol_resolver = SymbolResolver::new(
-            symbol_table,
-            self.structs.clone(),
-            self.enums.clone(),
-            program.imports.clone(),
-        );
-        symbol_resolver.analyze(program)?;
-
         // Pass 5: Mutability analysis
-        // Note: We use the symbol table from Pass 1 (GlobalDefinitionsAnalyzer)
-        // plus Pass 4 (SymbolResolver) which should have everything resolved.
+        // Use the final symbol table from type_analyzer
+        let final_symbol_table_for_mutability = type_analyzer.get_symbol_table().clone();
         let mut mutability_analyzer = MutabilityAnalyzer::new(
-            symbol_resolver.get_symbol_table().clone(),
+            final_symbol_table_for_mutability,
             typed_prog
         );
         mutability_analyzer.analyze(program)?;
