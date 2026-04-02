@@ -1167,7 +1167,7 @@ impl TypeAnalyzer {
                     self.analyze_expression(arg)?;
                 }
 
-                Ok(intrinsic.return_type(args))
+                Ok(intrinsic.return_type_from_expr(args))
             }
             crate::ast::Expr::TypeLiteral(_, _) => Ok(crate::ast::Type::Void),
         }

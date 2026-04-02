@@ -2794,8 +2794,8 @@ impl TypeInferrer {
                 .with_module("infer"))
             }
             Expr::Intrinsic { name, args, span } => {
-                let intrinsic = crate::sema::intrinsics::Intrinsic::from_name(name)
-                    .ok_or_else(|| {
+                let intrinsic =
+                    crate::sema::intrinsics::Intrinsic::from_name(name).ok_or_else(|| {
                         AnalysisError::new_with_span(
                             &format!("Unknown intrinsic function '{}'", name),
                             span,
@@ -2817,8 +2817,12 @@ impl TypeInferrer {
                 intrinsic.validate_types(&arg_types, *span)?;
 
                 // For SizeOf/AlignOf, current inferrer expects first arg to be TypeLiteral
-                if matches!(intrinsic, crate::sema::intrinsics::Intrinsic::SizeOf | crate::sema::intrinsics::Intrinsic::AlignOf) {
-                     if !matches!(typed_args[0].expr, TypedExprKind::TypeLiteral(_)) {
+                if matches!(
+                    intrinsic,
+                    crate::sema::intrinsics::Intrinsic::SizeOf
+                        | crate::sema::intrinsics::Intrinsic::AlignOf
+                ) {
+                    if !matches!(typed_args[0].expr, TypedExprKind::TypeLiteral(_)) {
                         return Err(AnalysisError::new_with_span(
                             &format!("{} requires a type argument", name),
                             span,
@@ -2830,9 +2834,9 @@ impl TypeInferrer {
                 Ok(TypedExpr {
                     expr: TypedExprKind::Intrinsic {
                         name: name.clone(),
-                        args: typed_args,
+                        args: typed_args.clone(),
                     },
-                    ty: intrinsic.return_type(args),
+                    ty: intrinsic.return_type_from_args(&typed_args),
                     span: *span,
                 })
             }

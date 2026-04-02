@@ -1,5 +1,6 @@
 use crate::ast::{Expr, Type, Span};
 use crate::sema::error::{AnalysisError, AnalysisResult};
+use crate::sema::infer::{TypedExpr, TypedExprKind};
 
 pub enum Intrinsic {
     IsNull,
@@ -86,7 +87,7 @@ impl Intrinsic {
         Ok(())
     }
 
-    pub fn return_type(&self, args: &[Expr]) -> Type {
+    pub fn return_type_from_expr(&self, args: &[Expr]) -> Type {
         match self {
             Intrinsic::IsNull | Intrinsic::IsNotNull => Type::Bool,
             Intrinsic::TypeOf => Type::Array {
@@ -97,6 +98,28 @@ impl Intrinsic {
             Intrinsic::BitCast => {
                 if let Some(Expr::TypeLiteral(ty, _)) = args.get(1) {
                     ty.clone()
+                } else {
+                    Type::Void
+                }
+            }
+        }
+    }
+
+    pub fn return_type_from_args(&self, args: &[TypedExpr]) -> Type {
+        match self {
+            Intrinsic::IsNull | Intrinsic::IsNotNull => Type::Bool,
+            Intrinsic::TypeOf => Type::Array {
+                size: None,
+                element_type: Box::new(Type::Const(Box::new(Type::U8))),
+            },
+            Intrinsic::SizeOf | Intrinsic::AlignOf => Type::U64,
+            Intrinsic::BitCast => {
+                if let Some(arg) = args.get(1) {
+                    if let TypedExprKind::TypeLiteral(ty) = &arg.expr {
+                        ty.clone()
+                    } else {
+                        Type::Void
+                    }
                 } else {
                     Type::Void
                 }
