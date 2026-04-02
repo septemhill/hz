@@ -111,7 +111,10 @@ impl<'ctx> CodeGenerator<'ctx> {
                             let ptr = self.builder.build_extract_value(sv, 0, "slice_ptr")?;
                             ("%s\n", ptr)
                         } else {
-                            ("%lld\n", self.promote_printf_arg(raw_arg, PrintfArgKind::Integer)?)
+                            (
+                                "%lld\n",
+                                self.promote_printf_arg(raw_arg, PrintfArgKind::Integer)?,
+                            )
                         }
                     }
                     BasicValueEnum::FloatValue(_) => (

@@ -114,6 +114,12 @@ enum Commands {
         #[arg(value_name = "NAME")]
         name: String,
     },
+    /// Show compiler environment variables
+    Env {
+        /// Specific environment variable key to query
+        #[arg(value_name = "KEY")]
+        key: Option<String>,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -182,6 +188,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Init { name } => {
             cmd::init_project(&name)?;
+        }
+        Commands::Env { key } => {
+            if let Some(key) = key {
+                if !cmd::print_env_key(&key) {
+                    eprintln!("Environment variable '{}' not found", key);
+                }
+            } else {
+                cmd::print_env();
+            }
         }
     }
 

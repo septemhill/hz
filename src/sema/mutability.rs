@@ -69,7 +69,7 @@ impl MutabilityAnalyzer {
                     let mut parts = Vec::new();
                     let mut current_part = String::new();
                     let mut chars = target.chars().peekable();
-                    
+
                     while let Some(c) = chars.next() {
                         match c {
                             '.' => {
@@ -107,7 +107,7 @@ impl MutabilityAnalyzer {
                     }
 
                     let base = &parts[0];
-                    
+
                     if let Some(symbol) = self.symbol_table.resolve(base) {
                         let mut current_is_const = symbol.is_const;
                         let mut current_ty = &symbol.ty;
@@ -125,7 +125,7 @@ impl MutabilityAnalyzer {
                             // Check nested components
                             for i in 1..parts.len() {
                                 let part = &parts[i];
-                                
+
                                 if part == "*" {
                                     // Dereference: check if pointer points to const
                                     match current_ty {
@@ -133,8 +133,10 @@ impl MutabilityAnalyzer {
                                             current_ty = inner.as_ref();
                                             // The pointer itself being const doesn't prevent modifying pointee
                                             // But if the pointee type is Const(T), it's blocked.
-                                            current_is_const = matches!(current_ty, crate::ast::Type::Const(_));
-                                            if let crate::ast::Type::Const(inner_inner) = current_ty {
+                                            current_is_const =
+                                                matches!(current_ty, crate::ast::Type::Const(_));
+                                            if let crate::ast::Type::Const(inner_inner) = current_ty
+                                            {
                                                 current_ty = inner_inner.as_ref();
                                             }
                                         }
@@ -144,13 +146,17 @@ impl MutabilityAnalyzer {
                                     // Indexing
                                     if current_is_const {
                                         return Err(AnalysisError::new_with_span(
-                                            &format!("Cannot modify constant elements of '{}'", base),
+                                            &format!(
+                                                "Cannot modify constant elements of '{}'",
+                                                base
+                                            ),
                                             span,
                                         )
                                         .with_module("mutability"));
                                     }
-                                    
-                                    if let crate::ast::Type::Array { element_type, .. } = current_ty {
+
+                                    if let crate::ast::Type::Array { element_type, .. } = current_ty
+                                    {
                                         current_ty = element_type.as_ref();
                                         if let crate::ast::Type::Const(inner) = current_ty {
                                             current_is_const = true;
@@ -267,7 +273,7 @@ impl MutabilityAnalyzer {
                 // Use I64 as default type when no type annotation and no value
                 let default_ty = crate::ast::Type::I64;
                 let inferred_ty = ty.clone().unwrap_or(default_ty);
-                
+
                 // Handle tuple destructuring
                 if let Some(var_names) = names {
                     for var_name in var_names {

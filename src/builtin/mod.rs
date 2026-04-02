@@ -2,12 +2,12 @@ use crate::codegen::{CodeGenerator, CodegenResult};
 use crate::hir;
 use inkwell::values::BasicValueEnum;
 
-pub mod is_not_null;
-pub mod is_null;
-pub mod type_of;
-pub mod size_of;
 pub mod align_of;
 pub mod bit_cast;
+pub mod is_not_null;
+pub mod is_null;
+pub mod size_of;
+pub mod type_of;
 
 use std::rc::Rc;
 

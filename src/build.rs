@@ -63,7 +63,7 @@ impl BuildSystem {
             if visited.contains(&current_path) {
                 continue;
             }
-            
+
             if current_path.is_dir() {
                 // If it's a directory, add all .lang files in it to the queue
                 // The pkg_name here is the name used in the import statement
@@ -132,7 +132,7 @@ impl BuildSystem {
     /// Resolve a local import relative to another file
     fn resolve_local_import(&self, from_file: &Path, package_name: &str) -> Option<PathBuf> {
         let parent = from_file.parent().unwrap();
-        
+
         // 1. Check for a directory (new package system)
         let package_dir = parent.join(package_name);
         if package_dir.is_dir() {
@@ -251,10 +251,7 @@ impl BuildSystem {
         let codegen_module_name = if let Some(pkg) = &unit.package_name {
             // Use the last component of the package name as the module name (namespace)
             // e.g., "utils/sub" -> "sub"
-            pkg.split('/')
-                .last()
-                .unwrap_or(pkg.as_str())
-                .to_string()
+            pkg.split('/').last().unwrap_or(pkg.as_str()).to_string()
         } else {
             unit.name.clone()
         };

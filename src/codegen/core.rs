@@ -166,7 +166,7 @@ impl<'ctx> CodeGenerator<'ctx> {
         if self.external_function_names.contains(name) {
             return name.to_string();
         }
-        
+
         format!("{}_{}", self.module_name, name)
     }
 

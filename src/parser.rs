@@ -4,7 +4,7 @@
 //! It uses a state machine to track parsing progress for debugging purposes.
 
 use crate::ast::*;
-use crate::lexer::{PeekableLexerIterator, Token, TokenWithSpan, iter as lexer_iter};
+use crate::lexer::{iter as lexer_iter, PeekableLexerIterator, Token, TokenWithSpan};
 
 /// Parser state for tracking current parsing context
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1223,7 +1223,7 @@ impl Parser {
                             // This is a labeled for loop
                             self.advance(); // consume identifier
                             self.advance(); // consume colon
-                            // Now parse for with the label
+                                            // Now parse for with the label
                             return self.parse_for_stmt(Some(label_name));
                         }
                     }
@@ -2056,7 +2056,11 @@ impl Parser {
                     });
                 }
             }
-            Expr::Index { object, index, span } => {
+            Expr::Index {
+                object,
+                index,
+                span,
+            } => {
                 // Handle array indexing assignment like a[i] = value
                 if let Some(op) = self.match_assign_op() {
                     let value = self.parse_expression()?;
@@ -2565,21 +2569,29 @@ impl Parser {
                 if !self.match_token(Token::RParen) {
                     loop {
                         // Special case for intrinsics that take type arguments
-                        let is_type_arg = is_intrinsic && (
-                            name_to_use == "@size_of" || 
-                            name_to_use == "@align_of" ||
-                            (name_to_use == "@bit_cast" && args.len() == 1)
-                        );
+                        let is_type_arg = is_intrinsic
+                            && (name_to_use == "@size_of"
+                                || name_to_use == "@align_of"
+                                || (name_to_use == "@bit_cast" && args.len() == 1));
 
                         if is_type_arg {
                             let start_pos = self.current_token().map(|t| t.span.start).unwrap_or(0);
                             let ty_arg = self.parse_type()?;
-                            let end_pos = self.current_token().map(|t| t.span.start).unwrap_or(start_pos);
-                            args.push(Expr::TypeLiteral(ty_arg, Span { start: start_pos, end: end_pos }));
+                            let end_pos = self
+                                .current_token()
+                                .map(|t| t.span.start)
+                                .unwrap_or(start_pos);
+                            args.push(Expr::TypeLiteral(
+                                ty_arg,
+                                Span {
+                                    start: start_pos,
+                                    end: end_pos,
+                                },
+                            ));
                         } else {
                             args.push(self.parse_expression()?);
                         }
-                        
+
                         self.skip_whitespace();
                         if self.match_token(Token::RParen) {
                             break;
@@ -2592,7 +2604,7 @@ impl Parser {
                 }
 
                 let call_span = self.get_expr_span(&expr);
-                
+
                 if is_intrinsic && ns_to_use.is_none() {
                     expr = Expr::Intrinsic {
                         name: name_to_use,

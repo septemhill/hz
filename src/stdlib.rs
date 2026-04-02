@@ -75,34 +75,51 @@ impl StdLib {
                 };
 
                 let entries = fs::read_dir(&package_dir).map_err(|e| {
-                    format!("Failed to read package directory '{}': {}", package_dir.display(), e)
+                    format!(
+                        "Failed to read package directory '{}': {}",
+                        package_dir.display(),
+                        e
+                    )
                 })?;
 
                 for entry in entries {
                     let entry = entry.map_err(|e| e.to_string())?;
                     let file_path = entry.path();
-                    
+
                     // Only include .lang files, ignore directories and other file types
-                    if file_path.is_file() && file_path.extension().and_then(|s| s.to_str()) == Some("lang") {
+                    if file_path.is_file()
+                        && file_path.extension().and_then(|s| s.to_str()) == Some("lang")
+                    {
                         let source = fs::read_to_string(&file_path).map_err(|e| {
-                            format!("Failed to read file '{}' in package: {}", file_path.display(), e)
+                            format!(
+                                "Failed to read file '{}' in package: {}",
+                                file_path.display(),
+                                e
+                            )
                         })?;
 
                         // Parse the file
                         let program = parser::parse(&source).map_err(|e| {
-                            format!("Failed to parse file '{}' in package: {}", file_path.display(), e)
+                            format!(
+                                "Failed to parse file '{}' in package: {}",
+                                file_path.display(),
+                                e
+                            )
                         })?;
 
                         // Merge into combined package
                         combined_package.functions.extend(program.functions);
-                        combined_package.external_functions.extend(program.external_functions);
+                        combined_package
+                            .external_functions
+                            .extend(program.external_functions);
                         combined_package.structs.extend(program.structs);
                         combined_package.enums.extend(program.enums);
                     }
                 }
 
                 // Cache and return the combined package
-                self.packages.insert(name.to_string(), combined_package.clone());
+                self.packages
+                    .insert(name.to_string(), combined_package.clone());
                 return Ok(combined_package);
             } else {
                 // Fallback: check for a single file package (name.lang)

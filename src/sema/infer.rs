@@ -2350,12 +2350,17 @@ impl TypeInferrer {
                 // Get expected element type from expected_type (context) if provided
                 let context_element_type = if let Some(expected_ty) = self.get_expected_type() {
                     // Check array size if expected_ty is fixed-size array
-                    if let Type::Array { size: Some(expected_size), .. } = expected_ty {
+                    if let Type::Array {
+                        size: Some(expected_size),
+                        ..
+                    } = expected_ty
+                    {
                         if *expected_size != elements.len() {
                             return Err(AnalysisError::new_with_span(
                                 &format!(
                                     "Array literal expected {} elements, found {}",
-                                    expected_size, elements.len()
+                                    expected_size,
+                                    elements.len()
                                 ),
                                 &span,
                             )
@@ -3950,7 +3955,7 @@ pub fn infer_types(
 // Pretty-Printing for Typed AST
 // ============================================================================
 
-pub use crate::ast::{AstDump, print_indent};
+pub use crate::ast::{print_indent, AstDump};
 
 fn record_shown_method_names(
     shown_methods: &mut HashSet<String>,

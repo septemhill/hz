@@ -22,14 +22,16 @@ impl Intrinsic for SizeOfIntrinsic {
         };
 
         let llvm_type = codegen.llvm_type(ty);
-        
+
         // size_of returns an i64 (or target dependent integer)
         let size = llvm_type.size_of().ok_or("Cannot get size of type")?;
-        
+
         // Convert to u64 as requested
         let u64_type = codegen.context.i64_type();
-        let size_u64 = codegen.builder.build_int_cast(size, u64_type, "size_of_u64")?;
-        
+        let size_u64 = codegen
+            .builder
+            .build_int_cast(size, u64_type, "size_of_u64")?;
+
         Ok(size_u64.into())
     }
 }

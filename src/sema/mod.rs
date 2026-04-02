@@ -21,13 +21,13 @@ mod tests;
 #[allow(unused_imports)]
 pub use error::{AnalysisError, AnalysisResult};
 pub use global::GlobalDefinitionsAnalyzer;
-pub use infer::{TypedProgram, infer_types};
+pub use infer::{infer_types, TypedProgram};
 pub use mutability::MutabilityAnalyzer;
 pub use resolver::SymbolResolver;
 #[allow(unused_imports)]
 pub use symbol::{Scope, Symbol, SymbolTable};
 #[allow(unused)]
-pub use treeshaker::{TreeShaker, TreeShakerStats, treeshake};
+pub use treeshaker::{treeshake, TreeShaker, TreeShakerStats};
 
 // ============================================================================
 // Main Semantic Analyzer
@@ -335,10 +335,8 @@ impl SemanticAnalyzer {
 
         // Pass 4: Mutability analysis
         // Use the final symbol table from typed_program
-        let mut mutability_analyzer = MutabilityAnalyzer::new(
-            symbol_table_after_resolver,
-            typed_prog
-        );
+        let mut mutability_analyzer =
+            MutabilityAnalyzer::new(symbol_table_after_resolver, typed_prog);
         mutability_analyzer.analyze(program)?;
 
         // Store final symbol table

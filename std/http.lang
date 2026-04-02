@@ -1,3 +1,0 @@
-pub fn head() i32 {
-    return 123;
-}

@@ -5,7 +5,7 @@
 
 use crate::ast::Type;
 use crate::parser::parse;
-use crate::sema::{SemanticAnalyzer, typelist::TypeRegistry};
+use crate::sema::{typelist::TypeRegistry, SemanticAnalyzer};
 
 /// Run the typelist command - lists all types in the source file with their IDs
 pub fn run_typelist_command(

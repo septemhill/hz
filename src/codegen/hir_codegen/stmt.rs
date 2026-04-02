@@ -53,13 +53,12 @@ impl<'ctx> CodeGenerator<'ctx> {
                 Ok(())
             }
             hir::HirStmt::Assign {
-                target,
-                op,
-                value,
-                ..
+                target, op, value, ..
             } => {
                 if *op != AssignOp::Assign {
-                    return Err(format!("Compound assignment {:?} should have been lowered", op).into());
+                    return Err(
+                        format!("Compound assignment {:?} should have been lowered", op).into(),
+                    );
                 }
 
                 // Skip underscore assignment (used for ignoring values)
@@ -74,7 +73,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let mut parts = Vec::new();
                 let mut current_part = String::new();
                 let mut chars = target.chars().peekable();
-                
+
                 while let Some(c) = chars.next() {
                     match c {
                         '.' => {
@@ -148,14 +147,16 @@ impl<'ctx> CodeGenerator<'ctx> {
                     } else if part.starts_with('[') && part.ends_with(']') {
                         // Indexing
                         let index_str = &part[1..part.len() - 1];
-                        let index_val = index_str.parse::<u64>().map_err(|_| "Invalid index in assignment target")?;
+                        let index_val = index_str
+                            .parse::<u64>()
+                            .map_err(|_| "Invalid index in assignment target")?;
                         let index_llvm = self.context.i64_type().const_int(index_val, false);
 
                         match &current_ty {
                             Type::Array { size, element_type } => {
                                 let element_ty = element_type.as_ref().clone();
                                 let element_llvm = self.llvm_type(&element_ty);
-                                
+
                                 match size {
                                     Some(n) => {
                                         // Array: [N]T
@@ -172,8 +173,18 @@ impl<'ctx> CodeGenerator<'ctx> {
                                     }
                                     None => {
                                         // Slice: []T - load the struct first
-                                        let slice_val = self.builder.build_load(self.llvm_type(&current_ty), current_ptr, "slice_val")?.into_struct_value();
-                                        let ptr_val = self.builder.build_extract_value(slice_val, 0, "slice_ptr")?.into_pointer_value();
+                                        let slice_val = self
+                                            .builder
+                                            .build_load(
+                                                self.llvm_type(&current_ty),
+                                                current_ptr,
+                                                "slice_val",
+                                            )?
+                                            .into_struct_value();
+                                        let ptr_val = self
+                                            .builder
+                                            .build_extract_value(slice_val, 0, "slice_ptr")?
+                                            .into_pointer_value();
                                         current_ptr = unsafe {
                                             self.builder.build_in_bounds_gep(
                                                 element_llvm,
@@ -186,7 +197,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 }
                                 current_ty = element_ty;
                             }
-                            _ => return Err(format!("Indexing on non-array type: {:?}", current_ty).into()),
+                            _ => {
+                                return Err(
+                                    format!("Indexing on non-array type: {:?}", current_ty).into()
+                                )
+                            }
                         }
                     } else {
                         // Member access
@@ -240,10 +255,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                             .map_err(|e| e.to_string())?;
 
                         // Update current_ty to the field type
-                        let struct_def = self
-                            .structs
-                            .get(&struct_name)
-                            .ok_or_else(|| format!("Struct definition not found: {}", struct_name))?;
+                        let struct_def = self.structs.get(&struct_name).ok_or_else(|| {
+                            format!("Struct definition not found: {}", struct_name)
+                        })?;
                         let field_def = struct_def
                             .fields
                             .iter()

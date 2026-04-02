@@ -1,7 +1,7 @@
 use crate::ast;
 use crate::hir;
-use crate::sema::SymbolTable;
 use crate::sema::infer::{TypedExpr, TypedExprKind, TypedStmt, TypedStmtKind};
+use crate::sema::SymbolTable;
 
 #[cfg(test)]
 mod tests {
@@ -163,10 +163,9 @@ mod tests {
                         element_type: Box::new(Type::U8),
                     }
                 );
-                assert!(
-                    vals.iter()
-                        .all(|val| matches!(val, hir::HirExpr::Int(_, Type::U8, _)))
-                );
+                assert!(vals
+                    .iter()
+                    .all(|val| matches!(val, hir::HirExpr::Int(_, Type::U8, _))));
             }
             _ => panic!("Expected Array expression"),
         }
@@ -1207,11 +1206,9 @@ impl LoweringContext {
                 ty: e.ty.clone(),
                 span: e.span,
             },
-            TypedExprKind::TypeLiteral(ty) => hir::HirExpr::TypeLiteral(
-                ty.clone(),
-                e.ty.clone(),
-                e.span,
-            ),
+            TypedExprKind::TypeLiteral(ty) => {
+                hir::HirExpr::TypeLiteral(ty.clone(), e.ty.clone(), e.span)
+            }
         }
     }
 

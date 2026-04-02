@@ -26,26 +26,32 @@ impl Intrinsic for BitCastIntrinsic {
         };
 
         let llvm_target_ty = codegen.llvm_type(target_ty);
-        
+
         // Use appropriate LLVM instruction based on source and target types
         let bitcast_value = if value.is_int_value() && llvm_target_ty.is_pointer_type() {
-            codegen.builder.build_int_to_ptr(
-                value.into_int_value(),
-                llvm_target_ty.into_pointer_type(),
-                "int_to_ptr",
-            )?
-            .into()
+            codegen
+                .builder
+                .build_int_to_ptr(
+                    value.into_int_value(),
+                    llvm_target_ty.into_pointer_type(),
+                    "int_to_ptr",
+                )?
+                .into()
         } else if value.is_pointer_value() && llvm_target_ty.is_int_type() {
-            codegen.builder.build_ptr_to_int(
-                value.into_pointer_value(),
-                llvm_target_ty.into_int_type(),
-                "ptr_to_int",
-            )?
-            .into()
+            codegen
+                .builder
+                .build_ptr_to_int(
+                    value.into_pointer_value(),
+                    llvm_target_ty.into_int_type(),
+                    "ptr_to_int",
+                )?
+                .into()
         } else {
-            codegen.builder.build_bit_cast(value, llvm_target_ty, "bitcast_tmp")?
+            codegen
+                .builder
+                .build_bit_cast(value, llvm_target_ty, "bitcast_tmp")?
         };
-        
+
         Ok(bitcast_value)
     }
 }

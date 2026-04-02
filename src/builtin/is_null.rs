@@ -1,7 +1,7 @@
+use crate::builtin::Intrinsic;
 use crate::codegen::{CodeGenerator, CodegenResult};
 use crate::hir;
 use inkwell::values::BasicValueEnum;
-use crate::builtin::Intrinsic;
 
 pub struct IsNullIntrinsic;
 
@@ -38,9 +38,9 @@ impl Intrinsic for IsNullIntrinsic {
             codegen.context.i64_type(),
             "ptr_to_int",
         )?;
-        
+
         let zero = codegen.context.i64_type().const_int(0, false);
-        
+
         let is_null = codegen.builder.build_int_compare(
             inkwell::IntPredicate::EQ,
             ptr_as_int,

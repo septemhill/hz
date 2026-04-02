@@ -43,7 +43,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .get(&struct_name)
                     .and_then(|fields| fields.get(member))
                     .copied()
-                    .ok_or_else(|| format!("Field '{}' not found in struct '{}'", member, struct_name))?;
+                    .ok_or_else(|| {
+                        format!("Field '{}' not found in struct '{}'", member, struct_name)
+                    })?;
 
                 let struct_type = self
                     .context
@@ -101,9 +103,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Type::Array { size: None, .. } => {
                         let slice_val = self.generate_hir_expr(object)?;
                         let slice_struct = slice_val.into_struct_value();
-                        let ptr_val = self
-                            .builder
-                            .build_extract_value(slice_struct, 0, "slice_ptr")?;
+                        let ptr_val =
+                            self.builder
+                                .build_extract_value(slice_struct, 0, "slice_ptr")?;
                         let ptr = ptr_val.into_pointer_value();
                         let element_ptr = unsafe {
                             self.builder.build_in_bounds_gep(
@@ -222,10 +224,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
             }
             hir::HirExpr::Index {
-                object,
-                index,
-                ty,
-                ..
+                object, index, ty, ..
             } => {
                 let obj_ty = object.ty();
                 let element_type = match obj_ty {
@@ -263,9 +262,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                         Type::Array { size: None, .. } => {
                             let slice_val = self.generate_hir_expr(object)?;
                             let slice_struct = slice_val.into_struct_value();
-                            let ptr_val = self
-                                .builder
-                                .build_extract_value(slice_struct, 0, "slice_ptr")?;
+                            let ptr_val =
+                                self.builder
+                                    .build_extract_value(slice_struct, 0, "slice_ptr")?;
                             let old_ptr = ptr_val.into_pointer_value();
                             unsafe {
                                 self.builder.build_in_bounds_gep(
@@ -280,7 +279,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     };
 
                     // len = end - start
-                    let len = self.builder.build_int_sub(end_val, start_val, "slice_len")?;
+                    let len = self
+                        .builder
+                        .build_int_sub(end_val, start_val, "slice_len")?;
 
                     // Create slice struct { *T, i64 }
                     let slice_type = self.llvm_type(ty).into_struct_type();
@@ -759,9 +760,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 };
                 Ok(val)
             }
-            hir::HirExpr::Intrinsic { name, args, .. } => {
-                self.generate_intrinsic(name, args)
-            }
+            hir::HirExpr::Intrinsic { name, args, .. } => self.generate_intrinsic(name, args),
             hir::HirExpr::Call {
                 name,
                 namespace,
@@ -843,7 +842,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                             // Check if this is a known method - try to find it
                             let method_name = format!("{}_{}", mono_type_name, name);
-                            // NOTE: method names are already mangled as "Struct_method", 
+                            // NOTE: method names are already mangled as "Struct_method",
                             // but we might need to mangle further if struct is in a package.
                             // For now, assume global or already handled.
                             let mangled = self.mangle_name(&method_name, false);
@@ -1092,7 +1091,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                         .or_else(|| self.const_variables.get(obj_name))
                         .copied()
                         .ok_or_else(|| format!("Variable not found: {}", obj_name))?;
-                    
+
                     let var_ty = object.ty();
 
                     match var_ty {
@@ -1286,9 +1285,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 let loaded = self.builder.build_load(llvm_type, ptr, "deref_load")?;
                 Ok(loaded.into())
             }
-            hir::HirExpr::Intrinsic { name, args, .. } => {
-                self.generate_intrinsic(name, args)
-            }
+            hir::HirExpr::Intrinsic { name, args, .. } => self.generate_intrinsic(name, args),
             hir::HirExpr::TypeLiteral(_, _, _) => {
                 Err("Type literal should only be used as an argument to an intrinsic".into())
             }

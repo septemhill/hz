@@ -357,7 +357,7 @@ fn test_function_definition() {
     let types: Vec<&str> = result.iter().map(|t| t.token.type_name()).collect();
     assert!(types.contains(&"fn"));
     assert!(types.contains(&"ident")); // main
-    // i64 is treated as identifier (not a keyword in this lexer)
+                                       // i64 is treated as identifier (not a keyword in this lexer)
     assert!(types.iter().filter(|&&t| t == "ident").count() >= 2);
     assert!(types.contains(&"return"));
     assert!(types.contains(&"int"));

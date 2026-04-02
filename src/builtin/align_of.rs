@@ -22,13 +22,15 @@ impl Intrinsic for AlignOfIntrinsic {
         };
 
         let llvm_type = codegen.llvm_type(ty);
-        
+
         let align = llvm_type.get_alignment();
-        
+
         // Convert to u64 as requested
         let u64_type = codegen.context.i64_type();
-        let align_u64 = codegen.builder.build_int_cast(align, u64_type, "align_of_u64")?;
-        
+        let align_u64 = codegen
+            .builder
+            .build_int_cast(align, u64_type, "align_of_u64")?;
+
         Ok(align_u64.into())
     }
 }

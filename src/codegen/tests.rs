@@ -3,7 +3,7 @@ use crate::ast::{BinaryOp, Mutability, Span, StructField, Type, Visibility};
 use crate::hir::{HirExpr, HirStmt};
 use crate::lower;
 use crate::parser;
-use crate::sema::{SemanticAnalyzer, infer::TypedStructDef};
+use crate::sema::{infer::TypedStructDef, SemanticAnalyzer};
 use inkwell::context::Context;
 use std::collections::HashMap;
 
@@ -500,8 +500,8 @@ fn test_generate_continue_uses_loop_latch() -> Result<(), Box<dyn std::error::Er
 }
 
 #[test]
-fn test_generate_option_for_re_evaluates_iterable_and_stops_on_null()
--> Result<(), Box<dyn std::error::Error>> {
+fn test_generate_option_for_re_evaluates_iterable_and_stops_on_null(
+) -> Result<(), Box<dyn std::error::Error>> {
     let context = Context::create();
     let stdlib = StdLib::new();
     let mut codegen = CodeGenerator::new(

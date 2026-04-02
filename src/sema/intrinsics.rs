@@ -1,4 +1,4 @@
-use crate::ast::{Expr, Type, Span};
+use crate::ast::{Expr, Span, Type};
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::infer::{TypedExpr, TypedExprKind};
 
@@ -28,12 +28,17 @@ impl Intrinsic {
     /// Used by SymbolResolver and TypeAnalyzer
     pub fn validate_args(&self, args: &[Expr], span: Span) -> AnalysisResult<()> {
         match self {
-            Intrinsic::IsNull | Intrinsic::IsNotNull | Intrinsic::TypeOf | Intrinsic::SizeOf | Intrinsic::AlignOf => {
+            Intrinsic::IsNull
+            | Intrinsic::IsNotNull
+            | Intrinsic::TypeOf
+            | Intrinsic::SizeOf
+            | Intrinsic::AlignOf => {
                 if args.len() != 1 {
                     return Err(AnalysisError::new_with_span(
                         &format!("@{} requires exactly one argument", self.name()),
                         &span,
-                    ).with_module("intrinsics"));
+                    )
+                    .with_module("intrinsics"));
                 }
             }
             Intrinsic::BitCast => {
@@ -41,7 +46,8 @@ impl Intrinsic {
                     return Err(AnalysisError::new_with_span(
                         "@bit_cast requires exactly two arguments",
                         &span,
-                    ).with_module("intrinsics"));
+                    )
+                    .with_module("intrinsics"));
                 }
             }
         }
@@ -61,7 +67,8 @@ impl Intrinsic {
                     return Err(AnalysisError::new_with_span(
                         "@bit_cast requires a type literal as its second argument",
                         &span,
-                    ).with_module("intrinsics"));
+                    )
+                    .with_module("intrinsics"));
                 }
             }
             _ => {}
@@ -77,9 +84,13 @@ impl Intrinsic {
                 let ty = &arg_types[0];
                 if !matches!(ty, Type::RawPtr | Type::Pointer(_) | Type::Option(_)) {
                     return Err(AnalysisError::new_with_span(
-                        &format!("@{} requires a pointer, rawptr, or optional argument", self.name()),
+                        &format!(
+                            "@{} requires a pointer, rawptr, or optional argument",
+                            self.name()
+                        ),
                         &span,
-                    ).with_module("intrinsics"));
+                    )
+                    .with_module("intrinsics"));
                 }
             }
             _ => {}

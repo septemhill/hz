@@ -16,6 +16,6 @@ pub use error::LexerError;
 #[allow(unused_imports)]
 pub use iterator::LexerIterator;
 #[allow(unused_imports)]
-pub use lexer::{Lexer, tokenize};
-pub use peekable::{PeekableLexerIterator, iter};
+pub use lexer::{tokenize, Lexer};
+pub use peekable::{iter, PeekableLexerIterator};
 pub use token::{Token, TokenWithSpan};
