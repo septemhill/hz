@@ -6,6 +6,7 @@ use super::error::LexerError;
 use super::iterator::LexerIterator;
 use super::token::{Token, TokenWithSpan};
 use crate::ast::Span;
+use crate::debug;
 
 /// Lexer for the Lang programming language
 ///
@@ -30,10 +31,6 @@ impl Lexer {
 
     /// Tokenize the source code and return all tokens (legacy method)
     pub fn tokenize(mut self) -> Result<Vec<TokenWithSpan>, LexerError> {
-        eprintln!(
-            "DEBUG tokenize: source='{}'",
-            self.source.iter().collect::<String>()
-        );
         let mut tokens = Vec::new();
 
         while self.pos < self.source.len() {
@@ -282,7 +279,9 @@ impl Lexer {
             "defer" => Token::Defer,
             "defer!" => Token::DeferBang,
             "error" => {
-                eprintln!("DEBUG LEXER: Found 'error' keyword!");
+                if debug::debug_enabled() {
+                    eprintln!("DEBUG LEXER: Found 'error' keyword!");
+                }
                 Token::ErrorKw
             }
             "try" => Token::Try,
@@ -290,10 +289,14 @@ impl Lexer {
             "break" => Token::Break,
             "continue" => Token::Continue,
             "rawptr" => Token::RawPtr,
+            "varargs" => Token::VarArgs,
+            "inline" => Token::Inline,
             "_" => Token::Underscore,
             _ => Token::Ident(ident.clone()),
         };
-        eprintln!("DEBUG LEXER: ident='{}' => {:?}", ident, result);
+        if debug::debug_enabled() {
+            eprintln!("DEBUG LEXER: ident='{}' => {:?}", ident, result);
+        }
         result
     }
 

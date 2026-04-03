@@ -4,6 +4,7 @@
 //! It uses a state machine to track parsing progress for debugging purposes.
 
 use crate::ast::*;
+use crate::debug;
 use crate::lexer::{iter as lexer_iter, PeekableLexerIterator, Token, TokenWithSpan};
 
 /// Parser state for tracking current parsing context
@@ -797,7 +798,9 @@ impl Parser {
 
     /// Parse an import statement
     fn parse_import_statement(&mut self) -> Result<Vec<(Option<String>, String)>, ParseError> {
-        eprintln!("DEBUG parse_import_statement: start");
+        if debug::debug_enabled() {
+            eprintln!("DEBUG parse_import_statement: start");
+        }
         let mut packages = Vec::new();
 
         // Helper to parse a single package with optional alias
@@ -857,13 +860,17 @@ impl Parser {
 
         // Check for grouped imports with parentheses
         if self.match_token(Token::LParen) {
-            eprintln!("DEBUG parse_import_statement: grouped import detected");
+            if debug::debug_enabled() {
+                eprintln!("DEBUG parse_import_statement: grouped import detected");
+            }
             loop {
                 self.skip_whitespace();
 
                 // Check for closing paren
                 if self.match_token(Token::RParen) {
-                    eprintln!("DEBUG parse_import_statement: found RParen, breaking");
+                    if debug::debug_enabled() {
+                        eprintln!("DEBUG parse_import_statement: found RParen, breaking");
+                    }
                     self.match_token(Token::Semicolon);
                     break;
                 }
@@ -879,7 +886,9 @@ impl Parser {
                 self.match_token(Token::Semicolon);
             }
         } else {
-            eprintln!("DEBUG parse_import_statement: non-grouped import");
+            if debug::debug_enabled() {
+                eprintln!("DEBUG parse_import_statement: non-grouped import");
+            }
             let (alias, name) = parse_package_item(self)?;
             packages.push((alias, name));
             self.match_token(Token::Semicolon);
@@ -1108,17 +1117,30 @@ impl Parser {
             }
         }
 
+        for (index, param) in params.iter().enumerate() {
+            if matches!(param.ty, Type::VarArgs) && index + 1 != params.len() {
+                return Err(ParseError {
+                    message: "varargs parameter must be the last function parameter".to_string(),
+                    location: self.current_token().map(|t| t.span.start),
+                });
+            }
+        }
+
         Ok(params)
     }
 
     /// Parse return type (required)
     fn parse_return_type(&mut self) -> Result<Type, ParseError> {
-        eprintln!("DEBUG parse_return_type: start");
+        if debug::debug_enabled() {
+            eprintln!("DEBUG parse_return_type: start");
+        }
         self.skip_whitespace();
 
         // Check for void return type
         if let Some(Token::Ident(id)) = self.current().cloned() {
-            eprintln!("DEBUG parse_return_type: found Ident, id={}", id);
+            if debug::debug_enabled() {
+                eprintln!("DEBUG parse_return_type: found Ident, id={}", id);
+            }
             if id == "void" {
                 self.advance();
                 // Check for error suffix !
@@ -1173,7 +1195,9 @@ impl Parser {
 
     /// Parse function body
     fn parse_function_body(&mut self) -> Result<Vec<Stmt>, ParseError> {
-        eprintln!("DEBUG parse_function_body: start");
+        if debug::debug_enabled() {
+            eprintln!("DEBUG parse_function_body: start");
+        }
         if !self.match_token(Token::LBrace) {
             return Err(ParseError {
                 message: "Expected '{'".to_string(),
@@ -1224,7 +1248,15 @@ impl Parser {
                             self.advance(); // consume identifier
                             self.advance(); // consume colon
                                             // Now parse for with the label
-                            return self.parse_for_stmt(Some(label_name));
+                            return self.parse_for_stmt(Some(label_name), false);
+                        } else if after_colon.token == Token::Inline {
+                            if let Some(after_inline) = self.peek(3) {
+                                if after_inline.token == Token::For {
+                                    self.advance(); // consume identifier
+                                    self.advance(); // consume colon
+                                    return self.parse_inline_stmt(Some(label_name));
+                                }
+                            }
                         }
                     }
                 }
@@ -1242,7 +1274,8 @@ impl Parser {
             Token::Var => self.parse_var_stmt(),
             Token::Const => self.parse_const_stmt(),
             Token::If => self.parse_if_stmt(),
-            Token::For => self.parse_for_stmt(None),
+            Token::For => self.parse_for_stmt(None, false),
+            Token::Inline => self.parse_inline_stmt(None),
             Token::Break => self.parse_break_stmt(),
             Token::Continue => self.parse_continue_stmt(),
             Token::LBrace => self.parse_block_stmt(),
@@ -1783,7 +1816,11 @@ impl Parser {
 
     /// Parse for statement
     /// If a label is provided (e.g., from a preceding identifier:colon), use it
-    fn parse_for_stmt(&mut self, label: Option<String>) -> Result<Stmt, ParseError> {
+    fn parse_for_stmt(
+        &mut self,
+        label: Option<String>,
+        is_inline: bool,
+    ) -> Result<Stmt, ParseError> {
         let start = self.current_token().map(|t| t.span.start).unwrap_or(0);
         self.advance(); // consume 'for'
 
@@ -1876,6 +1913,7 @@ impl Parser {
         let body = Box::new(self.parse_statement()?);
 
         Ok(Stmt::For {
+            is_inline,
             label,
             var_name,
             iterable,
@@ -1887,6 +1925,21 @@ impl Parser {
                 end: start + 3,
             }, // 'for' is 3 characters
         })
+    }
+
+    fn parse_inline_stmt(&mut self, label: Option<String>) -> Result<Stmt, ParseError> {
+        let start = self.current_token().map(|t| t.span.start).unwrap_or(0);
+        self.advance(); // consume 'inline'
+        self.skip_whitespace();
+
+        if !matches!(self.current(), Some(Token::For)) {
+            return Err(ParseError {
+                message: "Expected 'for' after 'inline'".to_string(),
+                location: Some(start),
+            });
+        }
+
+        self.parse_for_stmt(label, true)
     }
 
     /// Parse block statement
@@ -3120,6 +3173,10 @@ impl Parser {
 
     /// Parse a base type (without modifiers)
     fn parse_base_type(&mut self) -> Result<Type, ParseError> {
+        if self.match_token(Token::VarArgs) {
+            return Ok(Type::VarArgs);
+        }
+
         // Check for function type: fn(params) return_type
         if self.match_token(Token::Fn) {
             self.skip_whitespace();
@@ -3285,6 +3342,7 @@ impl Parser {
             "bool" => Type::Bool,
             "void" => Type::Void,
             "rawptr" => Type::RawPtr,
+            "varargs" => Type::VarArgs,
             "self" => Type::SelfType,
             _ => {
                 if self.is_generic_param(&type_name) {

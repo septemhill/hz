@@ -723,5 +723,14 @@ fn format_type(ty: &Type) -> String {
                 .join(", ");
             format!("fn({}) {}", params_str, format_type(return_type))
         }
+        Type::VarArgs => "varargs".to_string(),
+        Type::VarArgsPack(types) => {
+            let inner = types
+                .iter()
+                .map(|t| format_type(t))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("varargs({})", inner)
+        }
     }
 }

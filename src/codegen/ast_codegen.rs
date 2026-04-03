@@ -1617,6 +1617,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                     .ptr_type(inkwell::AddressSpace::default())
                     .into()
             }
+            Type::VarArgs => self.context.i64_type().into(),
+            Type::VarArgsPack(types) => {
+                let mut element_types: Vec<BasicTypeEnum<'ctx>> = Vec::new();
+                for t in types {
+                    element_types.push(self.llvm_type(t));
+                }
+                self.context.struct_type(&element_types, false).into()
+            }
         }
     }
 

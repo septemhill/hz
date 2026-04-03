@@ -1,0 +1,4 @@
+arg[0] type = i64
+arg[1] type = []const u8
+arg[2] type = f64
+arg[3] type = bool

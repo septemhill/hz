@@ -40,6 +40,8 @@ pub enum Token {
     Break,
     Continue,
     RawPtr,
+    VarArgs,
+    Inline,
 
     // Identifiers
     Ident(String),
@@ -160,6 +162,8 @@ impl Token {
             Token::Break => "break",
             Token::Continue => "continue",
             Token::RawPtr => "rawptr",
+            Token::VarArgs => "varargs",
+            Token::Inline => "inline",
             Token::FatArrow => "=>",
             Token::Assign => "=",
             Token::Plus => "+",

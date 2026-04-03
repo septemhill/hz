@@ -5,6 +5,7 @@
 
 use crate::ast::Visibility;
 use crate::ast::{AssignOp, BinaryOp, Expr, FnDef, FnParam, Program, Span, Stmt, Type, UnaryOp};
+use crate::debug;
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::symbol::{ConstantValue, Symbol, SymbolTable};
 use std::collections::{HashMap, HashSet};
@@ -171,6 +172,7 @@ pub enum TypedStmtKind {
     },
     /// For loop
     For {
+        is_inline: bool,
         label: Option<String>,
         var_name: Option<String>,
         iterable: TypedExpr,
@@ -210,6 +212,7 @@ pub struct TypedFnDef {
     pub params: Vec<TypedFnParam>,
     pub return_ty: Type,
     pub body: Vec<TypedStmt>,
+    pub is_varargs_specialization: bool,
     pub span: Span,
 }
 
@@ -222,6 +225,7 @@ pub struct TypedFnParam {
 fn destructured_binding_type(aggregate_ty: &Type, index: usize) -> Type {
     match aggregate_ty {
         Type::Tuple(types) => types.get(index).cloned().unwrap_or(Type::I64),
+        Type::VarArgsPack(types) => types.get(index).cloned().unwrap_or(Type::I64),
         _ => aggregate_ty.clone(),
     }
 }
@@ -236,6 +240,17 @@ fn destructured_binding_type_checked(
             AnalysisError::new_with_span(
                 &format!(
                     "Tuple destructuring expected at least {} elements, but found {}",
+                    index + 1,
+                    types.len()
+                ),
+                span,
+            )
+            .with_module("infer")
+        }),
+        Type::VarArgsPack(types) => types.get(index).cloned().ok_or_else(|| {
+            AnalysisError::new_with_span(
+                &format!(
+                    "Varargs destructuring expected at least {} elements, but found {}",
                     index + 1,
                     types.len()
                 ),
@@ -260,6 +275,7 @@ fn for_binding_type(iterable: &Expr, iterable_ty: &Type) -> AnalysisResult<Optio
         Type::Array { element_type, .. } => Ok(Some(element_type.as_ref().clone())),
         Type::Option(inner_ty) => Ok(Some(inner_ty.as_ref().clone())),
         Type::Tuple(types) if types.len() == 2 => Ok(types.first().cloned()),
+        Type::VarArgsPack(_) => Ok(None),
         Type::Bool => Ok(None),
         _ => Err(AnalysisError::new(&format!(
             "For loop iterable of type {} is not supported",
@@ -276,6 +292,7 @@ fn for_index_type(iterable: &Expr, iterable_ty: &Type) -> AnalysisResult<Option<
 
     match iterable_ty {
         Type::Array { .. } => Ok(Some(Type::I64)),
+        Type::VarArgsPack(_) => Ok(Some(Type::I64)),
         Type::Option(_) | Type::Tuple(_) | Type::Bool => Ok(None),
         _ => Err(AnalysisError::new(&format!(
             "For loop iterable of type {} is not supported",
@@ -398,6 +415,8 @@ pub struct TypeInferrer {
     errors: HashMap<String, crate::ast::ErrorDef>,
     /// Map of function name to its definition
     functions: HashMap<String, crate::ast::FnDef>,
+    /// Set of external function names
+    external_function_names: HashSet<String>,
     /// Expected type for the current expression being inferred
     expected_type: Option<Type>,
     /// Expected return type for the current function being inferred
@@ -426,6 +445,52 @@ pub struct TypeInferrer {
     try_expression_span: Option<Span>,
 }
 
+fn has_varargs_parameter(params: &[FnParam]) -> bool {
+    params
+        .last()
+        .is_some_and(|param| matches!(param.ty, Type::VarArgs))
+}
+
+fn contains_varargs_marker(ty: &Type) -> bool {
+    match ty {
+        Type::VarArgs | Type::VarArgsPack(_) => true,
+        Type::Pointer(inner) | Type::Option(inner) | Type::Result(inner) | Type::Const(inner) => {
+            contains_varargs_marker(inner)
+        }
+        Type::Array { element_type, .. } => contains_varargs_marker(element_type),
+        Type::Tuple(types) => types.iter().any(contains_varargs_marker),
+        Type::Custom { generic_args, .. } => generic_args.iter().any(contains_varargs_marker),
+        Type::Function {
+            params,
+            return_type,
+        } => params.iter().any(contains_varargs_marker) || contains_varargs_marker(return_type),
+        _ => false,
+    }
+}
+
+fn stmt_contains_loop_control(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Break { .. } | Stmt::Continue { .. } => true,
+        Stmt::Block { stmts, .. } => stmts.iter().any(stmt_contains_loop_control),
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            stmt_contains_loop_control(then_branch)
+                || else_branch
+                    .as_deref()
+                    .is_some_and(stmt_contains_loop_control)
+        }
+        Stmt::For { body, .. } => stmt_contains_loop_control(body),
+        Stmt::Switch { cases, .. } => cases
+            .iter()
+            .any(|case| stmt_contains_loop_control(&case.body)),
+        Stmt::Defer { stmt, .. } | Stmt::DeferBang { stmt, .. } => stmt_contains_loop_control(stmt),
+        _ => false,
+    }
+}
+
 impl TypeInferrer {
     /// Create a new type inferrer
     pub fn new(
@@ -435,6 +500,7 @@ impl TypeInferrer {
         enums: HashMap<String, crate::ast::EnumDef>,
         errors: HashMap<String, crate::ast::ErrorDef>,
         functions: HashMap<String, crate::ast::FnDef>,
+        external_function_names: HashSet<String>,
         imports: Vec<(Option<String>, String)>,
     ) -> Self {
         TypeInferrer {
@@ -444,6 +510,7 @@ impl TypeInferrer {
             enums,
             errors,
             functions,
+            external_function_names,
             expected_type: None,
             expected_return_type: None,
             type_mappings: HashMap::new(),
@@ -483,6 +550,10 @@ impl TypeInferrer {
             | Type::Pointer(_)
             | Type::Function { .. }
             | Type::Error => Ok((8, 8)),
+            Type::VarArgs => Err(AnalysisError::new(
+                "Type metadata is not available for unspecialized varargs",
+            )
+            .with_module("infer")),
             Type::GenericParam(name) => {
                 if let Some(mapped) = self.type_mappings.get(name).cloned() {
                     self.type_layout_of(&mapped, visiting)
@@ -507,6 +578,7 @@ impl TypeInferrer {
             }
             Type::Const(inner) => self.type_layout_of(inner, visiting),
             Type::Tuple(types) => self.aggregate_layout_of(types, visiting),
+            Type::VarArgsPack(types) => self.aggregate_layout_of(types, visiting),
             Type::Array { size, element_type } => match size {
                 Some(count) => {
                     let (elem_size, elem_align) = self.type_layout_of(element_type, visiting)?;
@@ -624,6 +696,14 @@ impl TypeInferrer {
                     substituted.push(self.substitute_type(t, &effective_mappings));
                 }
                 Type::Tuple(substituted)
+            }
+            Type::VarArgs => Type::VarArgs,
+            Type::VarArgsPack(types) => {
+                let mut substituted = Vec::new();
+                for t in types {
+                    substituted.push(self.substitute_type(t, &effective_mappings));
+                }
+                Type::VarArgsPack(substituted)
             }
             Type::Custom {
                 name,
@@ -1070,7 +1150,7 @@ impl TypeInferrer {
 
         let mut functions = Vec::new();
         for f in &program.functions {
-            if f.generic_params.is_empty() {
+            if f.generic_params.is_empty() && !has_varargs_parameter(&f.params) {
                 functions.push(self.infer_fn(f)?);
             }
         }
@@ -1085,7 +1165,9 @@ impl TypeInferrer {
                 for m in &s.methods {
                     let full_name = format!("{}_{}", s.name, m.name);
                     if let Some(fn_def) = self.functions.get(&full_name) {
-                        if fn_def.generic_params.is_empty() {
+                        if fn_def.generic_params.is_empty()
+                            && !has_varargs_parameter(&fn_def.params)
+                        {
                             // Clone to avoid borrow conflict
                             let fn_def_clone = fn_def.clone();
                             if let Ok(typed_f) = self.infer_fn(&fn_def_clone) {
@@ -1104,7 +1186,7 @@ impl TypeInferrer {
             for m in &e.methods {
                 let full_name = format!("{}_{}", e.name, m.name);
                 if let Some(fn_def) = self.functions.get(&full_name) {
-                    if fn_def.generic_params.is_empty() {
+                    if fn_def.generic_params.is_empty() && !has_varargs_parameter(&fn_def.params) {
                         // Clone to avoid borrow conflict
                         let mut fn_def_clone = fn_def.clone();
                         // Rename to include enum name prefix
@@ -1172,7 +1254,7 @@ impl TypeInferrer {
         let mut ast_functions: Vec<crate::ast::FnDef> = program
             .functions
             .iter()
-            .filter(|f| f.generic_params.is_empty())
+            .filter(|f| f.generic_params.is_empty() && !has_varargs_parameter(&f.params))
             .cloned()
             .collect();
         let struct_method_names: HashSet<String> = ast_structs
@@ -1211,6 +1293,7 @@ impl TypeInferrer {
                     .collect(),
                 return_ty: ext_fn.return_ty.clone(),
                 body: Vec::new(),
+                is_varargs_specialization: false,
                 span: ext_fn.span,
             });
         }
@@ -1232,6 +1315,9 @@ impl TypeInferrer {
     fn infer_struct(&mut self, s: &crate::ast::StructDef) -> AnalysisResult<TypedStructDef> {
         let mut methods = Vec::new();
         for m in &s.methods {
+            if has_varargs_parameter(&m.params) {
+                continue;
+            }
             let mut tm = self.infer_fn(m)?;
             // Mangle name to include struct prefix
             tm.name = format!("{}_{}", s.name, m.name);
@@ -1252,6 +1338,9 @@ impl TypeInferrer {
     fn infer_enum(&mut self, e: &crate::ast::EnumDef) -> AnalysisResult<TypedEnumDef> {
         let mut methods = Vec::new();
         for m in &e.methods {
+            if has_varargs_parameter(&m.params) {
+                continue;
+            }
             let mut tm = self.infer_fn(m)?;
             // Mangle name to include enum prefix
             tm.name = format!("{}_{}", e.name, m.name);
@@ -1338,6 +1427,13 @@ impl TypeInferrer {
                     self.match_type_params(pt, at, mappings);
                 }
             }
+            (Type::VarArgsPack(p_types), Type::VarArgsPack(a_types))
+                if p_types.len() == a_types.len() =>
+            {
+                for (pt, at) in p_types.iter().zip(a_types.iter()) {
+                    self.match_type_params(pt, at, mappings);
+                }
+            }
             (
                 Type::Custom {
                     name: p_name,
@@ -1394,6 +1490,7 @@ impl TypeInferrer {
         type_args: &[Type],
         mangled_name: &str,
         is_struct_method: bool,
+        varargs_pack_types: Option<&[Type]>,
     ) -> AnalysisResult<()> {
         eprintln!(
             "DEBUG instantiate_fn: name={}, type_args={:?}, mangled_name={}, type_mappings_before={:?}",
@@ -1430,7 +1527,11 @@ impl TypeInferrer {
                 .iter()
                 .map(|p| FnParam {
                     name: p.name.clone(),
-                    ty: self.substitute_type(&p.ty, &mappings),
+                    ty: if matches!(p.ty, Type::VarArgs) {
+                        Type::VarArgsPack(varargs_pack_types.unwrap_or(&[]).to_vec())
+                    } else {
+                        self.substitute_type(&p.ty, &mappings)
+                    },
                 })
                 .collect(),
             return_ty: self.substitute_type(&f_def.return_ty, &mappings),
@@ -1449,6 +1550,7 @@ impl TypeInferrer {
         // Infer the instantiated function - keep the type mappings for inference
         // Note: We temporarily keep the mappings active for inference
         let mut typed_f = self.infer_fn(&instantiated_f)?;
+        typed_f.is_varargs_specialization = varargs_pack_types.is_some();
         // Only add to global functions if not a struct method
         // Exception: struct constructors (new) should be in global functions
         if !is_struct_method {
@@ -1716,6 +1818,7 @@ impl TypeInferrer {
             params: typed_params,
             return_ty: substituted_return_ty,
             body,
+            is_varargs_specialization: false,
             span: f.span,
         })
     }
@@ -1958,6 +2061,7 @@ impl TypeInferrer {
                 })
             }
             Stmt::For {
+                is_inline,
                 label,
                 var_name,
                 iterable,
@@ -1967,6 +2071,110 @@ impl TypeInferrer {
                 span,
             } => {
                 let typed_iterable = self.infer_expr(iterable)?;
+                if *is_inline {
+                    let element_types = if let Type::VarArgsPack(element_types) = &typed_iterable.ty
+                    {
+                        element_types
+                    } else {
+                        return Err(AnalysisError::new_with_span(
+                            "inline for currently supports only varargs packs",
+                            span,
+                        )
+                        .with_module("infer"));
+                    };
+
+                    if stmt_contains_loop_control(body) {
+                        return Err(AnalysisError::new_with_span(
+                            "break/continue are not supported inside inline-unrolled for loops",
+                            span,
+                        )
+                        .with_module("infer"));
+                    }
+
+                    let binding_name = capture.clone().or(var_name.clone());
+                    let mut unrolled_stmts = Vec::new();
+
+                    for (index, element_ty) in element_types.iter().enumerate() {
+                        self.symbol_table.enter_scope();
+                        let mut iteration_stmts = Vec::new();
+
+                        if let Some(iv) = index_var {
+                            self.symbol_table.define_with_value(
+                                iv.clone(),
+                                Type::I64,
+                                Visibility::Private,
+                                true,
+                                Some(ConstantValue::Int(index as i64)),
+                            );
+                            iteration_stmts.push(TypedStmt {
+                                stmt: TypedStmtKind::Let {
+                                    name: iv.clone(),
+                                    names: None,
+                                    ty: Type::I64,
+                                    value: Some(TypedExpr {
+                                        expr: TypedExprKind::Int(index as i64),
+                                        ty: Type::I64,
+                                        span: *span,
+                                    }),
+                                    is_const: true,
+                                },
+                                span: *span,
+                            });
+                        }
+
+                        if let Some(name) = &binding_name {
+                            self.symbol_table.define(
+                                name.clone(),
+                                element_ty.clone(),
+                                Visibility::Private,
+                                false,
+                            );
+                            iteration_stmts.push(TypedStmt {
+                                stmt: TypedStmtKind::Let {
+                                    name: name.clone(),
+                                    names: None,
+                                    ty: element_ty.clone(),
+                                    value: Some(TypedExpr {
+                                        expr: TypedExprKind::TupleIndex {
+                                            tuple: Box::new(typed_iterable.clone()),
+                                            index,
+                                        },
+                                        ty: element_ty.clone(),
+                                        span: *span,
+                                    }),
+                                    is_const: true,
+                                },
+                                span: *span,
+                            });
+                        }
+
+                        iteration_stmts.push(self.infer_stmt(body)?);
+                        self.symbol_table.exit_scope();
+
+                        unrolled_stmts.push(TypedStmt {
+                            stmt: TypedStmtKind::Block {
+                                stmts: iteration_stmts,
+                            },
+                            span: *span,
+                        });
+                    }
+
+                    return Ok(TypedStmt {
+                        stmt: TypedStmtKind::Block {
+                            stmts: unrolled_stmts,
+                        },
+                        span: *span,
+                    });
+                }
+
+                if matches!(typed_iterable.ty, Type::VarArgsPack(_)) {
+                    return Err(AnalysisError::new_with_span(
+                        "Iterating over varargs requires 'inline for'",
+                        span,
+                    )
+                    .with_module("infer"));
+                }
+
                 let binding_ty = for_binding_type(iterable, &typed_iterable.ty)?;
                 let index_ty = for_index_type(iterable, &typed_iterable.ty)?;
 
@@ -2022,6 +2230,7 @@ impl TypeInferrer {
 
                 Ok(TypedStmt {
                     stmt: TypedStmtKind::For {
+                        is_inline: *is_inline,
                         label: label.clone(),
                         var_name: var_name.clone(),
                         iterable: typed_iterable,
@@ -2101,7 +2310,9 @@ impl TypeInferrer {
 
     /// Infer the type of an expression
     fn infer_expr(&mut self, expr: &Expr) -> AnalysisResult<TypedExpr> {
-        eprintln!("DEBUG: infer_expr called");
+        if debug::debug_enabled() {
+            eprintln!("DEBUG: infer_expr called");
+        }
         // Extract span from the expression
         let span = match expr {
             Expr::Int(_, span) => *span,
@@ -2198,7 +2409,12 @@ impl TypeInferrer {
                                 Some(types.clone())
                             }
                             _ => {
-                                eprintln!("DEBUG Tuple: expected_type is Some({:?})", expected_ty);
+                                if debug::debug_enabled() {
+                                    eprintln!(
+                                        "DEBUG Tuple: expected_type is Some({:?})",
+                                        expected_ty
+                                    );
+                                }
                                 None
                             }
                         });
@@ -2241,7 +2457,11 @@ impl TypeInferrer {
             }
             Expr::TupleIndex { tuple, index, span } => {
                 let typed_tuple = self.infer_expr(tuple)?;
-                if let Type::Tuple(types) = &typed_tuple.ty {
+                let maybe_types = match &typed_tuple.ty {
+                    Type::Tuple(types) | Type::VarArgsPack(types) => Some(types),
+                    _ => None,
+                };
+                if let Some(types) = maybe_types {
                     if *index < types.len() {
                         let ty = types[*index].clone();
                         Ok(TypedExpr {
@@ -2557,11 +2777,20 @@ impl TypeInferrer {
                 let mut effective_generic_args = generic_args.clone();
 
                 if let Some(ns) = namespace {
-                    eprintln!("DEBUG resolve_call - ns={}, name={}", ns, name);
+                    if debug::debug_enabled() {
+                        eprintln!("DEBUG resolve_call - ns={}, name={}", ns, name);
+                    }
                     if let Some(var_symbol) = self.symbol_table.resolve(ns) {
-                        eprintln!("DEBUG resolve_call - var_symbol.ty={:?}", var_symbol.ty);
+                        if debug::debug_enabled() {
+                            eprintln!("DEBUG resolve_call - var_symbol.ty={:?}", var_symbol.ty);
+                        }
                         if let Some(struct_full_name) = custom_type_name(&var_symbol.ty) {
-                            eprintln!("DEBUG resolve_call - struct_full_name={}", struct_full_name);
+                            if debug::debug_enabled() {
+                                eprintln!(
+                                    "DEBUG resolve_call - struct_full_name={}",
+                                    struct_full_name
+                                );
+                            }
 
                             // Check if this is a type reference (generic struct name) or variable reference (monomorphized)
                             // If struct_full_name == ns, it's a type reference (static call like Compose.new)
@@ -2605,73 +2834,132 @@ impl TypeInferrer {
                     }
                 }
 
-                eprintln!("DEBUG resolve_call - fn_lookup_name={}", fn_lookup_name);
+                if debug::debug_enabled() {
+                    eprintln!("DEBUG resolve_call - fn_lookup_name={}", fn_lookup_name);
+                }
                 if let Some(symbol) = self.symbol_table.resolve(&fn_lookup_name).cloned() {
-                    eprintln!("DEBUG resolve_call - found symbol: {:?}", symbol.ty);
-                    let (actual_generic_args, mangled_name, method_mangled) = if !symbol
+                    if debug::debug_enabled() {
+                        eprintln!("DEBUG resolve_call - found symbol: {:?}", symbol.ty);
+                    }
+                    let symbol_params = if let Type::Function { params, .. } = &symbol.ty {
+                        params.clone()
+                    } else {
+                        return Err(AnalysisError::new_with_span(
+                            &format!("'{}' is not a function", fn_lookup_name),
+                            span,
+                        )
+                        .with_module("infer"));
+                    };
+
+                    let self_param_offset = if instance_type.is_some() { 1 } else { 0 };
+                    let has_varargs = symbol_params
+                        .last()
+                        .is_some_and(|param| matches!(param, Type::VarArgs));
+                    let callable_params = symbol_params.len().saturating_sub(self_param_offset);
+                    let fixed_param_count = if has_varargs {
+                        callable_params.saturating_sub(1)
+                    } else {
+                        callable_params
+                    };
+
+                    if typed_args.len() < fixed_param_count
+                        || (!has_varargs && typed_args.len() != fixed_param_count)
+                    {
+                        let expected = if has_varargs {
+                            format!("at least {}", fixed_param_count)
+                        } else {
+                            fixed_param_count.to_string()
+                        };
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "Function '{}' expects {} argument(s), but {} were provided",
+                                fn_lookup_name,
+                                expected,
+                                typed_args.len()
+                            ),
+                            span,
+                        )
+                        .with_module("infer"));
+                    }
+
+                    let varargs_pack_types: Vec<Type> = if has_varargs {
+                        typed_args[fixed_param_count..]
+                            .iter()
+                            .map(|expr| expr.ty.clone())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+
+                    let is_external = self.external_function_names.contains(&fn_lookup_name);
+
+                    let (actual_generic_args, mangled_name, method_mangled) = if (!symbol
                         .generic_params
                         .is_empty()
+                        || has_varargs)
+                        && !is_external
                     {
                         let mut type_args = effective_generic_args;
                         if type_args.len() < symbol.generic_params.len() {
-                            if let Type::Function { params, .. } = &symbol.ty {
-                                // Build a pre-seeded mapping from already-known type args
-                                // (e.g. struct's T=I32) so that when we match remaining params
-                                // the known types act as constraints.
-                                let mut pre_seeded: HashMap<String, Type> = HashMap::new();
-                                for (i, p_name) in symbol.generic_params.iter().enumerate() {
-                                    if i < type_args.len() {
-                                        pre_seeded.insert(p_name.clone(), type_args[i].clone());
-                                    }
+                            let mut pre_seeded: HashMap<String, Type> = HashMap::new();
+                            for (i, p_name) in symbol.generic_params.iter().enumerate() {
+                                if i < type_args.len() {
+                                    pre_seeded.insert(p_name.clone(), type_args[i].clone());
                                 }
+                            }
 
-                                let inferred_arg_types: Vec<Type> =
-                                    typed_args.iter().map(|e| e.ty.clone()).collect();
+                            let inferred_arg_types: Vec<Type> =
+                                typed_args.iter().map(|e| e.ty.clone()).collect();
+                            let mut mappings = pre_seeded;
+                            for (p_ty, a_ty) in symbol_params
+                                .iter()
+                                .skip(self_param_offset)
+                                .take(fixed_param_count)
+                                .zip(inferred_arg_types.iter().take(fixed_param_count))
+                            {
+                                self.match_type_params(p_ty, a_ty, &mut mappings);
+                            }
 
-                                // Try to infer remaining params from call arguments (no instance prepend
-                                // since we're matching against the non-self params of the function).
-                                // Use only the call args (not instance) for inferring method-specific params.
-                                let mut mappings = pre_seeded;
-                                for (p_ty, a_ty) in params
-                                    .iter()
-                                    .skip(if instance_type.is_some() { 1 } else { 0 })
-                                    .zip(inferred_arg_types.iter())
-                                {
-                                    self.match_type_params(p_ty, a_ty, &mut mappings);
-                                }
-
-                                // Fill in type_args for remaining (un-filled) params
-                                for i in type_args.len()..symbol.generic_params.len() {
-                                    let p_name = &symbol.generic_params[i];
-                                    if let Some(ty) = mappings.get(p_name) {
-                                        type_args.push(ty.clone());
-                                    } else {
-                                        return Err(AnalysisError::new_with_span(
-                                            &format!(
-                                                "Could not infer type argument for '{}' in '{}'",
-                                                p_name, fn_lookup_name
-                                            ),
-                                            span,
-                                        )
-                                        .with_module("infer"));
-                                    }
+                            for i in type_args.len()..symbol.generic_params.len() {
+                                let p_name = &symbol.generic_params[i];
+                                if let Some(ty) = mappings.get(p_name) {
+                                    type_args.push(ty.clone());
+                                } else {
+                                    return Err(AnalysisError::new_with_span(
+                                        &format!(
+                                            "Could not infer type argument for '{}' in '{}'",
+                                            p_name, fn_lookup_name
+                                        ),
+                                        span,
+                                    )
+                                    .with_module("infer"));
                                 }
                             }
                         }
 
                         if type_args.len() != symbol.generic_params.len() {
                             return Err(AnalysisError::new_with_span(
-                                &format!("Generic function '{}' expects {} type arguments, but {} were provided/inferred", 
-                                    fn_lookup_name, symbol.generic_params.len(), type_args.len()),
-                                span,
-                            ).with_module("infer"));
+                                    &format!(
+                                        "Generic function '{}' expects {} type arguments, but {} were provided/inferred",
+                                        fn_lookup_name,
+                                        symbol.generic_params.len(),
+                                        type_args.len()
+                                    ),
+                                    span,
+                                )
+                                .with_module("infer"));
                         }
 
-                        let key = (fn_lookup_name.clone(), type_args.clone());
+                        let mut instantiation_signature = type_args.clone();
+                        if has_varargs {
+                            instantiation_signature
+                                .push(Type::VarArgsPack(varargs_pack_types.clone()));
+                        }
+
+                        let key = (fn_lookup_name.clone(), instantiation_signature.clone());
                         let (final_args, mangled, method_mangled) = if let Some(mangled) =
                             self.fn_instantiations.get(&key)
                         {
-                            // Derive method_mangled from cached mangled by stripping struct prefix
                             let m_opt = if let Some(ns) = &effective_namespace {
                                 if let Some(s_def) = self.structs.get(ns) {
                                     let s_len = s_def.generic_params.len();
@@ -2691,8 +2979,11 @@ impl TypeInferrer {
                                 if let Some(s_def) = self.structs.get(ns) {
                                     let s_len = s_def.generic_params.len();
                                     let s_mangled = self.get_mangled_name(ns, &type_args[..s_len]);
-                                    if s_len < type_args.len() {
-                                        let m = self.get_mangled_name(name, &type_args[s_len..]);
+                                    if s_len < instantiation_signature.len() {
+                                        let m = self.get_mangled_name(
+                                            name,
+                                            &instantiation_signature[s_len..],
+                                        );
                                         (format!("{}_{}", s_mangled, m), Some(m))
                                     } else {
                                         (format!("{}_{}", s_mangled, name), Some(name.clone()))
@@ -2700,26 +2991,44 @@ impl TypeInferrer {
                                 } else if let Some(e_def) = self.enums.get(ns) {
                                     let e_len = e_def.generic_params.len();
                                     let e_mangled = self.get_mangled_name(ns, &type_args[..e_len]);
-                                    if e_len < type_args.len() {
-                                        let m = self.get_mangled_name(name, &type_args[e_len..]);
+                                    if e_len < instantiation_signature.len() {
+                                        let m = self.get_mangled_name(
+                                            name,
+                                            &instantiation_signature[e_len..],
+                                        );
                                         (format!("{}_{}", e_mangled, m), Some(m))
                                     } else {
                                         (format!("{}_{}", e_mangled, name), Some(name.clone()))
                                     }
                                 } else {
-                                    (self.get_mangled_name(&fn_lookup_name, &type_args), None)
+                                    (
+                                        self.get_mangled_name(
+                                            &fn_lookup_name,
+                                            &instantiation_signature,
+                                        ),
+                                        None,
+                                    )
                                 }
                             } else {
-                                (self.get_mangled_name(&fn_lookup_name, &type_args), None)
+                                (
+                                    self.get_mangled_name(
+                                        &fn_lookup_name,
+                                        &instantiation_signature,
+                                    ),
+                                    None,
+                                )
                             };
                             self.fn_instantiations.insert(key.clone(), mangled.clone());
-                            // instantiate_fn pushes to new_functions internally; return value is ()
-                            // Pass effective_namespace.is_some() to indicate if this is a struct method
                             self.instantiate_fn(
                                 &fn_lookup_name,
                                 &type_args,
                                 &mangled,
                                 effective_namespace.is_some(),
+                                if has_varargs {
+                                    Some(&varargs_pack_types)
+                                } else {
+                                    None
+                                },
                             )?;
                             (type_args, mangled, m_opt)
                         };
@@ -2734,7 +3043,14 @@ impl TypeInferrer {
                         for (i, p_name) in symbol.generic_params.iter().enumerate() {
                             mappings.insert(p_name.clone(), actual_generic_args[i].clone());
                         }
-                        let substituted_ty = self.substitute_type(&symbol.ty, &mappings);
+                        let mut substituted_ty = self.substitute_type(&symbol.ty, &mappings);
+                        if has_varargs {
+                            if let Type::Function { params, .. } = &mut substituted_ty {
+                                if let Some(last) = params.last_mut() {
+                                    *last = Type::VarArgsPack(varargs_pack_types.clone());
+                                }
+                            }
+                        }
                         Symbol {
                             name: mangled_name.clone(),
                             ty: substituted_ty,
@@ -2744,7 +3060,15 @@ impl TypeInferrer {
                             generic_params: Vec::new(),
                         }
                     } else {
-                        symbol
+                        let mut final_symbol = symbol;
+                        if has_varargs {
+                            if let Type::Function { params, .. } = &mut final_symbol.ty {
+                                if let Some(last) = params.last_mut() {
+                                    *last = Type::VarArgsPack(varargs_pack_types.clone());
+                                }
+                            }
+                        }
+                        final_symbol
                     };
 
                     let return_type = if let Type::Function { return_type, .. } = &final_symbol.ty {
@@ -2757,23 +3081,24 @@ impl TypeInferrer {
                         .with_module("infer"));
                     };
 
-                    // For instance method calls, emit:
-                    //   name = method-only mangled (e.g., "map_i32")
-                    //   namespace = original variable (e.g., "comp")
-                    // Codegen reconstructs the full name as "Compose_i32_map_i32".
-                    // For static generic calls, suppress namespace and use the full mangled name.
-                    // Check if this is a type reference (generic struct name) or variable reference (monomorphized)
-                    // If namespace == effective_namespace, it's a type reference (static call like Compose.new)
-                    // If namespace != effective_namespace, it's a variable reference (instance call like comp.map)
                     let is_static_call = namespace.as_deref() == effective_namespace.as_deref();
+                    let call_args = if has_varargs {
+                        let mut packaged_args = typed_args[..fixed_param_count].to_vec();
+                        packaged_args.push(TypedExpr {
+                            expr: TypedExprKind::Tuple(typed_args[fixed_param_count..].to_vec()),
+                            ty: Type::VarArgsPack(varargs_pack_types.clone()),
+                            span: *span,
+                        });
+                        packaged_args
+                    } else {
+                        typed_args
+                    };
 
                     let (emit_name, emit_namespace) = if instance_type.is_some() && !is_static_call
                     {
-                        // Instance method call: name = "map_i32", namespace = variable name (e.g., "comp")
                         let meth_name = method_mangled.unwrap_or_else(|| name.clone());
                         (meth_name, namespace.clone())
                     } else if mangled_name != fn_lookup_name {
-                        // Static generic call: use full mangled name (e.g., "Compose_i32_new") with namespace=None
                         (mangled_name.clone(), None)
                     } else {
                         (name.clone(), effective_namespace)
@@ -2788,7 +3113,7 @@ impl TypeInferrer {
                         expr: TypedExprKind::Call {
                             name: emit_name,
                             namespace: emit_namespace,
-                            args: typed_args,
+                            args: call_args,
                             target_ty: instance_type.clone(),
                         },
                         ty: return_type,
@@ -3994,6 +4319,11 @@ pub fn infer_types(
     errors: HashMap<String, crate::ast::ErrorDef>,
     functions: HashMap<String, crate::ast::FnDef>,
 ) -> AnalysisResult<TypedProgram> {
+    let mut external_function_names = HashSet::new();
+    for ext_fn in &program.external_functions {
+        external_function_names.insert(ext_fn.name.clone());
+    }
+
     let mut inferrer = TypeInferrer::new(
         symbol_table,
         structs,
@@ -4001,6 +4331,7 @@ pub fn infer_types(
         enums,
         errors,
         functions,
+        external_function_names,
         program.imports.clone(),
     );
     inferrer.infer_program(program)
@@ -4328,6 +4659,7 @@ impl AstDump for TypedStmt {
                 body.dump(indent + 2);
             }
             TypedStmtKind::For {
+                is_inline,
                 label,
                 var_name,
                 iterable,
@@ -4335,7 +4667,11 @@ impl AstDump for TypedStmt {
                 index_var,
                 body,
             } => {
-                println!("Stmt::For");
+                if *is_inline {
+                    println!("Stmt::InlineFor");
+                } else {
+                    println!("Stmt::For");
+                }
                 if let Some(l) = label {
                     print_indent(indent + 1);
                     println!("Label: {}", l);

@@ -1,0 +1,14 @@
+import "io"
+
+fn log_types(prefix: []const u8, args: varargs) void {
+    io.println(prefix);
+
+    inline for (args) |index, value| {
+        io.println("arg[{d}] type = {s}", index, @type_of(value));
+    }
+}
+
+fn main() i64 {
+    log_types("heterogeneous varargs", 42, "hello", 3.5, true);
+    return 0;
+}

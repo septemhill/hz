@@ -1,4 +1,5 @@
 use super::*;
+use crate::debug;
 
 use std::collections::hash_map::Entry;
 
@@ -767,7 +768,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                 args,
                 ..
             } => {
-                eprintln!("DEBUG: hir_call - name={}, namespace={:?}", name, namespace);
+                if debug::debug_enabled() {
+                    eprintln!("DEBUG: hir_call - name={}, namespace={:?}", name, namespace);
+                }
                 // First, check if the callee is a variable that holds a function pointer
                 if namespace.is_none() {
                     if let Some(var_alloca) = self.variables.get(name) {
@@ -788,8 +791,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 // Generate args first
                                 let mut llvm_args: Vec<BasicMetadataValueEnum> = Vec::new();
                                 for arg_expr in args {
-                                    let val = self.generate_hir_expr(arg_expr)?;
-                                    llvm_args.push(BasicMetadataValueEnum::from(val));
+                                    llvm_args.push(self.build_call_arg_from_hir_expr(arg_expr)?);
                                 }
 
                                 // Create function type for indirect call using existing method
@@ -811,6 +813,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                                     &llvm_args,
                                     "indirect_call",
                                 )?;
+                                self.add_varargs_param_attributes_to_callsite(call_result, &params);
 
                                 let result = match call_result.try_as_basic_value() {
                                     inkwell::values::ValueKind::Basic(val) => val,
@@ -965,8 +968,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                                 // Generate args first
                                 let mut llvm_args: Vec<BasicMetadataValueEnum> = Vec::new();
                                 for arg_expr in args {
-                                    let val = self.generate_hir_expr(arg_expr)?;
-                                    llvm_args.push(BasicMetadataValueEnum::from(val));
+                                    llvm_args.push(self.build_call_arg_from_hir_expr(arg_expr)?);
                                 }
 
                                 // Make indirect call
@@ -997,6 +999,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                     ))?;
 
                 let mut llvm_args = Vec::new();
+                let mut actual_arg_tys = Vec::new();
 
                 // If this is a method call on a struct instance, add self as first argument
                 if needs_self {
@@ -1006,17 +1009,26 @@ impl<'ctx> CodeGenerator<'ctx> {
                             // ONLY add self if the function actually expects it
                             if function.count_params() == args.len() as u32 + 1 {
                                 llvm_args.push(BasicMetadataValueEnum::from(*ptr));
+                                actual_arg_tys.push(Type::RawPtr);
                             }
                         }
                     }
                 }
 
+                // Prepare arguments using ABI bridge
+                let prepared_args = self.prepare_call_args(function, args)?;
+                llvm_args.extend(prepared_args);
+
+                // For actual_arg_tys, we still need to track what was passed for attributes
+                // But for C-style varargs, we don't want to add attributes to the unpacked args.
+                // The current implementation of add_varargs_param_attributes_to_callsite 
+                // only adds attributes if it sees a VarArgsPack in actual_arg_tys.
                 for arg in args {
-                    let val = self.generate_hir_expr(arg)?;
-                    llvm_args.push(BasicMetadataValueEnum::from(val));
+                    actual_arg_tys.push(arg.ty().clone());
                 }
 
                 let call_result = self.builder.build_call(function, &llvm_args, "call")?;
+                self.add_varargs_param_attributes_to_callsite(call_result, &actual_arg_tys);
                 let result = match call_result.try_as_basic_value() {
                     inkwell::values::ValueKind::Basic(val) => val,
                     _ => self.context.i64_type().const_int(0, false).into(),

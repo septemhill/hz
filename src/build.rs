@@ -7,6 +7,10 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+};
+
 use crate::ast;
 use crate::codegen;
 use crate::lower;
@@ -291,24 +295,31 @@ impl BuildSystem {
         codegen.generate_hir(&hir_program)?;
         let ir = codegen.print_ir();
 
-        // Write IR and compile to object
+        // Write IR for inspection, but emit the object file via LLVM directly so we
+        // don't depend on the system clang understanding our LLVM textual IR syntax.
         let ir_path = unit.path.with_extension("ll");
         let obj_path = unit.path.with_extension("o");
         fs::write(&ir_path, &ir)?;
 
-        let result = std::process::Command::new("clang")
-            .args(&[
-                "-c",
-                "-o",
-                obj_path.to_str().unwrap(),
-                ir_path.to_str().unwrap(),
-            ])
-            .output()?;
+        Target::initialize_native(&InitializationConfig::default())?;
+        let triple = TargetMachine::get_default_triple();
+        codegen.module.set_triple(&triple);
 
-        if !result.status.success() {
-            let stderr = String::from_utf8_lossy(&result.stderr);
-            return Err(format!("clang compilation failed for {}: {}", unit.name, stderr).into());
-        }
+        let target = Target::from_triple(&triple)?;
+        let target_machine = target
+            .create_target_machine(
+                &triple,
+                "generic",
+                "",
+                inkwell::OptimizationLevel::Default,
+                RelocMode::Default,
+                CodeModel::Default,
+            )
+            .ok_or("failed to create LLVM target machine")?;
+
+        let data_layout = target_machine.get_target_data().get_data_layout();
+        codegen.module.set_data_layout(&data_layout);
+        target_machine.write_to_file(&codegen.module, FileType::Object, &obj_path)?;
 
         Ok(obj_path)
     }

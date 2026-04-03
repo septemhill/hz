@@ -11,6 +11,8 @@ pub mod symbol;
 pub mod treeshaker;
 pub mod typelist;
 
+use crate::debug;
+
 use crate::ast::{ErrorDef, ErrorVariant, FnDef, InterfaceDef, Type};
 use std::collections::{HashMap, HashSet};
 
@@ -236,11 +238,13 @@ impl SemanticAnalyzer {
 
         // Populate local definitions into our maps
         for s in &program.structs {
-            eprintln!(
-                "DEBUG mod.rs registering struct: {} with {} fields",
-                s.name,
-                s.fields.len()
-            );
+            if debug::debug_enabled() {
+                eprintln!(
+                    "DEBUG mod.rs registering struct: {} with {} fields",
+                    s.name,
+                    s.fields.len()
+                );
+            }
             self.structs.insert(s.name.clone(), s.clone());
             // Register methods in global functions map for monomorphization
             for method in &s.methods {
@@ -255,10 +259,12 @@ impl SemanticAnalyzer {
                     .iter()
                     .map(|p| Type::GenericParam(p.clone()))
                     .collect();
-                eprintln!(
-                    "DEBUG mod.rs replace_self for struct={}, generic_args={:?}",
-                    s.name, generic_args
-                );
+                if debug::debug_enabled() {
+                    eprintln!(
+                        "DEBUG mod.rs replace_self for struct={}, generic_args={:?}",
+                        s.name, generic_args
+                    );
+                }
                 for p in &mut m.params {
                     p.ty.replace_self_with_args(&s.name, &generic_args);
                 }
@@ -352,10 +358,12 @@ impl SemanticAnalyzer {
             // So we use a separate scope with explicit mutable borrow
             let final_symbol_table = self.symbol_table.clone();
             let stats = crate::sema::treeshake(program, final_symbol_table);
-            eprintln!(
-                "TreeShaker: reachable functions={}, structs={}, enums={}",
-                stats.reachable_functions, stats.reachable_structs, stats.reachable_enums
-            );
+            if debug::debug_enabled() {
+                eprintln!(
+                    "TreeShaker: reachable functions={}, structs={}, enums={}",
+                    stats.reachable_functions, stats.reachable_structs, stats.reachable_enums
+                );
+            }
         }
 
         Ok(())

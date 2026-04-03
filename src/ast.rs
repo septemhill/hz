@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+use crate::debug;
+
 /// Represents a data type in the language
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[allow(dead_code)]
@@ -65,6 +67,10 @@ pub enum Type {
         /// Return type
         return_type: Box<Type>,
     },
+    /// Varargs marker for function declarations only.
+    VarArgs,
+    /// Compiler-internal monomorphized heterogeneous varargs pack.
+    VarArgsPack(Vec<Type>),
 }
 
 #[allow(dead_code)]
@@ -111,6 +117,7 @@ impl Type {
             | Type::Const(inner) => inner.is_generic(),
             Type::Array { element_type, .. } => element_type.is_generic(),
             Type::Tuple(types) => types.iter().any(|t| t.is_generic()),
+            Type::VarArgsPack(types) => types.iter().any(|t| t.is_generic()),
             Type::Custom { generic_args, .. } => generic_args.iter().any(|t| t.is_generic()),
             Type::Function {
                 params,
@@ -160,10 +167,12 @@ impl Type {
                 generic_args: args,
                 ..
             } if name == "Self" => {
-                eprintln!(
-                    "DEBUG replace_self_with_args Custom(Self): struct_name={}, generic_args={:?}",
-                    struct_name, generic_args
-                );
+                if debug::debug_enabled() {
+                    eprintln!(
+                        "DEBUG replace_self_with_args Custom(Self): struct_name={}, generic_args={:?}",
+                        struct_name, generic_args
+                    );
+                }
                 *name = struct_name.to_string();
                 *args = generic_args.to_vec();
             }
@@ -174,6 +183,11 @@ impl Type {
                 inner.replace_self_with_args(struct_name, generic_args);
             }
             Type::Tuple(types) => {
+                for t in types {
+                    t.replace_self_with_args(struct_name, generic_args);
+                }
+            }
+            Type::VarArgsPack(types) => {
                 for t in types {
                     t.replace_self_with_args(struct_name, generic_args);
                 }
@@ -284,6 +298,11 @@ impl fmt::Display for Type {
             } => {
                 let params_str: Vec<String> = params.iter().map(|t| t.to_string()).collect();
                 write!(f, "fn({}) {}", params_str.join(", "), return_type)
+            }
+            Type::VarArgs => write!(f, "varargs"),
+            Type::VarArgsPack(types) => {
+                let params_str: Vec<String> = types.iter().map(|t| t.to_string()).collect();
+                write!(f, "varargs({})", params_str.join(", "))
             }
         }
     }
@@ -689,6 +708,8 @@ pub enum Stmt {
     },
     /// For loop
     For {
+        /// Whether the loop requests compile-time unrolling.
+        is_inline: bool,
         /// Optional label (e.g., outer: for ...)
         label: Option<String>,
         /// Optional index or element variable (e.g., for i in range)
@@ -1094,6 +1115,7 @@ impl AstDump for Stmt {
                 }
             }
             Stmt::For {
+                is_inline,
                 label,
                 var_name,
                 iterable,
@@ -1102,7 +1124,11 @@ impl AstDump for Stmt {
                 body,
                 ..
             } => {
-                println!("Stmt::For");
+                if *is_inline {
+                    println!("Stmt::InlineFor");
+                } else {
+                    println!("Stmt::For");
+                }
                 if let Some(l) = label {
                     print_indent(indent + 1);
                     println!("Label: {}", l);

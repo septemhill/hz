@@ -1,4 +1,5 @@
 use super::*;
+use crate::debug;
 
 #[allow(unused)]
 impl<'ctx> CodeGenerator<'ctx> {
@@ -152,7 +153,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                     }
                 }
             } else if iter_type.is_int_type() && iter_type.into_int_type().get_bit_width() == 1 {
-                eprintln!("DEBUG: Setting is_bool = true because LLVM type is i1");
+                if debug::debug_enabled() {
+                    eprintln!("DEBUG: Setting is_bool = true because LLVM type is i1");
+                }
                 is_bool = true;
             } else if iter_type.is_array_type() {
                 is_array = true;
@@ -213,7 +216,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.builder
                 .build_conditional_branch(is_null, end_block, body_block)?;
         } else if is_bool {
-            eprintln!("DEBUG: is_bool branch, iter_val_load = {:?}", iter_val_load);
+            if debug::debug_enabled() {
+                eprintln!("DEBUG: is_bool branch, iter_val_load = {:?}", iter_val_load);
+            }
             self.builder.build_conditional_branch(
                 iter_val_load.into_int_value(),
                 body_block,

@@ -209,6 +209,8 @@ impl LexerIterator {
             "break" => Token::Break,
             "continue" => Token::Continue,
             "rawptr" => Token::RawPtr,
+            "varargs" => Token::VarArgs,
+            "inline" => Token::Inline,
             _ => Token::Ident(ident),
         }
     }

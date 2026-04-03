@@ -18,6 +18,7 @@ mod stdlib;
 mod lsp;
 
 mod cmd;
+mod debug;
 
 use std::fs;
 
@@ -123,9 +124,6 @@ enum Commands {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    env_logger::init();
-
     // Parse CLI arguments
     let cli = Cli::parse();
 

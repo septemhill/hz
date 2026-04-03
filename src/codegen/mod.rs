@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::execution_engine::ExecutionEngine;
@@ -12,6 +13,7 @@ use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, PointerValue,
+    UnnamedAddress,
 };
 
 use crate::ast::*;
@@ -23,6 +25,7 @@ mod ast_codegen;
 mod core;
 mod declarations;
 mod hir_codegen;
+mod abi_bridge;
 
 #[cfg(test)]
 mod tests;

@@ -1,0 +1,7 @@
+external cdecl printf(fmt: *const u8, args: varargs) i32;
+
+fn main() i64 {
+    //var s: []const u8 = ;
+    printf("Hello from ABI bridge! %d %f %s\n", 42, 3.14, "Septem Li");
+    return 0;
+}

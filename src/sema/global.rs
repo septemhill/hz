@@ -22,6 +22,81 @@ pub struct GlobalDefinitionsAnalyzer {
     symbol_table: SymbolTable,
 }
 
+fn type_contains_varargs(ty: &Type) -> bool {
+    match ty {
+        Type::VarArgs | Type::VarArgsPack(_) => true,
+        Type::Pointer(inner) | Type::Option(inner) | Type::Result(inner) | Type::Const(inner) => {
+            type_contains_varargs(inner)
+        }
+        Type::Array { element_type, .. } => type_contains_varargs(element_type),
+        Type::Tuple(types) => types.iter().any(type_contains_varargs),
+        Type::Custom { generic_args, .. } => generic_args.iter().any(type_contains_varargs),
+        Type::Function {
+            params,
+            return_type,
+        } => params.iter().any(type_contains_varargs) || type_contains_varargs(return_type),
+        _ => false,
+    }
+}
+
+fn validate_varargs_signature(
+    name: &str,
+    params: &[crate::ast::FnParam],
+    return_ty: &Type,
+    span: &crate::ast::Span,
+) -> AnalysisResult<()> {
+    if type_contains_varargs(return_ty) {
+        return Err(AnalysisError::new_with_span(
+            &format!("Function '{}' cannot use varargs in its return type", name),
+            span,
+        )
+        .with_module("global"));
+    }
+
+    for (index, param) in params.iter().enumerate() {
+        match &param.ty {
+            Type::VarArgs => {
+                if index + 1 != params.len() {
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Function '{}' must place the varargs parameter last", name),
+                        span,
+                    )
+                    .with_module("global"));
+                }
+            }
+            other if type_contains_varargs(other) => {
+                return Err(AnalysisError::new_with_span(
+                    &format!(
+                        "Function '{}' can only use varargs as the final parameter type",
+                        name
+                    ),
+                    span,
+                )
+                .with_module("global"));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+fn reject_varargs_type(
+    owner: &str,
+    ty: &Type,
+    span: &crate::ast::Span,
+    kind: &str,
+) -> AnalysisResult<()> {
+    if type_contains_varargs(ty) {
+        return Err(AnalysisError::new_with_span(
+            &format!("{} '{}' cannot use varargs types", kind, owner),
+            span,
+        )
+        .with_module("global"));
+    }
+    Ok(())
+}
+
 impl GlobalDefinitionsAnalyzer {
     pub fn new() -> Self {
         GlobalDefinitionsAnalyzer {
@@ -42,6 +117,7 @@ impl GlobalDefinitionsAnalyzer {
 
     fn collect_functions(&mut self, functions: &[crate::ast::FnDef]) -> AnalysisResult<()> {
         for f in functions {
+            validate_varargs_signature(&f.name, &f.params, &f.return_ty, &f.span)?;
             // Check if this function conflicts with a builtin function
             if BUILTIN_FUNCTIONS.contains(&f.name.as_str()) {
                 return Err(AnalysisError::new_with_span(
@@ -77,6 +153,12 @@ impl GlobalDefinitionsAnalyzer {
         ext_fns: &[crate::ast::ExternalFnDef],
     ) -> AnalysisResult<()> {
         for ext_fn in ext_fns {
+            validate_varargs_signature(
+                &ext_fn.name,
+                &ext_fn.params,
+                &ext_fn.return_ty,
+                &ext_fn.span,
+            )?;
             // Check if this external function conflicts with a builtin function
             if BUILTIN_FUNCTIONS.contains(&ext_fn.name.as_str()) {
                 return Err(AnalysisError::new_with_span(
@@ -130,9 +212,19 @@ impl GlobalDefinitionsAnalyzer {
                 None,
             );
 
+            for field in &s.fields {
+                reject_varargs_type(&field.name, &field.ty, &s.span, "Struct field")?;
+            }
+
             // Also register struct methods in the symbol table
             // Methods are named as StructName_methodname for external access
             for method in &s.methods {
+                validate_varargs_signature(
+                    &method.name,
+                    &method.params,
+                    &method.return_ty,
+                    &method.span,
+                )?;
                 let method_name = format!("{}_{}", s.name, method.name);
                 if self.symbol_table.resolve(&method_name).is_some() {
                     return Err(AnalysisError::new_with_span(
@@ -181,6 +273,14 @@ impl GlobalDefinitionsAnalyzer {
                 interface.visibility,
                 true,
             );
+            for method in &interface.methods {
+                validate_varargs_signature(
+                    &method.name,
+                    &method.params,
+                    &method.return_ty,
+                    &method.span,
+                )?;
+            }
         }
         Ok(())
     }
@@ -225,6 +325,12 @@ impl GlobalDefinitionsAnalyzer {
 
             // Also register enum methods in the symbol table
             for method in &e.methods {
+                validate_varargs_signature(
+                    &method.name,
+                    &method.params,
+                    &method.return_ty,
+                    &method.span,
+                )?;
                 let method_name = format!("{}_{}", e.name, method.name);
                 if self.symbol_table.resolve(&method_name).is_some() {
                     return Err(AnalysisError::new_with_span(

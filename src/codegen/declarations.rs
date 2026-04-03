@@ -1,4 +1,5 @@
 use super::*;
+use crate::debug;
 
 #[allow(unused)]
 impl<'ctx> CodeGenerator<'ctx> {
@@ -39,7 +40,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                 format!("{}_{}", struct_name, method.name)
             };
             let mangled_name = self.mangle_name(&method_name, false);
-            self.module.add_function(&mangled_name, fn_type, None);
+            let llvm_fn = self.module.add_function(&mangled_name, fn_type, None);
+            self.add_varargs_param_attributes_to_function(llvm_fn, &param_types);
+            if method.is_varargs_specialization {
+                llvm_fn.set_linkage(inkwell::module::Linkage::LinkOnceODR);
+                llvm_fn
+                    .as_global_value()
+                    .set_unnamed_address(UnnamedAddress::Global);
+            }
         }
 
         Ok(())
@@ -72,15 +80,24 @@ impl<'ctx> CodeGenerator<'ctx> {
     pub fn declare_function(&mut self, fn_def: &TypedFnDef) -> CodegenResult<()> {
         let param_types: Vec<Type> = fn_def.params.iter().map(|p| p.ty.clone()).collect();
         // Debug: Print return type
-        eprintln!(
-            "DEBUG declare_function: name={}, return_ty={}",
-            fn_def.name, fn_def.return_ty
-        );
+        if debug::debug_enabled() {
+            eprintln!(
+                "DEBUG declare_function: name={}, return_ty={}",
+                fn_def.name, fn_def.return_ty
+            );
+        }
         let fn_type =
             self.build_function_type(&fn_def.return_ty, &param_types, fn_def.name == "main");
         let mangled_name = self.mangle_name(&fn_def.name, fn_def.name == "main");
 
-        self.module.add_function(&mangled_name, fn_type, None);
+        let llvm_fn = self.module.add_function(&mangled_name, fn_type, None);
+        self.add_varargs_param_attributes_to_function(llvm_fn, &param_types);
+        if fn_def.is_varargs_specialization {
+            llvm_fn.set_linkage(inkwell::module::Linkage::LinkOnceODR);
+            llvm_fn
+                .as_global_value()
+                .set_unnamed_address(UnnamedAddress::Global);
+        }
 
         Ok(())
     }
@@ -92,7 +109,8 @@ impl<'ctx> CodeGenerator<'ctx> {
             self.build_function_type(&fn_def.return_ty, &param_types, fn_def.name == "main");
         let mangled_name = self.mangle_name(&fn_def.name, fn_def.name == "main");
 
-        self.module.add_function(&mangled_name, fn_type, None);
+        let llvm_fn = self.module.add_function(&mangled_name, fn_type, None);
+        self.add_varargs_param_attributes_to_function(llvm_fn, &param_types);
 
         Ok(())
     }
@@ -127,7 +145,8 @@ impl<'ctx> CodeGenerator<'ctx> {
                 format!("{}_{}", struct_name, method.name)
             };
             let mangled_name = self.mangle_name(&method_name, false);
-            self.module.add_function(&mangled_name, fn_type, None);
+            let llvm_fn = self.module.add_function(&mangled_name, fn_type, None);
+            self.add_varargs_param_attributes_to_function(llvm_fn, &param_types);
         }
 
         Ok(())
@@ -148,6 +167,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             fn_type,
             Some(inkwell::module::Linkage::External),
         );
+        if let Some(llvm_fn) = self.module.get_function(&mangled_name) {
+            self.add_varargs_param_attributes_to_function(llvm_fn, &param_types);
+        }
 
         Ok(())
     }
@@ -163,6 +185,9 @@ impl<'ctx> CodeGenerator<'ctx> {
             fn_type,
             Some(inkwell::module::Linkage::External),
         );
+        if let Some(llvm_fn) = self.module.get_function(&ext_fn.name) {
+            self.add_varargs_param_attributes_to_function(llvm_fn, &param_types);
+        }
 
         Ok(())
     }

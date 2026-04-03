@@ -1,4 +1,5 @@
 use super::*;
+use crate::debug;
 
 #[allow(unused)]
 impl<'ctx> CodeGenerator<'ctx> {
@@ -28,7 +29,9 @@ impl<'ctx> CodeGenerator<'ctx> {
                         };
 
                         if self.module.get_function(&fn_name).is_some() {
-                            eprintln!("DEBUG: Let - identifier is a function: {}", fn_name);
+                            if debug::debug_enabled() {
+                                eprintln!("DEBUG: Let - identifier is a function: {}", fn_name);
+                            }
                             // This identifier is a function - get the function pointer
                             if let Some(fn_val) = self.module.get_function(&fn_name) {
                                 fn_val.as_global_value().as_pointer_value().into()

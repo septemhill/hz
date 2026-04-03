@@ -216,6 +216,76 @@ impl<'ctx> CodeGenerator<'ctx> {
         }
     }
 
+    pub(super) fn llvm_param_type(&self, param_ty: &Type) -> BasicMetadataTypeEnum<'ctx> {
+        match param_ty {
+            Type::VarArgsPack(_) => self
+                .context
+                .ptr_type(inkwell::AddressSpace::default())
+                .into(),
+            _ => self.llvm_type(param_ty).into(),
+        }
+    }
+
+    pub(super) fn is_pointer_varargs_pack(&self, ty: &Type) -> bool {
+        matches!(ty, Type::VarArgsPack(_))
+    }
+
+    pub(super) fn add_varargs_param_attributes_to_function(
+        &self,
+        function: FunctionValue<'ctx>,
+        param_tys: &[Type],
+    ) {
+        let readonly_kind = Attribute::get_named_enum_kind_id("readonly");
+        let nocapture_kind = Attribute::get_named_enum_kind_id("nocapture");
+
+        for (idx, ty) in param_tys.iter().enumerate() {
+            if !self.is_pointer_varargs_pack(ty) {
+                continue;
+            }
+
+            let readonly = self.context.create_enum_attribute(readonly_kind, 0);
+            let nocapture = self.context.create_enum_attribute(nocapture_kind, 0);
+            function.add_attribute(AttributeLoc::Param(idx as u32), readonly);
+            function.add_attribute(AttributeLoc::Param(idx as u32), nocapture);
+        }
+    }
+
+    pub(super) fn add_varargs_param_attributes_to_callsite(
+        &self,
+        call_site: inkwell::values::CallSiteValue<'ctx>,
+        param_tys: &[Type],
+    ) {
+        let readonly_kind = Attribute::get_named_enum_kind_id("readonly");
+        let nocapture_kind = Attribute::get_named_enum_kind_id("nocapture");
+
+        for (idx, ty) in param_tys.iter().enumerate() {
+            if !self.is_pointer_varargs_pack(ty) {
+                continue;
+            }
+
+            let readonly = self.context.create_enum_attribute(readonly_kind, 0);
+            let nocapture = self.context.create_enum_attribute(nocapture_kind, 0);
+            call_site.add_attribute(AttributeLoc::Param(idx as u32), readonly);
+            call_site.add_attribute(AttributeLoc::Param(idx as u32), nocapture);
+        }
+    }
+
+    pub(super) fn build_call_arg_from_hir_expr(
+        &mut self,
+        arg_expr: &hir::HirExpr,
+    ) -> CodegenResult<BasicMetadataValueEnum<'ctx>> {
+        let arg_val = self.generate_hir_expr(arg_expr)?;
+
+        if self.is_pointer_varargs_pack(arg_expr.ty()) {
+            let pack_type = self.llvm_type(arg_expr.ty());
+            let pack_ptr = self.builder.build_alloca(pack_type, "varargs_pack")?;
+            self.builder.build_store(pack_ptr, arg_val)?;
+            Ok(pack_ptr.into())
+        } else {
+            Ok(arg_val.into())
+        }
+    }
+
     pub(super) fn default_llvm_return_value(
         &self,
         return_ty: &Type,
@@ -472,12 +542,20 @@ impl<'ctx> CodeGenerator<'ctx> {
         param_tys: &[Type],
         is_main: bool,
     ) -> inkwell::types::FunctionType<'ctx> {
-        let param_types: Vec<BasicMetadataTypeEnum> =
-            param_tys.iter().map(|p| self.llvm_type(p).into()).collect();
+        let mut param_types: Vec<BasicMetadataTypeEnum> =
+            param_tys.iter().map(|p| self.llvm_param_type(p)).collect();
+
+        // Check if the last parameter is varargs (C-style)
+        let is_varargs = param_tys.last().is_some_and(|t| matches!(t, Type::VarArgs));
+
+        // If it's C-style varargs, remove the varargs marker from the LLVM parameter list
+        if is_varargs {
+            param_types.pop();
+        }
 
         match self.llvm_function_return_type(return_ty, is_main) {
-            Some(return_type) => return_type.fn_type(&param_types, false),
-            None => self.context.void_type().fn_type(&param_types, false),
+            Some(return_type) => return_type.fn_type(&param_types, is_varargs),
+            None => self.context.void_type().fn_type(&param_types, is_varargs),
         }
     }
 
@@ -516,10 +594,17 @@ impl<'ctx> CodeGenerator<'ctx> {
             let param_value = function
                 .get_nth_param(i as u32)
                 .ok_or("Failed to get param")?;
-            let llvm_type = self.llvm_type(ty);
-            let alloca = self.builder.build_alloca(llvm_type, name)?;
-            self.builder.build_store(alloca, param_value)?;
-            self.variables.insert(name.clone(), alloca);
+
+            if self.is_pointer_varargs_pack(ty) {
+                self.variables
+                    .insert(name.clone(), param_value.into_pointer_value());
+            } else {
+                let llvm_type = self.llvm_type(ty);
+                let alloca = self.builder.build_alloca(llvm_type, name)?;
+                self.builder.build_store(alloca, param_value)?;
+                self.variables.insert(name.clone(), alloca);
+            }
+
             self.variable_types.insert(name.clone(), ty.clone());
         }
 

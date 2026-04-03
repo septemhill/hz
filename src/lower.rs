@@ -464,6 +464,7 @@ mod tests {
     fn test_lower_for_loop_capture_uses_iterable_element_type() {
         let mut ctx = LoweringContext::new();
         let stmt = Stmt::For {
+            is_inline: false,
             label: None,
             var_name: None,
             iterable: Expr::Array(
@@ -542,6 +543,7 @@ mod tests {
                 },
                 span: dummy_span(),
             }],
+            is_varargs_specialization: false,
             span: dummy_span(),
         };
 
@@ -870,6 +872,7 @@ impl LoweringContext {
                 }
             }
             TypedStmtKind::For {
+                is_inline: _,
                 var_name,
                 capture,
                 index_var,
@@ -1653,6 +1656,7 @@ impl LoweringContext {
                 }
             }
             ast::Stmt::For {
+                is_inline: _,
                 label,
                 var_name,
                 capture,
