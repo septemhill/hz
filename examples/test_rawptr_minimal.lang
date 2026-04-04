@@ -1,8 +1,8 @@
 // Minimal test for rawptr type
 import "io"
 
-external cdecl malloc(size: u64) rawptr;
-external cdecl free(ptr: rawptr) void;
+extern fn malloc(size: u64) rawptr;
+extern fn free(ptr: rawptr) void;
 
 fn main() i32 {
     io.println("=== RawPtr Test ===");

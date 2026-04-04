@@ -1,4 +1,4 @@
-external cdecl printf(fmt: *const u8, args: varargs) i32;
+extern fn printf(fmt: *const u8, args: varargs) i32;
 
 fn main() i64 {
     //var s: []const u8 = ;

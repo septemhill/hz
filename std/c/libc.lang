@@ -1,3 +1,3 @@
-external cdecl printf(fmt: *const u8, args: varargs) i32;
-external cdecl fn malloc(size: u64) rawptr;
-external cdecl fn free(ptr: rawptr) void;
+extern fn printf(fmt: *const u8, args: varargs) i32;
+extern fn malloc(size: u64) rawptr;
+extern fn free(ptr: rawptr) void;

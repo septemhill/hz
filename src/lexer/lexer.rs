@@ -274,8 +274,7 @@ impl Lexer {
             "null" => Token::Null,
             "switch" => Token::Switch,
             "self" => Token::SelfType,
-            "external" => Token::External,
-            "cdecl" => Token::Cdecl,
+            "extern" => Token::Extern,
             "defer" => Token::Defer,
             "defer!" => Token::DeferBang,
             "error" => {

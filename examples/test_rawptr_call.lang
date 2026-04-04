@@ -1,7 +1,7 @@
 // Test rawptr type - call
 import "io"
 
-external cdecl malloc(size: u64) rawptr;
+extern fn malloc(size: u64) rawptr;
 
 fn main() i32 {
     io.println("Allocating...");

@@ -5,14 +5,14 @@
 import "io"
 
 // Declare external C functions for memory allocation
-external cdecl malloc(size: u64) rawptr;
-external cdecl free(ptr: rawptr) rawptr;
+extern fn malloc(size: u64) rawptr;
+extern fn free(ptr: rawptr) rawptr;
 
 // memset to write to memory
-external cdecl memset(ptr: rawptr, value: i32, size: u64) rawptr;
+extern fn memset(ptr: rawptr, value: i32, size: u64) rawptr;
 
 // memcpy to copy memory  
-external cdecl memcpy(dest: rawptr, src: rawptr, size: u64) rawptr;
+extern fn memcpy(dest: rawptr, src: rawptr, size: u64) rawptr;
 
 fn safe_free(ptr: *rawptr) rawptr {
     free(ptr.*);

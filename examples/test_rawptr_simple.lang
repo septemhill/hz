@@ -1,7 +1,7 @@
 // Simple test for rawptr type
 import "io"
 
-external cdecl malloc(size: u64) rawptr;
+extern fn malloc(size: u64) rawptr;
 
 fn main() i32 {
     const ptr: rawptr = malloc(9);

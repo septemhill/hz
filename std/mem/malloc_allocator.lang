@@ -3,8 +3,8 @@
 import "io";
 
 // External C functions for memory allocation
-external cdecl malloc(size: usize) *void;
-external cdecl free(ptr: *void) void;
+extern fn malloc(size: usize) rawptr;
+extern fn free(ptr: *void) void;
 
 // Allocate memory
 pub fn malloc_allocator_alloc(size: usize) *void {

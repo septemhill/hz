@@ -1,8 +1,8 @@
 // Test is_null and is_not_null
 import "io"
 
-external cdecl malloc(size: u64) rawptr;
-external cdecl free(ptr: rawptr) void;
+extern fn malloc(size: u64) rawptr;
+extern fn free(ptr: rawptr) void;
 
 fn main() i32 {
     // Test is_null and is_not_null without malloc

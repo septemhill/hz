@@ -5,7 +5,7 @@
 
 use crate::ast::*;
 use crate::debug;
-use crate::lexer::{iter as lexer_iter, PeekableLexerIterator, Token, TokenWithSpan};
+use crate::lexer::{PeekableLexerIterator, Token, TokenWithSpan, iter as lexer_iter};
 
 /// Parser state for tracking current parsing context
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -720,7 +720,7 @@ impl Parser {
                     }
                     self.set_state(ParserState::Initial);
                 }
-                Some(Token::External) => {
+                Some(Token::Extern) => {
                     // Pre-consume 'pub' if present so parse_external_function finds it if needed,
                     // or better, let parse_external_function handle it.
                     // The current parse_external_function expects to consume 'pub' if present.
@@ -987,18 +987,18 @@ impl Parser {
             Visibility::Private
         };
 
-        // Expect "external" keyword
-        if !self.match_token(Token::External) {
+        // Expect "extern" keyword
+        if !self.match_token(Token::Extern) {
             return Err(ParseError {
-                message: "Expected 'external' keyword".to_string(),
+                message: "Expected 'extern' keyword".to_string(),
                 location: self.current_token().map(|t| t.span.start),
             });
         }
 
-        // Consume "cdecl"
-        if !self.match_token(Token::Cdecl) {
+        // Consume "fn"
+        if !self.match_token(Token::Fn) {
             return Err(ParseError {
-                message: "Expected 'cdecl' keyword after 'external'".to_string(),
+                message: "Expected 'fn' keyword after 'extern'".to_string(),
                 location: self.current_token().map(|t| t.span.start),
             });
         }
@@ -1247,7 +1247,7 @@ impl Parser {
                             // This is a labeled for loop
                             self.advance(); // consume identifier
                             self.advance(); // consume colon
-                                            // Now parse for with the label
+                            // Now parse for with the label
                             return self.parse_for_stmt(Some(label_name), false);
                         } else if after_colon.token == Token::Inline {
                             if let Some(after_inline) = self.peek(3) {

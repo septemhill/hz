@@ -5,8 +5,8 @@
 import "io";
 
 // External C functions for memory allocation
-external cdecl fn malloc(size: usize) *void;
-external cdecl fn free(ptr: *void) void;
+extern fn malloc(size: usize) rawptr;
+extern fn free(ptr: *void) void;
 
 // ArenaAllocator: Pre-allocates a large chunk and manages it internally
 struct ArenaAllocator {

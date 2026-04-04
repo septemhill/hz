@@ -1,6 +1,6 @@
 // Test FFI - Direct external C function calls (no import)
 
-external cdecl exit(status: i32) void
+extern fn exit(status: i32) void;
 
 fn main() void {
     exit(0)

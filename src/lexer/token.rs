@@ -29,8 +29,8 @@ pub enum Token {
     Switch,
     #[allow(non_camel_case_types)]
     SelfType,
-    External,
-    Cdecl,
+    #[allow(non_camel_case_types)]
+    Extern,
     Defer,
     #[allow(non_camel_case_types)]
     DeferBang,
@@ -152,8 +152,7 @@ impl Token {
             Token::Range => "range",
             Token::Switch => "switch",
             Token::SelfType => "self",
-            Token::External => "external",
-            Token::Cdecl => "cdecl",
+            Token::Extern => "extern",
             Token::Defer => "defer",
             Token::DeferBang => "defer!",
             Token::ErrorKw => "error",
