@@ -21,11 +21,11 @@ use crate::hir;
 use crate::sema::infer::{TypedFnDef, TypedStructDef};
 use crate::stdlib::StdLib;
 
+mod abi_bridge;
 mod ast_codegen;
 mod core;
 mod declarations;
 mod hir_codegen;
-mod abi_bridge;
 
 #[cfg(test)]
 mod tests;
@@ -108,4 +108,5 @@ enum PrintfArgKind {
     Integer,
     Float,
     Boolean,
+    Char,
 }

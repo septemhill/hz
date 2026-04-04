@@ -532,6 +532,23 @@ impl<'ctx> CodeGenerator<'ctx> {
                     Ok(value)
                 }
             }
+            PrintfArgKind::Char => {
+                // For char, printf expects int (i32), so extend i8/u8 to i32
+                if value.is_int_value() {
+                    let int_val = value.into_int_value();
+                    if int_val.get_type().get_bit_width() == 8 {
+                        // Zero extend for both signed and unsigned chars
+                        Ok(self
+                            .builder
+                            .build_int_z_extend(int_val, self.context.i32_type(), "printf_char")?
+                            .into())
+                    } else {
+                        Ok(value)
+                    }
+                } else {
+                    Ok(value)
+                }
+            }
         }
     }
 

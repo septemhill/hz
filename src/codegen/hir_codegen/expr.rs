@@ -1021,7 +1021,7 @@ impl<'ctx> CodeGenerator<'ctx> {
 
                 // For actual_arg_tys, we still need to track what was passed for attributes
                 // But for C-style varargs, we don't want to add attributes to the unpacked args.
-                // The current implementation of add_varargs_param_attributes_to_callsite 
+                // The current implementation of add_varargs_param_attributes_to_callsite
                 // only adds attributes if it sees a VarArgsPack in actual_arg_tys.
                 for arg in args {
                     actual_arg_tys.push(arg.ty().clone());

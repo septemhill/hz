@@ -1224,6 +1224,14 @@ impl<'ctx> CodeGenerator<'ctx> {
                             arg_index += 1;
                         }
                     }
+                    "c" => {
+                        // Character
+                        result.push_str("%c");
+                        if arg_index < num_args {
+                            arg_specs.push((arg_index, PrintfArgKind::Char));
+                            arg_index += 1;
+                        }
+                    }
                     "" => {
                         // Empty placeholder - just {}
                         result.push_str("%lld");

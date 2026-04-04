@@ -930,6 +930,20 @@ impl TypeInferrer {
                         .with_module("infer"));
                     }
                 }
+                "c" => {
+                    // {c} requires char type (I8 or U8)
+                    if !matches!(arg.ty, Type::I8 | Type::U8) {
+                        return Err(AnalysisError::new_with_span(
+                            &format!(
+                                "io.println placeholder #{} {{c}} requires char type (i8 or u8), got {:?}",
+                                idx + 1,
+                                arg.ty
+                            ),
+                            &arg.span,
+                        )
+                        .with_module("infer"));
+                    }
+                }
                 _ => {
                     // Unknown placeholder - ignore
                 }
