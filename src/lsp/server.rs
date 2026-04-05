@@ -128,6 +128,30 @@ fn handle_request(request: Request, state: &ServerState, connection: &Connection
                 error: Some(e),
             },
         },
+        "textDocument/definition" => match handle_definition(request.params, state) {
+            Ok(result) => Response {
+                id: request.id,
+                result: Some(result),
+                error: None,
+            },
+            Err(e) => Response {
+                id: request.id,
+                result: None,
+                error: Some(e),
+            },
+        },
+        "textDocument/typeDefinition" => match handle_type_definition(request.params, state) {
+            Ok(result) => Response {
+                id: request.id,
+                result: Some(result),
+                error: None,
+            },
+            Err(e) => Response {
+                id: request.id,
+                result: None,
+                error: Some(e),
+            },
+        },
         // Echo other requests back (not supported yet)
         _ => Response {
             id: request.id,
