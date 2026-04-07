@@ -71,6 +71,8 @@ pub enum Type {
     VarArgs,
     /// Compiler-internal monomorphized heterogeneous varargs pack.
     VarArgsPack(Vec<Type>),
+    /// Internal package type for namespace resolution
+    Package(String),
 }
 
 #[allow(dead_code)]
@@ -304,6 +306,7 @@ impl fmt::Display for Type {
                 let params_str: Vec<String> = types.iter().map(|t| t.to_string()).collect();
                 write!(f, "varargs({})", params_str.join(", "))
             }
+            Type::Package(name) => write!(f, "package({})", name),
         }
     }
 }

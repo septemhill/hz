@@ -11,6 +11,7 @@ pub mod ir;
 pub mod jit;
 pub mod lsp;
 pub mod run;
+pub mod symbol;
 pub mod typelist;
 
 pub use ast::dump_ast;
@@ -22,6 +23,7 @@ pub use ir::generate_ir;
 pub use jit::run_jit_command;
 pub use lsp::run_lsp;
 pub use run::run_jit;
+pub use symbol::{run_symbol_command, SymbolKind};
 pub use typelist::run_typelist_command;
 
 use std::path::PathBuf;

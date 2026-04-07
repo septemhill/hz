@@ -625,11 +625,10 @@ impl TypeInferrer {
                 visiting.remove(name);
                 layout
             }
-            Type::SelfType | Type::ImmInt | Type::ImmFloat => Err(AnalysisError::new(&format!(
-                "Type metadata is not available for '{}'",
-                ty
-            ))
-            .with_module("infer")),
+            Type::SelfType | Type::ImmInt | Type::ImmFloat | Type::Package(_) => Err(
+                AnalysisError::new(&format!("Type metadata is not available for '{}'", ty))
+                    .with_module("infer"),
+            ),
         }
     }
 
@@ -2566,6 +2565,19 @@ impl TypeInferrer {
                     });
                 }
 
+                // Check if name is an imported package
+                let is_imported = self
+                    .imports
+                    .iter()
+                    .any(|(alias, pkg)| pkg == name || alias.as_deref() == Some(name));
+                if is_imported {
+                    return Ok(TypedExpr {
+                        expr: TypedExprKind::Ident(name.clone()),
+                        ty: Type::Package(name.clone()),
+                        span: *span,
+                    });
+                }
+
                 let ty = self
                     .symbol_table
                     .resolve(name)
@@ -3479,6 +3491,7 @@ impl TypeInferrer {
                 kind: _,
             } => {
                 // Try to resolve as an enum/error variant first (Type.Variant)
+                // This handles UnionError.PermissionDenied from the symbol table
                 if let Expr::Ident(obj_name, _) = object.as_ref() {
                     let full_name = format!("{}.{}", obj_name, member);
                     let found_ty = self.symbol_table.resolve(&full_name).map(|s| s.ty.clone());
@@ -3504,48 +3517,69 @@ impl TypeInferrer {
                     }
                 }
 
-                // Try to resolve as package access
-                if let Expr::Ident(obj_name, _) = object.as_ref() {
-                    // Check if obj_name is an imported package
-                    let is_imported = self
-                        .imports
-                        .iter()
-                        .any(|(alias, pkg)| pkg == obj_name || alias.as_deref() == Some(obj_name));
-                    let is_known_package =
-                        obj_name == "std" || obj_name == "io" || obj_name == "os";
+                let typed_object = self.infer_expr(object)?;
 
-                    if is_known_package && !is_imported {
-                        return Err(AnalysisError::new_with_span(
-                            &format!(
-                                "Use of unimported package '{}'. Import it with: import \"{}\"",
-                                obj_name, obj_name
-                            ),
-                            span,
-                        )
-                        .with_module("infer"));
-                    }
-
-                    let is_package =
-                        self.symbol_table.resolve(obj_name).is_none() && is_known_package;
-
-                    if is_package {
+                // Handle package access: pkg.Member or pkg.Enum.Variant
+                if let Type::Package(pkg_name) = &typed_object.ty {
+                    // Try to resolve as a mangled symbol (function, global, etc.)
+                    let mangled_name = format!("{}_{}", pkg_name, member);
+                    if let Some(symbol) = self.symbol_table.resolve(&mangled_name) {
                         return Ok(TypedExpr {
                             expr: TypedExprKind::MemberAccess {
-                                object: Box::new(TypedExpr {
-                                    expr: TypedExprKind::Ident(obj_name.clone()),
-                                    ty: Type::I64, // Placeholder for package "type"
-                                    span: Span { start: 0, end: 0 },
-                                }),
+                                object: Box::new(typed_object),
                                 member: member.clone(),
                                 kind: crate::ast::MemberAccessKind::Package,
                             },
-                            ty: Type::I64, // Placeholder
+                            ty: symbol.ty.clone(),
                             span: *span,
                         });
                     }
-                }
 
-                let typed_object = self.infer_expr(object)?;
+                    // Try to resolve as an enum/error variant: EnumName.VariantName
+                    // In this case pkg_name might already be mangled (e.g. http_Status)
+                    let variant_full_name = format!("{}.{}", pkg_name, member);
+                    if let Some(symbol) = self.symbol_table.resolve(&variant_full_name) {
+                        let kind = if self.enums.contains_key(pkg_name) {
+                            crate::ast::MemberAccessKind::EnumMember
+                        } else if self.errors.contains_key(pkg_name) {
+                            crate::ast::MemberAccessKind::ErrorMember
+                        } else {
+                            crate::ast::MemberAccessKind::Package
+                        };
+
+                        return Ok(TypedExpr {
+                            expr: TypedExprKind::MemberAccess {
+                                object: Box::new(typed_object),
+                                member: member.clone(),
+                                kind,
+                            },
+                            ty: symbol.ty.clone(),
+                            span: *span,
+                        });
+                    }
+
+                    // Check if it's a nested namespace (e.g. pkg.Enum)
+                    if self.enums.contains_key(&mangled_name)
+                        || self.structs.contains_key(&mangled_name)
+                        || self.errors.contains_key(&mangled_name)
+                    {
+                        return Ok(TypedExpr {
+                            expr: TypedExprKind::MemberAccess {
+                                object: Box::new(typed_object),
+                                member: member.clone(),
+                                kind: crate::ast::MemberAccessKind::Package,
+                            },
+                            ty: Type::Package(mangled_name),
+                            span: *span,
+                        });
+                    }
+
+                    return Err(AnalysisError::new_with_span(
+                        &format!("Undefined member '{}' in package '{}'", member, pkg_name),
+                        span,
+                    )
+                    .with_module("infer"));
+                }
 
                 if let Type::GenericParam(param_name) = &typed_object.ty {
                     if let Some(interface_names) = self.current_generic_constraints.get(param_name)

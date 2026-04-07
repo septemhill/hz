@@ -374,25 +374,16 @@ impl SymbolResolver {
                 if name == "_" {
                     return Ok(crate::ast::Type::I64);
                 }
-                // Check if it's a known package and if it's actually imported
-                if name == "std" || name == "io" || name == "os" {
-                    // Check if the package is imported
-                    let is_imported = self
-                        .imports
-                        .iter()
-                        .any(|(alias, pkg)| pkg == name || alias.as_deref() == Some(name));
-                    if !is_imported {
-                        return Err(AnalysisError::new_with_span(
-                            &format!(
-                                "Use of unimported package '{}'. Import it with: import \"{}\"",
-                                name, name,
-                            ),
-                            span,
-                        )
-                        .with_module("resolver"));
-                    }
-                    return Ok(crate::ast::Type::I64); // Return placeholder for package
+
+                // Check if name is an imported package
+                let is_imported = self
+                    .imports
+                    .iter()
+                    .any(|(alias, pkg)| pkg == name || alias.as_deref() == Some(name));
+                if is_imported {
+                    return Ok(crate::ast::Type::Package(name.clone()));
                 }
+
                 self.symbol_table
                     .resolve(name)
                     .map(|s| s.ty.clone())

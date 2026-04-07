@@ -1,0 +1,12 @@
+import "http"
+import "io"
+
+fn main() void {
+    const req = http.Request{
+        method: "GET",
+        url: "https://example.com",
+    };
+
+    io.println("Method: {s}", req.method);
+    io.println("URL: {s}", req.url);
+}

@@ -1633,6 +1633,7 @@ impl<'ctx> CodeGenerator<'ctx> {
                 }
                 self.context.struct_type(&element_types, false).into()
             }
+            Type::Package(_) => self.context.i64_type().into(),
         }
     }
 

@@ -1,0 +1,9 @@
+import "http"
+import "io"
+
+fn main() void {
+    const ok = http.Status.OK;
+    if (ok == http.Status.OK) {
+        io.println("Status is OK");
+    }
+}

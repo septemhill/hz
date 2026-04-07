@@ -121,6 +121,18 @@ enum Commands {
         #[arg(value_name = "KEY")]
         key: Option<String>,
     },
+    /// List all symbols in the source file
+    Symbol {
+        /// Source file to list symbols from
+        #[arg(value_name = "FILE")]
+        source: std::path::PathBuf,
+        /// Filter by symbol kind (struct, interface, fn, enum, error, const)
+        #[arg(short = 'k', long = "kind")]
+        kind: Vec<String>,
+        /// Search for symbols containing this pattern in their name
+        #[arg(short = 's', long = "search")]
+        search: Option<String>,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -194,6 +206,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             } else {
                 cmd::print_env();
+            }
+        }
+        Commands::Symbol {
+            source,
+            kind,
+            search,
+        } => {
+            let source_content = fs::read_to_string(&source)?;
+            let kinds: Vec<cmd::SymbolKind> = kind
+                .iter()
+                .filter_map(|k| cmd::SymbolKind::from_str(k))
+                .collect();
+            if kinds.is_empty() {
+                cmd::run_symbol_command(&source_content, cli.std_path, vec![], search)?;
+            } else {
+                cmd::run_symbol_command(&source_content, cli.std_path, kinds, search)?;
             }
         }
     }

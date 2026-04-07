@@ -13,7 +13,7 @@ fn main () void {
         const z = if (g) |v| v * c else 100 * c;
         io.println("[2] block: {d}", z);
     }
-
+    
     {
         const g: ?i32 = 432;
         const z = if (g) |v| v + 100 else {

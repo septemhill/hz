@@ -574,6 +574,7 @@ pub struct LoweringContext {
     local_scopes: Vec<std::collections::HashMap<String, ast::Type>>,
     expected_type: Option<ast::Type>,
     structs: std::collections::HashMap<String, crate::sema::infer::TypedStructDef>,
+    imports: Vec<(Option<String>, String)>,
 }
 
 impl LoweringContext {
@@ -631,6 +632,7 @@ impl LoweringContext {
             local_scopes: Vec::new(),
             expected_type: None,
             structs: std::collections::HashMap::new(),
+            imports: Vec::new(),
         }
     }
 
@@ -689,6 +691,7 @@ impl LoweringContext {
         self.local_scopes.clear();
         self.expected_type = None;
         self.structs.clear();
+        self.imports = program.imports.clone();
 
         // Collect structs
         for s in &typed_program.structs {
@@ -1849,6 +1852,19 @@ impl LoweringContext {
                 }
             }
             ast::Expr::Ident(name, span) => {
+                // Check if name is an imported package
+                let is_imported = self
+                    .imports
+                    .iter()
+                    .any(|(alias, pkg)| pkg == name || alias.as_deref() == Some(name));
+                if is_imported {
+                    return hir::HirExpr::Ident(
+                        name.clone(),
+                        ast::Type::Package(name.clone()),
+                        *span,
+                    );
+                }
+
                 // Look up the type from the current local scopes first, then the symbol table.
                 let ty = self
                     .resolve_local(name)
@@ -1989,6 +2005,37 @@ impl LoweringContext {
                 kind: _,
                 span,
             } => {
+                let lowered_object = self.lower_expr(object);
+                let obj_ty = lowered_object.ty();
+
+                // Handle package access: pkg.Member or pkg.Enum.Variant
+                if let ast::Type::Package(pkg_name) = obj_ty {
+                    // Check if pkg_name_member exists as an enum/struct/error
+                    let mangled_name = format!("{}_{}", pkg_name, member);
+                    if self.symbol_table.resolve(&mangled_name).is_some()
+                        || self.structs.contains_key(&mangled_name)
+                        || self.errors.contains_key(&mangled_name)
+                    {
+                        return hir::HirExpr::MemberAccess {
+                            object: Box::new(lowered_object),
+                            member: member.clone(),
+                            ty: ast::Type::Package(mangled_name),
+                            span: *span,
+                        };
+                    }
+
+                    // Check if it's an enum variant: EnumName.VariantName
+                    let variant_full_name = format!("{}.{}", pkg_name, member);
+                    if let Some(symbol) = self.symbol_table.resolve(&variant_full_name) {
+                        return hir::HirExpr::MemberAccess {
+                            object: Box::new(lowered_object),
+                            member: member.clone(),
+                            ty: symbol.ty.clone(),
+                            span: *span,
+                        };
+                    }
+                }
+
                 // Try to resolve the type from the symbol table or check if it's an error member access
                 let ty = if let ast::Expr::Ident(obj_name, _) = object.as_ref() {
                     // First check if this is an error type member access
@@ -1996,7 +2043,7 @@ impl LoweringContext {
                         if error_def.variants.iter().any(|v| &v.name == member) {
                             // This is an error member access (e.g., SampleError.CodegenError)
                             return hir::HirExpr::MemberAccess {
-                                object: Box::new(self.lower_expr(object)),
+                                object: Box::new(lowered_object),
                                 member: member.clone(),
                                 ty: ast::Type::Error,
                                 span: *span,
@@ -2015,7 +2062,7 @@ impl LoweringContext {
                 };
 
                 hir::HirExpr::MemberAccess {
-                    object: Box::new(self.lower_expr(object)),
+                    object: Box::new(lowered_object),
                     member: member.clone(),
                     ty,
                     span: *span,

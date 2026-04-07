@@ -5,7 +5,7 @@
 
 use crate::ast::*;
 use crate::debug;
-use crate::lexer::{PeekableLexerIterator, Token, TokenWithSpan, iter as lexer_iter};
+use crate::lexer::{iter as lexer_iter, PeekableLexerIterator, Token, TokenWithSpan};
 
 /// Parser state for tracking current parsing context
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1247,7 +1247,7 @@ impl Parser {
                             // This is a labeled for loop
                             self.advance(); // consume identifier
                             self.advance(); // consume colon
-                            // Now parse for with the label
+                                            // Now parse for with the label
                             return self.parse_for_stmt(Some(label_name), false);
                         } else if after_colon.token == Token::Inline {
                             if let Some(after_inline) = self.peek(3) {
@@ -3305,7 +3305,7 @@ impl Parser {
         }
 
         // Parse basic types or custom type
-        let type_name = match self.current().cloned() {
+        let mut type_name = match self.current().cloned() {
             Some(Token::Ident(name)) => {
                 let name = name.clone();
                 self.advance();
@@ -3326,6 +3326,22 @@ impl Parser {
                 });
             }
         };
+
+        // Handle package.Type syntax
+        if self.match_token(Token::Dot) {
+            match self.current().cloned() {
+                Some(Token::Ident(member)) => {
+                    self.advance();
+                    type_name = format!("{}_{}", type_name, member);
+                }
+                _ => {
+                    return Err(ParseError {
+                        message: "Expected member name after '.' in type".to_string(),
+                        location: self.current_token().map(|t| t.span.start),
+                    });
+                }
+            }
+        }
 
         // Check for basic types
         let ty = match type_name.as_str() {

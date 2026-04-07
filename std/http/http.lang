@@ -1,3 +1,13 @@
+pub struct Request {
+    method: []const u8,
+    url: []const u8,
+}
+
+pub enum Status {
+    OK,
+    NotFound,
+}
+
 pub fn head() i32 {
     return 123;
 }

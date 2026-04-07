@@ -1,0 +1,17 @@
+import (
+    "http"
+    "io"
+)
+
+fn print_request(req: http.Request) void {
+    io.println("Method: {s}", req.method);
+    io.println("URL: {s}", req.url);
+}
+
+fn main() void {
+    const req = http.Request{
+        method: "POST",
+        url: "https://google.com",
+    };
+    print_request(req);
+}

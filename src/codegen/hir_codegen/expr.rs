@@ -359,6 +359,11 @@ impl<'ctx> CodeGenerator<'ctx> {
                     return Ok(self.context.i64_type().const_zero().into());
                 }
 
+                // Handle package identifiers (placeholders for namespace resolution)
+                if let Type::Package(_) = ty {
+                    return Ok(self.context.i64_type().const_zero().into());
+                }
+
                 // Check if this is a function type - if so, get the function pointer
                 if let Type::Function { .. } = ty {
                     // Get the function pointer
@@ -1077,6 +1082,19 @@ impl<'ctx> CodeGenerator<'ctx> {
                             );
                         }
                     }
+                }
+
+                // Check if this is a nested package access (e.g. pkg.Enum.Variant)
+                if let Type::Package(pkg_name) = object.ty() {
+                    // Try to resolve as an enum variant
+                    if let Some(variants) = self.enum_variants.get(pkg_name) {
+                        if let Some(&idx) = variants.get(member) {
+                            return Ok(self.context.i64_type().const_int(idx as u64, false).into());
+                        }
+                    }
+
+                    // For anything else (nested types, namespaces), return a placeholder
+                    return Ok(self.context.i64_type().const_zero().into());
                 }
 
                 // For member access, we need to get the struct and extract the field

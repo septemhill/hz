@@ -732,5 +732,6 @@ fn format_type(ty: &Type) -> String {
                 .join(", ");
             format!("varargs({})", inner)
         }
+        Type::Package(name) => format!("package({})", name),
     }
 }
