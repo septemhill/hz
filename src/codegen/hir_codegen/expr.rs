@@ -1010,9 +1010,33 @@ impl<'ctx> CodeGenerator<'ctx> {
                 if needs_self {
                     if let Some(ns) = namespace.as_deref() {
                         if let Some(ptr) = self.variables.get(ns) {
-                            // For methods, self is usually a pointer to the struct
-                            // ONLY add self if the function actually expects it
-                            if function.count_params() == args.len() as u32 + 1 {
+                            // For external stdlib functions, we need to load the struct by value
+                            // because stdlib is compiled to take struct by value, not by pointer
+                            let is_external = self.external_function_names.contains(&mangled_name);
+                            if is_external {
+                                // Load the struct from the pointer to pass by value
+                                if let Some(Type::Custom {
+                                    name: type_name, ..
+                                }) = self.variable_types.get(ns)
+                                {
+                                    if let Some(struct_type) =
+                                        self.context.get_struct_type(type_name)
+                                    {
+                                        let loaded = self.builder.build_load(
+                                            struct_type,
+                                            *ptr,
+                                            "self_by_value",
+                                        )?;
+                                        llvm_args.push(BasicMetadataValueEnum::from(loaded));
+                                        actual_arg_tys.push(Type::Custom {
+                                            name: type_name.clone(),
+                                            generic_args: vec![],
+                                            is_exported: false,
+                                        });
+                                    }
+                                }
+                            } else if function.count_params() == args.len() as u32 + 1 {
+                                // For internal methods, self is passed as a pointer
                                 llvm_args.push(BasicMetadataValueEnum::from(*ptr));
                                 actual_arg_tys.push(Type::RawPtr);
                             }

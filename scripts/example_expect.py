@@ -81,6 +81,7 @@ EXPECTED_TO_FAIL_COMPILE: list[str] = [
     "examples/test_unmatch_if_expr.lang", # if/else blocks with mismatched types
     "examples/test_without_import.lang", # using std library without import should fail
     "examples/test_casting_error.lang", # invalid casts should fail to compile
+    "examples/test_struct_method_mutability.lang", # struct method mutability rules should be enforced
 ]
 
 

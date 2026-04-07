@@ -7,6 +7,18 @@ fn main() void {
         url: "https://example.com",
     };
 
+    var c = req.get_int();
+    io.println("Int: {d}", c);
+
+    var d = req.get_method();
+    io.println("Method: {s}", d);
+
     io.println("Method: {s}", req.method);
     io.println("URL: {s}", req.url);
+
+    io.println("String: {s}", return_string());
+}
+
+fn return_string() []const u8 {
+    return "Hello, World!";
 }

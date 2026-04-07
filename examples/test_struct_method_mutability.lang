@@ -1,0 +1,18 @@
+struct Base {
+    age: i32,
+    height: i32,
+
+    fn set_age(self: *Self, age: i32) void {
+        self.age = age;
+    }
+
+    fn set_height(self: Self, height: i32) void {
+        self.height = height;
+    }
+}
+
+fn main () void{
+    const base = Base { age: 0, height: 0 };
+    base.set_age(25);
+    base.set_height(180);
+}

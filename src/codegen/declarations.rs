@@ -144,6 +144,7 @@ impl<'ctx> CodeGenerator<'ctx> {
             } else {
                 format!("{}_{}", struct_name, method.name)
             };
+            self.external_function_names.insert(method_name.clone());
             let mangled_name = self.mangle_name(&method_name, false);
             let llvm_fn = self.module.add_function(&mangled_name, fn_type, None);
             self.add_varargs_param_attributes_to_function(llvm_fn, &param_types);

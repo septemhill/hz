@@ -151,6 +151,13 @@ fn collect_symbols(analyzer: &SemanticAnalyzer, _program: &crate::ast::Program) 
     let table = analyzer.get_symbol_table();
     for (name, symbol) in &table.scopes[0].symbols {
         if symbol.is_const {
+            let ty = &symbol.ty;
+            let is_function = matches!(ty, crate::ast::Type::Function { .. });
+            let is_custom = matches!(ty, crate::ast::Type::Custom { .. });
+            let is_error = matches!(ty, crate::ast::Type::Error);
+            if is_function || is_custom || is_error {
+                continue;
+            }
             let type_info = format_type(&symbol.ty);
             symbols.push(SymbolInfo {
                 name: name.clone(),

@@ -1,7 +1,24 @@
-use crate::ast::Visibility;
+use crate::ast::{FnDef, Stmt, Type, Visibility};
 use crate::sema::error::{AnalysisError, AnalysisResult};
 use crate::sema::infer::TypedProgram;
 use crate::sema::symbol::SymbolTable;
+
+fn is_self_pointer_param(ty: &Type, struct_name: &str) -> bool {
+    match ty {
+        Type::Pointer(inner) => match inner.as_ref() {
+            Type::SelfType => true,
+            Type::Custom { name, .. } => name == "Self" || name == struct_name,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+#[derive(Clone)]
+struct TypeInfo {
+    name: String,
+    is_struct: bool,
+}
 
 // ============================================================================
 // Analysis Pass 4: Mutability Analyzer
@@ -28,7 +45,242 @@ impl MutabilityAnalyzer {
                 self.analyze_function(f, program)?;
             }
         }
+
+        for s in &program.structs {
+            for method in &s.methods {
+                if method.generic_params.is_empty() {
+                    self.analyze_struct_method(
+                        TypeInfo {
+                            name: s.name.clone(),
+                            is_struct: true,
+                        },
+                        method,
+                        program,
+                    )?;
+                }
+            }
+        }
+
+        for e in &program.enums {
+            for method in &e.methods {
+                if method.generic_params.is_empty() {
+                    self.analyze_struct_method(
+                        TypeInfo {
+                            name: e.name.clone(),
+                            is_struct: false,
+                        },
+                        method,
+                        program,
+                    )?;
+                }
+            }
+        }
+
         Ok(())
+    }
+
+    fn analyze_struct_method(
+        &mut self,
+        type_info: TypeInfo,
+        f: &FnDef,
+        program: &crate::ast::Program,
+    ) -> AnalysisResult<()> {
+        let first_param_ty = f.params.first().map(|p| &p.ty);
+        let is_mutable = if let Some(ty) = first_param_ty {
+            is_self_pointer_param(ty, &type_info.name)
+        } else {
+            false
+        };
+
+        self.symbol_table.enter_scope();
+
+        for param in &f.params {
+            self.symbol_table.define(
+                param.name.clone(),
+                param.ty.clone(),
+                Visibility::Private,
+                false,
+            );
+        }
+
+        if !is_mutable {
+            self.analyze_immutable_method_body(type_info, f, program)?;
+        } else {
+            for stmt in &f.body {
+                self.analyze_statement(stmt, program)?;
+            }
+        }
+
+        self.symbol_table.exit_scope();
+        Ok(())
+    }
+
+    fn analyze_immutable_method_body(
+        &mut self,
+        type_info: TypeInfo,
+        f: &FnDef,
+        program: &crate::ast::Program,
+    ) -> AnalysisResult<()> {
+        for stmt in &f.body {
+            self.analyze_immutable_statement(type_info.clone(), f, stmt, program)?;
+        }
+        Ok(())
+    }
+
+    fn analyze_immutable_statement(
+        &mut self,
+        type_info: TypeInfo,
+        f: &FnDef,
+        stmt: &Stmt,
+        program: &crate::ast::Program,
+    ) -> AnalysisResult<()> {
+        match stmt {
+            Stmt::Assign { target, span, .. } => {
+                if target != "_" {
+                    let mut parts = Vec::new();
+                    let mut current_part = String::new();
+                    let mut chars = target.chars().peekable();
+
+                    while let Some(c) = chars.next() {
+                        match c {
+                            '.' => {
+                                if !current_part.is_empty() {
+                                    parts.push(current_part.clone());
+                                    current_part.clear();
+                                }
+                                if chars.peek() == Some(&'*') {
+                                    chars.next();
+                                    parts.push("*".to_string());
+                                }
+                            }
+                            '[' => {
+                                if !current_part.is_empty() {
+                                    parts.push(current_part.clone());
+                                    current_part.clear();
+                                }
+                                let mut index_str = String::new();
+                                while let Some(&nc) = chars.peek() {
+                                    if nc == ']' {
+                                        chars.next();
+                                        break;
+                                    }
+                                    index_str.push(chars.next().unwrap());
+                                }
+                                parts.push(format!("[{}]", index_str));
+                            }
+                            _ => {
+                                current_part.push(c);
+                            }
+                        }
+                    }
+                    if !current_part.is_empty() {
+                        parts.push(current_part);
+                    }
+
+                    let base = &parts[0];
+
+                    if base == "self" || base == "self.inner" || base.starts_with("self.") {
+                        let mut is_self_field_modification = false;
+
+                        if base == "self" && parts.len() > 1 {
+                            is_self_field_modification = true;
+                        } else if base.starts_with("self.") {
+                            is_self_field_modification = true;
+                        } else if base == "self" && parts.len() == 1 {
+                            is_self_field_modification = true;
+                        }
+
+                        let type_name = &type_info.name;
+
+                        if parts.len() == 1 && base == "self" {
+                            return Err(AnalysisError::new_with_span(
+                                &format!(
+                                    "Cannot reassign 'self' parameter in immutable method '{}' of type '{}'",
+                                    f.name, type_name
+                                ),
+                                span,
+                            )
+                            .with_module("mutability"));
+                        }
+
+                        if is_self_field_modification {
+                            return Err(AnalysisError::new_with_span(
+                                &format!(
+                                    "Cannot modify field of type '{}' in immutable method '{}' (self is not a pointer)",
+                                    type_name, f.name
+                                ),
+                                span,
+                            )
+                            .with_module("mutability"));
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Stmt::Block { stmts, .. } => {
+                self.symbol_table.enter_scope();
+                for s in stmts {
+                    self.analyze_immutable_statement(type_info.clone(), f, s, program)?;
+                }
+                self.symbol_table.exit_scope();
+                Ok(())
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                capture,
+                ..
+            } => {
+                if let Some(cap) = capture {
+                    self.symbol_table.enter_scope();
+                    self.symbol_table
+                        .define(cap.clone(), Type::I64, Visibility::Private, false);
+                    self.analyze_immutable_statement(type_info.clone(), f, then_branch, program)?;
+                    self.symbol_table.exit_scope();
+                } else {
+                    self.analyze_immutable_statement(type_info.clone(), f, then_branch, program)?;
+                }
+                if let Some(eb) = else_branch {
+                    self.analyze_immutable_statement(type_info.clone(), f, eb, program)?;
+                }
+                Ok(())
+            }
+            Stmt::For {
+                var_name,
+                capture,
+                index_var,
+                body,
+                ..
+            } => {
+                self.symbol_table.enter_scope();
+                if let Some(vn) = var_name {
+                    self.symbol_table
+                        .define(vn.clone(), Type::I64, Visibility::Private, false);
+                }
+                if let Some(cv) = capture {
+                    self.symbol_table
+                        .define(cv.clone(), Type::I64, Visibility::Private, false);
+                }
+                if let Some(iv) = index_var {
+                    self.symbol_table
+                        .define(iv.clone(), Type::I64, Visibility::Private, false);
+                }
+                self.analyze_immutable_statement(type_info.clone(), f, body, program)?;
+                self.symbol_table.exit_scope();
+                Ok(())
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    self.analyze_immutable_statement(type_info.clone(), f, &case.body, program)?;
+                }
+                Ok(())
+            }
+            Stmt::Defer { stmt, .. } => {
+                self.analyze_immutable_statement(type_info.clone(), f, stmt, program)?;
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 
     fn analyze_function(

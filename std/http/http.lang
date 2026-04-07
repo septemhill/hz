@@ -1,6 +1,14 @@
 pub struct Request {
     method: []const u8,
     url: []const u8,
+
+    pub fn get_method(self: Self) []const u8 {
+        return self.method; 
+    }
+
+    pub fn get_int(self: Self) i32 {
+        return 123;
+    }   
 }
 
 pub enum Status {
