@@ -4,7 +4,6 @@
 
 pub mod error;
 pub mod iterator;
-pub mod lexer;
 pub mod peekable;
 pub mod token;
 
@@ -15,7 +14,5 @@ mod tests;
 pub use error::LexerError;
 #[allow(unused_imports)]
 pub use iterator::LexerIterator;
-#[allow(unused_imports)]
-pub use lexer::{tokenize, Lexer};
-pub use peekable::{iter, PeekableLexerIterator};
+pub use peekable::{PeekableLexerIterator, iter};
 pub use token::{Token, TokenWithSpan};

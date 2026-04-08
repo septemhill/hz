@@ -5,7 +5,7 @@
 
 use crate::ast::*;
 use crate::debug;
-use crate::lexer::{iter as lexer_iter, PeekableLexerIterator, Token, TokenWithSpan};
+use crate::lexer::{iter, PeekableLexerIterator, Token, TokenWithSpan};
 
 /// Parser state for tracking current parsing context
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,8 +62,8 @@ impl ParserState {
 }
 
 /// Parser with state machine tracking
-pub struct Parser {
-    tokens: PeekableLexerIterator,
+pub struct Parser<'a> {
+    tokens: PeekableLexerIterator<'a>,
     state: ParserState,
     state_history: Vec<ParserState>,
     generic_params: Vec<Vec<String>>,
@@ -78,9 +78,9 @@ fn is_primitive_type_name(name: &str) -> bool {
 }
 
 #[allow(unused)]
-impl Parser {
+impl<'a> Parser<'a> {
     /// Create a new parser from tokens (iterator)
-    pub fn new(tokens: PeekableLexerIterator) -> Self {
+    pub fn new(tokens: PeekableLexerIterator<'a>) -> Self {
         Parser {
             tokens,
             state: ParserState::Initial,
@@ -90,8 +90,8 @@ impl Parser {
     }
 
     /// Create a new parser from source code directly
-    pub fn from_source(source: &str) -> Result<Self, ParseError> {
-        let tokens = lexer_iter(source);
+    pub fn from_source(source: &'a str) -> Result<Parser<'a>, ParseError> {
+        let tokens = iter(source);
         Ok(Parser::new(tokens))
     }
 
@@ -655,13 +655,13 @@ fn main() i64 {
 
 /// Parse a source string into an AST Program
 pub fn parse(source: &str) -> Result<Program, ParseError> {
-    let tokens = lexer_iter(source);
+    let tokens = iter(source);
     let mut parser = Parser::new(tokens);
     parser.parse_program()
 }
 
 #[allow(unused)]
-impl Parser {
+impl<'a> Parser<'a> {
     /// Parse the entire program
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
         self.set_state(ParserState::Initial);

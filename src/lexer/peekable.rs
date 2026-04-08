@@ -9,14 +9,14 @@ use super::token::TokenWithSpan;
 use std::collections::VecDeque;
 
 /// A peekable iterator for the lexer that allows looking at tokens without consuming them
-pub struct PeekableLexerIterator {
-    iter: LexerIterator,
+pub struct PeekableLexerIterator<'a> {
+    iter: LexerIterator<'a>,
     peeked: VecDeque<Result<TokenWithSpan, LexerError>>,
 }
 
-impl PeekableLexerIterator {
+impl<'a> PeekableLexerIterator<'a> {
     /// Create a new peekable lexer iterator from source code
-    pub fn new(source: &str) -> Self {
+    pub fn new(source: &'a str) -> Self {
         PeekableLexerIterator {
             iter: LexerIterator::new(source),
             peeked: VecDeque::new(),
@@ -108,6 +108,6 @@ impl PeekableLexerIterator {
 }
 
 /// Convenience function to tokenize source code as a peekable iterator
-pub fn iter(source: &str) -> PeekableLexerIterator {
+pub fn iter<'a>(source: &'a str) -> PeekableLexerIterator<'a> {
     PeekableLexerIterator::new(source)
 }

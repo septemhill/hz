@@ -10,40 +10,57 @@ use crate::ast::Span;
 ///
 /// This provides memory-efficient tokenization as tokens are generated on-demand.
 #[allow(unused)]
-pub struct LexerIterator {
-    pub source: Vec<char>,
+pub struct LexerIterator<'a> {
+    pub source: &'a str,
     pub pos: usize,
     pub done: bool,
     pub buffered: Option<TokenWithSpan>,
 }
 
-impl LexerIterator {
+impl<'a> LexerIterator<'a> {
     /// Create a new lexer iterator from source code
-    pub fn new(source: &str) -> Self {
+    pub fn new(source: &'a str) -> Self {
         LexerIterator {
-            source: source.chars().collect(),
+            source,
             pos: 0,
             done: false,
             buffered: None,
         }
     }
 
+    fn source_len(&self) -> usize {
+        self.source.len()
+    }
+
+    fn current_char(&self) -> Option<char> {
+        self.source[self.pos..].chars().next()
+    }
+
+    fn peek_char(&self) -> Option<char> {
+        self.source[self.pos..].chars().nth(1)
+    }
+
     /// Skip whitespace characters
     fn skip_whitespace(&mut self) {
-        while self.pos < self.source.len() && self.source[self.pos].is_whitespace() {
+        while let Some(c) = self.current_char() {
+            if !c.is_whitespace() {
+                break;
+            }
             self.pos += 1;
         }
 
         // Skip single-line comments
-        if self.pos + 1 < self.source.len()
-            && self.source[self.pos] == '/'
-            && self.source[self.pos + 1] == '/'
-        {
-            while self.pos < self.source.len() && self.source[self.pos] != '\n' {
-                self.pos += 1;
+        if let (Some(c1), Some(c2)) = (self.current_char(), self.peek_char()) {
+            if c1 == '/' && c2 == '/' {
+                while let Some(c) = self.current_char() {
+                    if c == '\n' {
+                        break;
+                    }
+                    self.pos += 1;
+                }
+                // Recursively skip more whitespace after comment
+                self.skip_whitespace();
             }
-            // Recursively skip more whitespace after comment
-            self.skip_whitespace();
         }
     }
 
@@ -52,11 +69,16 @@ impl LexerIterator {
         // Skip whitespace first
         self.skip_whitespace();
 
-        if self.pos >= self.source.len() {
+        if self.pos >= self.source_len() {
             return Ok(Token::Eof);
         }
 
-        let c = self.source[self.pos];
+        let c = match self.current_char() {
+            Some(c) => c,
+            None => return Ok(Token::Eof),
+        };
+
+        // Handle identifiers and keywords
 
         // Handle identifiers and keywords
         if c.is_alphabetic() || c == '_' || c == '@' {
@@ -80,8 +102,7 @@ impl LexerIterator {
         self.pos += 1;
 
         // Check for two-character operators first
-        if self.pos < self.source.len() {
-            let next = self.source[self.pos];
+        if let Some(next) = self.current_char() {
             let pair = format!("{}{}", c, next);
 
             match pair.as_str() {
@@ -107,7 +128,10 @@ impl LexerIterator {
                 }
                 "//" => {
                     // This is a comment, skip it
-                    while self.pos < self.source.len() && self.source[self.pos] != '\n' {
+                    while let Some(ch) = self.current_char() {
+                        if ch == '\n' {
+                            break;
+                        }
                         self.pos += 1;
                     }
                     return self.read_token();
@@ -128,7 +152,7 @@ impl LexerIterator {
             ';' => Ok(Token::Semicolon),
             ':' => Ok(Token::Colon),
             '.' => {
-                if self.pos < self.source.len() && self.source[self.pos] == '.' {
+                if self.current_char() == Some('.') {
                     self.pos += 1;
                     Ok(Token::DotDot)
                 } else {
@@ -160,20 +184,19 @@ impl LexerIterator {
     fn read_identifier_or_keyword(&mut self) -> Token {
         let start = self.pos;
 
-        while self.pos < self.source.len() {
-            let c = &self.source[self.pos];
-            if c.is_alphanumeric() || *c == '_' || *c == '@' {
+        while let Some(c) = self.current_char() {
+            if c.is_alphanumeric() || c == '_' || c == '@' {
                 self.pos += 1;
             } else {
                 break;
             }
         }
 
-        let ident: String = self.source[start..self.pos].iter().collect();
+        let ident: String = self.source[start..self.pos].to_string();
 
         // Special case: check for "defer!" - if we have "defer" followed by "!", include the "!"
         // This must be checked before the keyword matching
-        if ident == "defer" && self.pos < self.source.len() && self.source[self.pos] == '!' {
+        if ident == "defer" && self.current_char() == Some('!') {
             self.pos += 1; // consume the '!'
             return Token::DeferBang;
         }
@@ -219,36 +242,59 @@ impl LexerIterator {
         let start = self.pos;
 
         // Read integer part
-        while self.pos < self.source.len() && self.source[self.pos].is_ascii_digit() {
-            self.pos += 1;
+        while let Some(c) = self.current_char() {
+            if c.is_ascii_digit() {
+                self.pos += 1;
+            } else {
+                break;
+            }
         }
 
         // Check for floating point
-        if self.pos < self.source.len() && self.source[self.pos] == '.' {
+        if self.current_char() == Some('.') {
             let dot_pos = self.pos;
             self.pos += 1; // consume the dot
 
             // Check if there's a fractional part
-            if self.pos < self.source.len() && self.source[self.pos].is_ascii_digit() {
-                // Read fractional part
-                while self.pos < self.source.len() && self.source[self.pos].is_ascii_digit() {
-                    self.pos += 1;
-                }
+            if let Some(c) = self.current_char() {
+                if c.is_ascii_digit() {
+                    // Read fractional part
+                    while let Some(c) = self.current_char() {
+                        if c.is_ascii_digit() {
+                            self.pos += 1;
+                        } else {
+                            break;
+                        }
+                    }
 
-                let num_str: String = self.source[start..self.pos].iter().collect();
-                match num_str.parse::<f64>() {
-                    Ok(value) => Ok(Token::Float(value)),
-                    Err(_) => Err(LexerError::new(
-                        &format!("Invalid float: {}", num_str),
-                        start,
-                        file!(),
-                        line!(),
-                    )),
+                    let num_str: String = self.source[start..self.pos].to_string();
+                    match num_str.parse::<f64>() {
+                        Ok(value) => Ok(Token::Float(value)),
+                        Err(_) => Err(LexerError::new(
+                            &format!("Invalid float: {}", num_str),
+                            start,
+                            file!(),
+                            line!(),
+                        )),
+                    }
+                } else {
+                    // It's just a dot, not a float - back up
+                    self.pos = dot_pos;
+                    let num_str: String = self.source[start..self.pos].to_string();
+                    match num_str.parse::<i64>() {
+                        Ok(value) => Ok(Token::Int(value)),
+                        Err(_) => Err(LexerError::new(
+                            &format!("Invalid number: {}", num_str),
+                            start,
+                            file!(),
+                            line!(),
+                        )),
+                    }
                 }
             } else {
                 // It's just a dot, not a float - back up
                 self.pos = dot_pos;
-                let num_str: String = self.source[start..self.pos].iter().collect();
+                let num_str: String = self.source[start..self.pos].to_string();
                 match num_str.parse::<i64>() {
                     Ok(value) => Ok(Token::Int(value)),
                     Err(_) => Err(LexerError::new(
@@ -260,7 +306,7 @@ impl LexerIterator {
                 }
             }
         } else {
-            let num_str: String = self.source[start..self.pos].iter().collect();
+            let num_str: String = self.source[start..self.pos].to_string();
             match num_str.parse::<i64>() {
                 Ok(value) => Ok(Token::Int(value)),
                 Err(_) => Err(LexerError::new(
@@ -282,13 +328,25 @@ impl LexerIterator {
 
         let mut value = String::new();
 
-        while self.pos < self.source.len() && self.source[self.pos] != '"' {
-            let c = self.source[self.pos];
+        while let Some(c) = self.current_char() {
+            if c == '"' {
+                break;
+            }
 
             // Handle escape sequences
-            if c == '\\' && self.pos + 1 < self.source.len() {
+            if c == '\\' {
                 self.pos += 1;
-                let next = self.source[self.pos];
+                let next = match self.current_char() {
+                    Some(n) => n,
+                    None => {
+                        return Err(LexerError::new(
+                            "Unterminated string literal",
+                            start,
+                            file!(),
+                            line!(),
+                        ));
+                    }
+                };
                 match next {
                     'n' => value.push('\n'),
                     't' => value.push('\t'),
@@ -305,7 +363,7 @@ impl LexerIterator {
         }
 
         // Consume closing quote
-        if self.pos < self.source.len() && self.source[self.pos] == '"' {
+        if self.current_char() == Some('"') {
             self.pos += 1;
         } else {
             return Err(LexerError::new(
@@ -322,7 +380,7 @@ impl LexerIterator {
     fn read_char(&mut self) -> Result<Token, LexerError> {
         let start = self.pos;
         self.pos += 1;
-        if self.pos >= self.source.len() {
+        if self.pos >= self.source_len() {
             return Err(LexerError::new(
                 "Unterminated character literal",
                 start,
@@ -330,9 +388,19 @@ impl LexerIterator {
                 line!(),
             ));
         }
-        let c = self.source[self.pos];
+        let c = match self.current_char() {
+            Some(ch) => ch,
+            None => {
+                return Err(LexerError::new(
+                    "Unterminated character literal",
+                    start,
+                    file!(),
+                    line!(),
+                ));
+            }
+        };
         self.pos += 1;
-        if self.pos >= self.source.len() || self.source[self.pos] != '\'' {
+        if self.pos >= self.source_len() || self.current_char() != Some('\'') {
             return Err(LexerError::new(
                 "Expected closing quote for character literal",
                 start,
@@ -345,14 +413,14 @@ impl LexerIterator {
     }
 }
 
-impl Iterator for LexerIterator {
+impl Iterator for LexerIterator<'_> {
     type Item = Result<TokenWithSpan, LexerError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // Skip whitespace before returning next token
         self.skip_whitespace();
 
-        if self.pos >= self.source.len() {
+        if self.pos >= self.source_len() {
             if !self.done {
                 self.done = true;
                 return Some(Ok(TokenWithSpan {

@@ -3,6 +3,11 @@
 //! This module contains all the tests for the lexer.
 
 use super::*;
+use crate::lexer::LexerIterator;
+
+fn tokenize(source: &str) -> Result<Vec<TokenWithSpan>, LexerError> {
+    LexerIterator::new(source).collect()
+}
 
 // Helper function to read example file contents
 fn read_example(filename: &str) -> String {
@@ -690,10 +695,10 @@ fn test_lexer_iterator_for_loop() {
     assert!(count >= 2);
 }
 
-// Test Lexer::iter() convenience method
+// Test iter() convenience method
 #[test]
 fn test_lexer_iter_convenience() {
-    let mut iter = Lexer::iter("fn var const");
+    let mut iter = iter("fn var const");
 
     let tokens = std::iter::from_fn(|| iter.next())
         .filter_map(|r| r.ok())
